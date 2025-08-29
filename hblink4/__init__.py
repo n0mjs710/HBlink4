@@ -1,25 +1,22 @@
 """
 HBlink4 - Next Generation DMR Master Server Protocol Handler
 
-This package implements the HomeBrew DMR protocol, a UDP-based protocol
-for communication between DMR repeaters and master servers.
+A complete architectural redesign of HBlink3, implementing a repeater-centric
+approach to DMR master services. The HomeBrew DMR protocol is UDP-based, used for 
+communication between DMR repeaters and master servers.
+
+License: GNU GPLv3
 """
 
-from .hblink import main
+from .hblink import main, HBProtocol, RepeaterState
 from .constants import *
-from .models import RepeaterState, RepeaterConfig
-from .protocol import HomeBrewProtocol
-from .base_protocol import HomeBrewProtocolMixin
 
 __version__ = '4.0.0'
 __author__ = 'Cort Buffington, N0MJS'
 __license__ = 'GNU GPLv3'
 
-# Export main entry point
 __all__ = [
     'main',
-    'RepeaterState',
-    'RepeaterConfig',
-    'HomeBrewProtocol',
-    'HomeBrewProtocolMixin'
+    'HBProtocol',
+    'RepeaterState'
 ]

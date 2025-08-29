@@ -45,12 +45,3 @@ class RepeaterState:
     def address(self) -> RepeaterAddress:
         """Get repeater's address tuple"""
         return (self.ip, self.port)
-
-@dataclass
-class RepeaterConfig:
-    """Configuration settings for a matched repeater"""
-    enabled: bool
-    timeout: int
-    talkgroups: List[int]
-    passphrase: str
-    description: str

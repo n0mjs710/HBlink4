@@ -38,6 +38,9 @@ env/
 *.log
 logs/
 
+# Configuration files
+config/config.json
+
 # OS
 .DS_Store
 .DS_Store?
