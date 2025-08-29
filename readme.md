@@ -54,125 +54,13 @@ python3 hblink4/hblink.py config/my_hblink.json
 
 The server will start and listen for repeater registrations on the configured bind_ip and bind_port.
 
-## Configuration File Structure
+## Configuration 
 
-The configuration file (hblink.json) contains four main sections that reflect the repeater-centric architecture:
-
-### Global Settings
-```json
-"global": {
-    "path": "./",
-    "ping_time": 5,
-    "max_missed": 3,
-    "use_ipv6": false,
-    "bind_ip": "0.0.0.0",
-    "bind_port": 62031,
-    "log_level": "INFO",
-    "log_file": "logs/hblink.log"
-}
-```
-
-### Access Control
-```json
-"access_control": {
-    "default_policy": "deny",
-    "authentication": {
-        "required": true,
-        "default_passphrase": "your_default_passphrase",
-        "rules": [
-            {
-                "type": "radio_id",
-                "pattern": "1234567",
-                "passphrase": "specific_pass_1",
-                "description": "Exact match for single radio ID"
-            },
-            {
-                "type": "radio_id_range",
-                "pattern": "2340000-2349999",
-                "passphrase": "fleet_pass_1",
-                "description": "Range of radio IDs"
-            },
-            {
-                "type": "callsign",
-                "pattern": "W1ABC",
-                "passphrase": "w1abc_pass",
-                "description": "Exact callsign match"
-            },
-            {
-                "type": "callsign_wild",
-                "pattern": "W1*",
-                "passphrase": "w1_prefix_pass",
-                "description": "Wildcard callsign match"
-            }
-        ]
-    },
-    "access_rules": [
-        {
-            "type": "radio_id",
-            "pattern": "1234567",
-            "allow": true,
-            "description": "Single radio allowed"
-        },
-        {
-            "type": "radio_id_range",
-            "pattern": "2340000-2349999",
-            "allow": true,
-            "description": "Fleet range allowed"
-        },
-        {
-            "type": "callsign_wild",
-            "pattern": "W1*",
-            "allow": true,
-            "description": "All W1 prefix allowed"
-        },
-        {
-            "type": "radio_id_range",
-            "pattern": "3000000-3999999",
-            "allow": false,
-            "description": "Blocked range"
-        }
-    ]
-}
-```
-
-### Repeater Options
-```json
-"repeater_options": {
-    "default": {
-        "group_hangtime": 5,
-        "slot_restrictions": false,
-        "require_authentication": true,
-        "allow_bridging": true,
-        "metadata_required": ["callsign", "rxfreq", "txfreq", "location"]
-    }
-}
-```
-
-### Routing Rules
-```json
-"routing_rules": {
-    "default": {
-        "policy": "open",
-        "allowed_tgs": [1, 2, 9],
-        "denied_tgs": [],
-        "route_all_to_tg": null,
-        "isolated": false
-    }
-}
-```
-
-### Monitoring
-```json
-"monitoring": {
-    "stats_interval": 60,
-    "report_inactive": true,
-    "inactive_timeout": 300
-}
-```
+The configuration file uses JSON format and supports extensive customization of server behavior, access control, and routing rules. For detailed configuration instructions and examples, see the [Configuration Guide](docs/configuration.md).
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request. Do not submit a Pull Request to the main branch for added features without consultation first. Added features may collide with other mainline features under development. Use alternative branches named for the feature being added.
 
 ## License
 
