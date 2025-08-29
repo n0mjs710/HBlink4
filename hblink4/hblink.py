@@ -2,24 +2,7 @@
 """
 Copyright (c) 2025 by Cort Buffington, N0MJS
 
-A complete architectural redesign of HBlink3, implementing         try:
-            if _command == DMRD:
-                self._handle_dmr_data(data, addr)
-            elif _command == RPTL:
-                self._handle_repeater_login(data[4:8], addr)
-            elif _command == RPTK:
-                self._handle_auth_response(data[4:8], data[8:], addr)
-            elif _command == RPTC:
-                if data[:5] == RPTCL:
-                    self._handle_disconnect(data[5:9], addr)
-                else:
-                    self._handle_config(data, addr)
-            elif _command == RPTPING:
-                self._handle_ping(data[7:11], addr)
-            elif _command == RPTSTAT:
-                self._handle_status(data[4:8], data, addr)
-            else:
-                LOGGER.warning(f'Unknown command received from {addr[0]}:{addr[1]}: {_command}')ic
+A complete architectural redesign of HBlink3, implementing 
 approach to DMR master services. The HomeBrew DMR protocol is UDP-based, used for 
 communication between DMR repeaters and master servers.
 
@@ -56,7 +39,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
-        DMRD, MSTNAK, MSTPONG, RPTACK
+        DMRD, MSTNAK, MSTPONG, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
 
@@ -161,6 +144,8 @@ class HBProtocol(DatagramProtocol):
                     self._handle_config(data, addr)
             elif _command == RPTPING:
                 self._handle_ping(data[7:11], addr)
+            elif _command == RPTP:
+                self._handle_status(data[4:8], data, addr)
             else:
                 LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
         except Exception as e:
