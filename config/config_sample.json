@@ -15,9 +15,9 @@
         "patterns": [
             {
                 "name": "Blocked IDs",
-                "description": "Known problematic repeaters",
+                "description": "Should never be used",
                 "match": {
-                    "ids": [310666, 310667]
+                    "ids": [1, 2]
                 },
                 "reason": "Repeated abuse of network"
             },
@@ -87,39 +87,27 @@
         "default": {
             "enabled": true,
             "timeout": 30,
-            "passphrase": "default-network-key",
-            "talkgroups": [3100],
+            "passphrase": "passw0rd",
+            "talkgroups": [8],
             "description": "Default Repeater Configuration"
         }
     },
     "talkgroups": {
-        "3100": {
+        "8": {
             "name": "Local",
-            "bridge": true
-        },
-        "3101": {
-            "name": "Regional",
-            "bridge": true
-        },
-        "3102": {
-            "name": "Tech Talk",
             "bridge": false
         },
-        "3120": {
-            "name": "KS-DMR Local",
+        "9": {
+            "name": "Alternate KS-DMR",
             "bridge": true
         },
-        "3121": {
-            "name": "KS-DMR Statewide",
+        "3120": {
+            "name": "KS Statewide",
             "bridge": true
         },
         "3122": {
             "name": "KS-DMR Tech",
             "bridge": false
-        },
-        "31201": {
-            "name": "WA0EDA Local",
-            "bridge": true
         },
         "31202": {
             "name": "WA0EDA Event",
