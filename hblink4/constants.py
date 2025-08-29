@@ -17,6 +17,7 @@ RPTCL   = b'RPTCL'
 RPTPING = b'RPTPING'
 MSTPONG = b'MSTPONG'
 RPTA    = b'RPTA'
+RPTSTAT = b'RPTP'  # Repeater status report (includes RSSI)
 
 # Protocol Configuration
 DMR_DATA_PACKET_LENGTH = 55  # Minimum length of valid DMR data packet

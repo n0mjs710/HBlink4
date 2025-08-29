@@ -2,7 +2,24 @@
 """
 Copyright (c) 2025 by Cort Buffington, N0MJS
 
-A complete architectural redesign of HBlink3, implementing a repeater-centric
+A complete architectural redesign of HBlink3, implementing         try:
+            if _command == DMRD:
+                self._handle_dmr_data(data, addr)
+            elif _command == RPTL:
+                self._handle_repeater_login(data[4:8], addr)
+            elif _command == RPTK:
+                self._handle_auth_response(data[4:8], data[8:], addr)
+            elif _command == RPTC:
+                if data[:5] == RPTCL:
+                    self._handle_disconnect(data[5:9], addr)
+                else:
+                    self._handle_config(data, addr)
+            elif _command == RPTPING:
+                self._handle_ping(data[7:11], addr)
+            elif _command == RPTSTAT:
+                self._handle_status(data[4:8], data, addr)
+            else:
+                LOGGER.warning(f'Unknown command received from {addr[0]}:{addr[1]}: {_command}')ic
 approach to DMR master services. The HomeBrew DMR protocol is UDP-based, used for 
 communication between DMR repeaters and master servers.
 
@@ -267,6 +284,14 @@ class HBProtocol(DatagramProtocol):
         if repeater:
             LOGGER.info(f'Repeater {radio_id.hex()} ({repeater.callsign.decode().strip()}) disconnected')
             del self._repeaters[radio_id]
+            
+    def _handle_status(self, radio_id: bytes, data: bytes, addr: PeerAddress) -> None:
+        """Handle repeater status report (including RSSI)"""
+        repeater = self._validate_repeater(radio_id, addr)
+        if repeater:
+            # TODO: Parse and store RSSI and other status info
+            LOGGER.debug(f'Status report from repeater {radio_id.hex()}: {data[8:].hex()}')
+            self._send_packet(b''.join([RPTACK, radio_id]), addr)
 
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
