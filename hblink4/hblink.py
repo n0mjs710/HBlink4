@@ -26,32 +26,24 @@ from twisted.internet.protocol import DatagramProtocol
 CONFIG: Dict[str, Any] = {}
 LOGGER = logging.getLogger(__name__)
 
-# Constants for protocol commands
-RPTA    = b'RPTA'
-RPTL    = b'RPTL'
-RPTK    = b'RPTK'
-RPTC    = b'RPTC'
-RPTCL   = b'RPTCL'
-RPTPING = b'RPTPING'
-DMRD    = b'DMRD'
-MSTNAK  = b'MSTNAK'
-MSTPONG = b'MSTPONG'
-RPTACK  = b'RPTACK'
+from .constants import (
+    RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
+    DMRD, MSTNAK, MSTPONG, RPTACK
+)
 
 # Type definitions
-RadioID = Union[bytes, str]
 PeerAddress = Tuple[str, int]
 
-def bhex(data: str) -> bytes:
-    """Convert hex string to bytes"""
-    return bytes.fromhex(data)
+def bhex(data: bytes) -> bytes:
+    """Convert hex bytes to bytes, useful for consistent hex handling"""
+    return bytes.fromhex(data.decode())
 
 from dataclasses import dataclass, field
 
 @dataclass
 class RepeaterState:
     """Data class for storing repeater state"""
-    radio_id: RadioID
+    radio_id: bytes
     ip: str
     port: int
     connected: bool = False
@@ -61,21 +53,21 @@ class RepeaterState:
     missed_pings: int = 0
     salt: int = field(default_factory=lambda: randint(0, 0xFFFFFFFF))
     
-    # Metadata fields with defaults
-    callsign: str = ""
-    rx_freq: str = ""
-    tx_freq: str = ""
-    tx_power: str = ""
-    colorcode: str = ""
-    latitude: str = ""
-    longitude: str = ""
-    height: str = ""
-    location: str = ""
-    description: str = ""
-    slots: str = ""
-    url: str = ""
-    software_id: str = ""
-    package_id: str = ""
+    # Metadata fields with defaults - stored as bytes to match protocol
+    callsign: bytes = b''
+    rx_freq: bytes = b''
+    tx_freq: bytes = b''
+    tx_power: bytes = b''
+    colorcode: bytes = b''
+    latitude: bytes = b''
+    longitude: bytes = b''
+    height: bytes = b''
+    location: bytes = b''
+    description: bytes = b''
+    slots: bytes = b''
+    url: bytes = b''
+    software_id: bytes = b''
+    package_id: bytes = b''
     
     @property
     def sockaddr(self) -> PeerAddress:
@@ -86,7 +78,7 @@ class HBProtocol(DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Master Protocol"""
     def __init__(self, *args, **kwargs):
         super().__init__()
-        self._repeaters: Dict[RadioID, RepeaterState] = {}
+        self._repeaters: Dict[bytes, RepeaterState] = {}
         self._config = CONFIG
 
     def datagramReceived(self, data: bytes, addr: tuple):
@@ -113,7 +105,145 @@ class HBProtocol(DatagramProtocol):
         except Exception as e:
             LOGGER.error(f'Error processing datagram from {ip}:{port}: {str(e)}')
 
-    def _validate_repeater(self, radio_id: RadioID, addr: PeerAddress) -> Optional[RepeaterState]:
+    def _validate_repeater(self, radio_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
+        """Validate repeater state and address"""
+        if radio_id not in self._repeaters:
+            return None
+            
+        repeater = self._repeaters[radio_id]
+        if repeater.sockaddr != addr:
+            LOGGER.warning(f'Message from wrong IP for repeater {radio_id.hex()}')
+            self._send_nak(radio_id, addr)
+            return None
+            
+        return repeater
+
+    def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
+        """Handle repeater login request"""
+        ip, port = addr
+        
+        if radio_id in self._repeaters:
+            repeater = self._repeaters[radio_id]
+            if repeater.sockaddr != addr:
+                LOGGER.warning(f'Repeater {radio_id.hex()} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
+                self._send_nak(radio_id, addr)
+                return
+                
+        # Create or update repeater state
+        repeater = RepeaterState(radio_id=radio_id, ip=ip, port=port)
+        self._repeaters[radio_id] = repeater
+        
+        # Send login ACK with salt
+        salt_bytes = repeater.salt.to_bytes(4, 'big')
+        self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
+        LOGGER.info(f'Repeater {radio_id.hex()} login request from {ip}:{port}, sent salt: {repeater.salt}')
+
+    def _handle_auth_response(self, radio_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
+        """Handle authentication response from repeater"""
+        repeater = self._validate_repeater(radio_id, addr)
+        if not repeater:
+            return
+            
+        # Validate the hash
+        salt_bytes = repeater.salt.to_bytes(4, 'big')
+        calc_hash = bhex(sha256(b''.join([salt_bytes, self._config['passphrase'].encode()])).hexdigest().encode())
+        
+        if auth_hash == calc_hash:
+            repeater.authenticated = True
+            self._send_packet(b''.join([RPTACK, radio_id]), addr)
+            LOGGER.info(f'Repeater {radio_id.hex()} authenticated successfully')
+        else:
+            LOGGER.warning(f'Repeater {radio_id.hex()} failed authentication')
+            self._send_nak(radio_id, addr)
+            del self._repeaters[radio_id]
+
+    def _handle_config(self, data: bytes, addr: PeerAddress) -> None:
+        """Handle configuration from repeater"""
+        try:
+            radio_id = data[4:8]
+            repeater = self._validate_repeater(radio_id, addr)
+            if not repeater or not repeater.authenticated:
+                LOGGER.warning(f'Config from unauthenticated repeater {radio_id.hex()}')
+                self._send_nak(radio_id, addr)
+                return
+                
+            # Store raw bytes for metadata
+            repeater.callsign = data[8:16]
+            repeater.rx_freq = data[16:25]
+            repeater.tx_freq = data[25:34]
+            repeater.tx_power = data[34:36]
+            repeater.colorcode = data[36:38]
+            repeater.latitude = data[38:46]
+            repeater.longitude = data[46:55]
+            repeater.height = data[55:58]
+            repeater.location = data[58:78]
+            repeater.description = data[78:97]
+            repeater.slots = data[97:98]
+            repeater.url = data[98:222]
+            repeater.software_id = data[222:262]
+            repeater.package_id = data[262:302]
+            
+            repeater.connected = True
+            self._send_packet(b''.join([RPTACK, radio_id]), addr)
+            LOGGER.info(f'Repeater {radio_id.hex()} ({repeater.callsign.decode().strip()}) configured successfully')
+            
+        except Exception as e:
+            LOGGER.error(f'Error parsing config: {str(e)}')
+            if 'radio_id' in locals():
+                self._send_nak(radio_id, addr)
+
+    def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
+        """Handle ping from repeater"""
+        repeater = self._validate_repeater(radio_id, addr)
+        if not repeater or not repeater.connected:
+            LOGGER.warning(f'Ping from unconnected repeater {radio_id.hex()}')
+            self._send_nak(radio_id, addr)
+            return
+            
+        repeater.last_ping = time()
+        repeater.ping_count += 1
+        repeater.missed_pings = 0
+        self._send_packet(b''.join([MSTPONG, radio_id]), addr)
+
+    def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
+        """Handle repeater disconnect"""
+        repeater = self._validate_repeater(radio_id, addr)
+        if repeater:
+            LOGGER.info(f'Repeater {radio_id.hex()} ({repeater.callsign.decode().strip()}) disconnected')
+            del self._repeaters[radio_id]
+
+    def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
+        """Handle DMR data"""
+        if len(data) < 55:
+            LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]}')
+            return
+            
+        radio_id = data[11:15]
+        repeater = self._validate_repeater(radio_id, addr)
+        if not repeater or not repeater.connected:
+            LOGGER.warning(f'DMR data from unconnected repeater {radio_id.hex()}')
+            return
+            
+        # Extract packet information
+        _seq = data[4]
+        _rf_src = data[5:8]
+        _dst_id = data[8:11]
+        _bits = data[15]
+        _slot = 2 if (_bits & 0x80) else 1
+        
+        # TODO: Implement DMR data routing logic here
+        # For now, just log it
+        LOGGER.debug(f'DMR data from {radio_id.hex()}: seq={_seq}, src={_rf_src.hex()}, dst={_dst_id.hex()}, slot={_slot}')
+
+    def _send_packet(self, data: bytes, addr: tuple):
+        """Send packet to specified address"""
+        self.transport.write(data, addr)
+
+    def _send_nak(self, radio_id: bytes, addr: tuple):
+        """Send NAK to specified address"""
+        self._send_packet(b''.join([MSTNAK, radio_id]), addr)
+
+    def _validate_repeater(self, radio_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
         if radio_id not in self._repeaters:
             return None
@@ -132,7 +262,7 @@ class HBProtocol(DatagramProtocol):
             return radio_id.hex().upper()
         return str(radio_id).upper()
 
-    def _handle_repeater_login(self, radio_id: RadioID, addr: PeerAddress) -> None:
+    def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater login request"""
         ip, port = addr
         normalized_id = self._normalize_radio_id(radio_id)
@@ -153,7 +283,7 @@ class HBProtocol(DatagramProtocol):
         self._send_packet(b''.join([RPTACK, salt_str]), addr)
         LOGGER.info(f'Repeater {normalized_id} login request from {ip}:{port}, sent salt: {repeater.salt}')
 
-    def _handle_auth_response(self, radio_id: RadioID, auth_hash: bytes, addr: PeerAddress) -> None:
+    def _handle_auth_response(self, radio_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
         normalized_id = self._normalize_radio_id(radio_id)
         repeater = self._validate_repeater(normalized_id, addr)
@@ -208,7 +338,7 @@ class HBProtocol(DatagramProtocol):
             if 'radio_id' in locals():
                 self._send_nak(radio_id, addr)
 
-    def _handle_ping(self, radio_id: RadioID, addr: PeerAddress) -> None:
+    def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle ping from repeater"""
         normalized_id = self._normalize_radio_id(radio_id)
         repeater = self._validate_repeater(normalized_id, addr)
@@ -222,7 +352,7 @@ class HBProtocol(DatagramProtocol):
         repeater.missed_pings = 0
         self._send_packet(b''.join([MSTPONG, radio_id if isinstance(radio_id, bytes) else radio_id.encode()]), addr)
 
-    def _handle_disconnect(self, radio_id: RadioID, addr: PeerAddress) -> None:
+    def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
         normalized_id = self._normalize_radio_id(radio_id)
         repeater = self._validate_repeater(normalized_id, addr)
@@ -257,7 +387,7 @@ class HBProtocol(DatagramProtocol):
         """Send packet to specified address"""
         self.transport.write(data, addr)
 
-    def _send_nak(self, radio_id: RadioID, addr: tuple):
+    def _send_nak(self, radio_id: bytes, addr: tuple):
         """Send NAK to specified address"""
         if isinstance(radio_id, str):
             radio_id = radio_id.encode()
