@@ -25,11 +25,23 @@ from twisted.internet.protocol import DatagramProtocol
 CONFIG: Dict[str, Any] = {}
 LOGGER = logging.getLogger(__name__)
 
-from .constants import (
-    RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
-    DMRD, MSTNAK, MSTPONG, RPTACK
-)
-from .access_control import RepeaterMatcher
+import os
+import sys
+
+# Try package-relative imports first, fall back to direct imports
+try:
+    from .constants import (
+        RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
+        DMRD, MSTNAK, MSTPONG, RPTACK
+    )
+    from .access_control import RepeaterMatcher
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from constants import (
+        RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
+        DMRD, MSTNAK, MSTPONG, RPTACK
+    )
+    from access_control import RepeaterMatcher
 
 # Type definitions
 PeerAddress = Tuple[str, int]
