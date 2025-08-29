@@ -26,7 +26,7 @@ from twisted.internet.protocol import DatagramProtocol
 CONFIG: Dict[str, Any] = {}
 LOGGER = logging.getLogger(__name__)
 
-from .constants import (
+from constants import (
     RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
     DMRD, MSTNAK, MSTPONG, RPTACK
 )
