@@ -30,6 +30,7 @@ from .constants import (
     RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
     DMRD, MSTNAK, MSTPONG, RPTACK
 )
+from .access_control import RepeaterMatcher
 
 # Type definitions
 PeerAddress = Tuple[str, int]
@@ -80,6 +81,7 @@ class HBProtocol(DatagramProtocol):
         super().__init__()
         self._repeaters: Dict[bytes, RepeaterState] = {}
         self._config = CONFIG
+        self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
 
     def startProtocol(self):
@@ -175,16 +177,28 @@ class HBProtocol(DatagramProtocol):
         if not repeater:
             return
             
-        # Validate the hash
-        salt_bytes = repeater.salt.to_bytes(4, 'big')
-        calc_hash = bhex(sha256(b''.join([salt_bytes, self._config['passphrase'].encode()])).hexdigest().encode())
-        
-        if auth_hash == calc_hash:
-            repeater.authenticated = True
-            self._send_packet(b''.join([RPTACK, radio_id]), addr)
-            LOGGER.info(f'Repeater {radio_id.hex()} authenticated successfully')
-        else:
-            LOGGER.warning(f'Repeater {radio_id.hex()} failed authentication')
+        try:
+            # Get config for this repeater including its passphrase
+            repeater_config = self._matcher.get_repeater_config(
+                int.from_bytes(radio_id, 'big'),
+                repeater.callsign.decode().strip() if repeater.callsign else None
+            )
+            
+            # Validate the hash
+            salt_bytes = repeater.salt.to_bytes(4, 'big')
+            calc_hash = bhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest().encode())
+            
+            if auth_hash == calc_hash:
+                repeater.authenticated = True
+                self._send_packet(b''.join([RPTACK, radio_id]), addr)
+                LOGGER.info(f'Repeater {radio_id.hex()} authenticated successfully')
+            else:
+                LOGGER.warning(f'Repeater {radio_id.hex()} failed authentication')
+                self._send_nak(radio_id, addr)
+                del self._repeaters[radio_id]
+                
+        except Exception as e:
+            LOGGER.error(f'Authentication error for repeater {radio_id.hex()}: {str(e)}')
             self._send_nak(radio_id, addr)
             del self._repeaters[radio_id]
 
