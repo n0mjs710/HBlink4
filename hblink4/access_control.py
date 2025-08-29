@@ -94,8 +94,15 @@ class RepeaterMatcher:
     """
     def __init__(self, config: Dict[str, Any]):
         self.blacklist = self._parse_blacklist(config.get('blacklist', {"patterns": []}))
-        self.patterns = self._parse_patterns(config['repeaters']['patterns'])
-        self.default_config = RepeaterConfig(**config['repeaters']['default'])
+        repeater_config = config.get('repeater_configurations', config.get('repeaters', {}))
+        self.patterns = self._parse_patterns(repeater_config.get('patterns', []))
+        self.default_config = RepeaterConfig(**repeater_config.get('default', {
+            "enabled": True,
+            "timeout": 30,
+            "passphrase": "passw0rd",
+            "talkgroups": [8],
+            "description": "Default Repeater Configuration"
+        }))
 
     def _parse_blacklist(self, blacklist_config: Dict[str, Any]) -> List[BlacklistMatch]:
         """Parse blacklist patterns from config"""
