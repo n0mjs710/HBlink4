@@ -1,0 +1,6 @@
+twisted>=22.10.0
+pyOpenSSL>=23.2.0
+service_identity>=23.1.0
+typing-extensions>=4.7.1  # For Python <3.9 compatibility
+pytest>=7.4.0  # For running tests
+pytest-cov>=4.1.0  # For test coverage reports

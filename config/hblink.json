@@ -1,0 +1,129 @@
+{
+    "global": {
+        "path": "./",
+        "ping_time": 5,
+        "max_missed": 3,
+        "use_ipv6": false,
+        "bind_ip": "0.0.0.0",
+        "bind_port": 62031,
+        "log_level": "INFO",
+        "log_file": "logs/hblink.log",
+        "stats_interval": 60,
+        "report_stats": true
+    },
+    "blacklist": {
+        "patterns": [
+            {
+                "name": "Blocked IDs",
+                "description": "Known problematic repeaters",
+                "match": {
+                    "ids": [310666, 310667]
+                },
+                "reason": "Repeated abuse of network"
+            },
+            {
+                "name": "Blocked Range",
+                "description": "Unauthorized network range",
+                "match": {
+                    "id_ranges": [[315000, 315999]]
+                },
+                "reason": "Unauthorized DMR-MARC range"
+            },
+            {
+                "name": "Blocked Callsigns",
+                "description": "Banned operators",
+                "match": {
+                    "callsigns": ["BADACTOR*", "SPAM*"]
+                },
+                "reason": "Network abuse"
+            }
+        ]
+    },
+    "repeater_configurations": {
+        "patterns": [
+            {
+                "name": "KS-DMR Network",
+                "description": "All repeaters in the KS-DMR network",
+                "match": {
+                    "id_ranges": [[312000, 312099]]
+                },
+                "config": {
+                    "enabled": true,
+                    "timeout": 30,
+                    "passphrase": "ks-dmr-network-key",
+                    "talkgroups": [3120, 3121, 3122],
+                    "description": "KS-DMR Network Repeater"
+                }
+            },
+            {
+                "name": "WA0EDA Repeaters",
+                "description": "All WA0EDA club repeaters",
+                "match": {
+                    "callsigns": ["WA0EDA*"]
+                },
+                "config": {
+                    "enabled": true,
+                    "timeout": 30,
+                    "passphrase": "wa0eda-network-key",
+                    "talkgroups": [31201, 31202],
+                    "description": "WA0EDA Club Repeater"
+                }
+            },
+            {
+                "name": "Club Network",
+                "description": "Multiple specific repeaters for a club network",
+                "match": {
+                    "ids": [312100, 312101, 312102]
+                },
+                "config": {
+                    "enabled": true,
+                    "timeout": 30,
+                    "passphrase": "club-network-key",
+                    "talkgroups": [3100, 3101, 3102],
+                    "description": "Club Network Repeater"
+                }
+            }
+        ],
+        "default": {
+            "enabled": true,
+            "timeout": 30,
+            "passphrase": "default-network-key",
+            "talkgroups": [3100],
+            "description": "Default Repeater Configuration"
+        }
+    },
+    "talkgroups": {
+        "3100": {
+            "name": "Local",
+            "bridge": true
+        },
+        "3101": {
+            "name": "Regional",
+            "bridge": true
+        },
+        "3102": {
+            "name": "Tech Talk",
+            "bridge": false
+        },
+        "3120": {
+            "name": "KS-DMR Local",
+            "bridge": true
+        },
+        "3121": {
+            "name": "KS-DMR Statewide",
+            "bridge": true
+        },
+        "3122": {
+            "name": "KS-DMR Tech",
+            "bridge": false
+        },
+        "31201": {
+            "name": "WA0EDA Local",
+            "bridge": true
+        },
+        "31202": {
+            "name": "WA0EDA Event",
+            "bridge": false
+        }
+    }
+}
