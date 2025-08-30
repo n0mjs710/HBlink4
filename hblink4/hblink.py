@@ -30,15 +30,15 @@ import sys
 # Try package-relative imports first, fall back to direct imports
 try:
     from .constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
-        DMRD, MSTNAK, MSTPONG, RPTACK
+        RPTA, RPTL, RPTK, RPTC, RPTCL,
+        DMRD, MSTNAK, MSTP, RPTACK, RPTP
     )
     from .access_control import RepeaterMatcher
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL, RPTPING,
-        DMRD, MSTNAK, MSTPONG, RPTACK, RPTP
+        RPTA, RPTL, RPTK, RPTC, RPTCL,
+        DMRD, MSTNAK, MSTP, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
 
@@ -146,8 +146,6 @@ class HBProtocol(DatagramProtocol):
                     radio_id = data[5:9]
                 else:
                     radio_id = data[4:8]
-            elif _command == RPTPING:
-                radio_id = data[7:11]
             elif _command == RPTP:
                 radio_id = data[4:8]
             
@@ -174,12 +172,9 @@ class HBProtocol(DatagramProtocol):
                 else:
                     LOGGER.debug(f'Received RPTC from {ip}:{port} - Configuration Data')
                     self._handle_config(data, addr)
-            elif _command == RPTPING:
-                LOGGER.debug(f'Received RPTPING from {ip}:{port} - Keepalive Request')
-                self._handle_ping(radio_id, addr)
             elif _command == RPTP:
-                LOGGER.debug(f'Received RPTP from {ip}:{port} - Status Update')
-                self._handle_status(radio_id, data, addr)
+                LOGGER.debug(f'Received RPTP from {ip}:{port} - Keepalive Request')
+                self._handle_ping(radio_id, addr)
             else:
                 LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
         except Exception as e:
@@ -327,7 +322,7 @@ class HBProtocol(DatagramProtocol):
             
         # Only increment ping count for explicit pings
         repeater.ping_count += 1
-        self._send_packet(b''.join([MSTPONG, radio_id]), addr)
+        self._send_packet(b''.join([MSTP, radio_id]), addr)
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""

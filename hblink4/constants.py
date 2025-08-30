@@ -14,10 +14,8 @@ RPTK    = b'RPTK'
 RPTC    = b'RPTC'
 RPTACK  = b'RPTACK'
 RPTCL   = b'RPTCL'
-RPTPING = b'RPTPING'
-MSTPONG = b'MSTPONG'
+RPTP    = b'RPTP'  # Repeater ping (keepalive) message
 RPTA    = b'RPTA'
-RPTP   = b'RPTP'  # Repeater status report (includes RSSI)
 
 # Protocol Configuration
 DMR_DATA_PACKET_LENGTH = 55  # Minimum length of valid DMR data packet
