@@ -9,7 +9,6 @@ communication between DMR repeaters and master servers.
 License: GNU GPLv3
 """
 
-import sys
 import json
 import logging
 import pathlib
@@ -64,6 +63,9 @@ class RepeaterState:
     ping_count: int = 0
     missed_pings: int = 0
     salt: int = field(default_factory=lambda: randint(0, 0xFFFFFFFF))
+    connection_state: str = 'NO'  # States: NO, RPTL-RECEIVED, CHALLENGE-SENT, WAITING-CONFIG, YES
+    last_rssi: int = 0
+    rssi_count: int = 0
     
     # Metadata fields with defaults - stored as bytes to match protocol
     callsign: bytes = b''
@@ -119,11 +121,11 @@ class HBProtocol(DatagramProtocol):
             
             if time_since_ping > timeout_duration:
                 repeater.missed_pings += 1
-                LOGGER.warning(f'Repeater {radio_id.hex()} missed ping #{repeater.missed_pings}')
+                LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} missed ping #{repeater.missed_pings}')
                 
                 if repeater.missed_pings >= max_missed:
-                    LOGGER.error(f'Repeater {radio_id.hex()} timed out after {repeater.missed_pings} missed pings')
-                    del self._repeaters[radio_id]
+                    LOGGER.error(f'Repeater {int.from_bytes(radio_id, "big")} timed out after {repeater.missed_pings} missed pings')
+                    self._remove_repeater(radio_id, "timeout")
 
     def datagramReceived(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
@@ -131,21 +133,53 @@ class HBProtocol(DatagramProtocol):
         _command = data[:4]
         
         try:
+            # Extract radio_id based on packet type
+            radio_id = None
+            if _command == DMRD:
+                radio_id = data[11:15]
+            elif _command == RPTL:
+                radio_id = data[4:8]
+            elif _command == RPTK:
+                radio_id = data[4:8]
+            elif _command == RPTC:
+                if data[:5] == RPTCL:
+                    radio_id = data[5:9]
+                else:
+                    radio_id = data[4:8]
+            elif _command == RPTPING:
+                radio_id = data[7:11]
+            elif _command == RPTP:
+                radio_id = data[4:8]
+            
+            # Update ping time for connected repeaters
+            if radio_id and radio_id in self._repeaters:
+                repeater = self._repeaters[radio_id]
+                if repeater.connection_state == 'YES':
+                    repeater.last_ping = time()
+                    repeater.missed_pings = 0
+
+            # Process the packet
             if _command == DMRD:
                 self._handle_dmr_data(data, addr)
             elif _command == RPTL:
-                self._handle_repeater_login(data[4:8], addr)
+                LOGGER.debug(f'Received RPTL from {ip}:{port} - Repeater Login Request')
+                self._handle_repeater_login(radio_id, addr)
             elif _command == RPTK:
-                self._handle_auth_response(data[4:8], data[8:], addr)
+                LOGGER.debug(f'Received RPTK from {ip}:{port} - Authentication Response')
+                self._handle_auth_response(radio_id, data[8:], addr)
             elif _command == RPTC:
                 if data[:5] == RPTCL:
-                    self._handle_disconnect(data[5:9], addr)
+                    LOGGER.debug(f'Received RPTCL from {ip}:{port} - Disconnect Request')
+                    self._handle_disconnect(radio_id, addr)
                 else:
+                    LOGGER.debug(f'Received RPTC from {ip}:{port} - Configuration Data')
                     self._handle_config(data, addr)
             elif _command == RPTPING:
-                self._handle_ping(data[7:11], addr)
+                LOGGER.debug(f'Received RPTPING from {ip}:{port} - Keepalive Request')
+                self._handle_ping(radio_id, addr)
             elif _command == RPTP:
-                self._handle_status(data[4:8], data, addr)
+                LOGGER.debug(f'Received RPTP from {ip}:{port} - Status Update')
+                self._handle_status(radio_id, data, addr)
             else:
                 LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
         except Exception as e:
@@ -158,11 +192,35 @@ class HBProtocol(DatagramProtocol):
             
         repeater = self._repeaters[radio_id]
         if repeater.sockaddr != addr:
-            LOGGER.warning(f'Message from wrong IP for repeater {radio_id.hex()}')
+            LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(radio_id, "big")}')
             self._send_nak(radio_id, addr)
             return None
             
         return repeater
+        
+    def _remove_repeater(self, radio_id: bytes, reason: str) -> None:
+        """
+        Remove a repeater and clean up all its state.
+        This ensures we don't have any memory leaks from lingering references.
+        """
+        if radio_id in self._repeaters:
+            repeater = self._repeaters[radio_id]
+            
+            # Clear all dynamic state
+            repeater.authenticated = False
+            repeater.connected = False
+            repeater.connection_state = 'NO'
+            repeater.last_ping = 0
+            repeater.ping_count = 0
+            repeater.missed_pings = 0
+            repeater.last_rssi = 0
+            repeater.rssi_count = 0
+            
+            # Remove from active repeaters
+            del self._repeaters[radio_id]
+            
+            # Force garbage collection of any circular references
+            repeater = None
 
     def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater login request"""
@@ -171,23 +229,30 @@ class HBProtocol(DatagramProtocol):
         if radio_id in self._repeaters:
             repeater = self._repeaters[radio_id]
             if repeater.sockaddr != addr:
-                LOGGER.warning(f'Repeater {radio_id.hex()} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
+                LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
                 self._send_nak(radio_id, addr)
                 return
+            else:
+                # Same repeater reconnecting from same IP:port
+                old_state = repeater.connection_state
+                LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} reconnecting while in state {old_state}')
                 
         # Create or update repeater state
         repeater = RepeaterState(radio_id=radio_id, ip=ip, port=port)
+        repeater.connection_state = 'RPTL-RECEIVED'
         self._repeaters[radio_id] = repeater
         
         # Send login ACK with salt
         salt_bytes = repeater.salt.to_bytes(4, 'big')
         self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
-        LOGGER.info(f'Repeater {radio_id.hex()} login request from {ip}:{port}, sent salt: {repeater.salt}')
+        LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} login request from {ip}:{port}, sent salt: {repeater.salt}')
 
     def _handle_auth_response(self, radio_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater:
+        if not repeater or repeater.connection_state != 'RPTL-RECEIVED':
+            LOGGER.warning(f'Auth response from repeater {radio_id.hex()} in wrong state')
+            self._send_nak(radio_id, addr)
             return
             
         try:
@@ -203,25 +268,26 @@ class HBProtocol(DatagramProtocol):
             
             if auth_hash == calc_hash:
                 repeater.authenticated = True
+                repeater.connection_state = 'WAITING-CONFIG'
                 self._send_packet(b''.join([RPTACK, radio_id]), addr)
-                LOGGER.info(f'Repeater {radio_id.hex()} authenticated successfully')
+                LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} authenticated successfully')
             else:
-                LOGGER.warning(f'Repeater {radio_id.hex()} failed authentication')
+                LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} failed authentication')
                 self._send_nak(radio_id, addr)
-                del self._repeaters[radio_id]
+                self._remove_repeater(radio_id, "auth_failed")
                 
         except Exception as e:
-            LOGGER.error(f'Authentication error for repeater {radio_id.hex()}: {str(e)}')
+            LOGGER.error(f'Authentication error for repeater {int.from_bytes(radio_id, "big")}: {str(e)}')
             self._send_nak(radio_id, addr)
-            del self._repeaters[radio_id]
+            self._remove_repeater(radio_id, "auth_error")
 
     def _handle_config(self, data: bytes, addr: PeerAddress) -> None:
         """Handle configuration from repeater"""
         try:
             radio_id = data[4:8]
             repeater = self._validate_repeater(radio_id, addr)
-            if not repeater or not repeater.authenticated:
-                LOGGER.warning(f'Config from unauthenticated repeater {radio_id.hex()}')
+            if not repeater or not repeater.authenticated or repeater.connection_state != 'WAITING-CONFIG':
+                LOGGER.warning(f'Config from repeater {radio_id.hex()} in wrong state')
                 self._send_nak(radio_id, addr)
                 return
                 
@@ -242,8 +308,9 @@ class HBProtocol(DatagramProtocol):
             repeater.package_id = data[262:302]
             
             repeater.connected = True
+            repeater.connection_state = 'YES'
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
-            LOGGER.info(f'Repeater {radio_id.hex()} ({repeater.callsign.decode().strip()}) configured successfully')
+            LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
             
         except Exception as e:
             LOGGER.error(f'Error parsing config: {str(e)}')
@@ -253,29 +320,28 @@ class HBProtocol(DatagramProtocol):
     def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle ping from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or not repeater.connected:
-            LOGGER.warning(f'Ping from unconnected repeater {radio_id.hex()}')
+        if not repeater or repeater.connection_state != 'YES':
+            LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state')
             self._send_nak(radio_id, addr)
             return
             
-        repeater.last_ping = time()
+        # Only increment ping count for explicit pings
         repeater.ping_count += 1
-        repeater.missed_pings = 0
         self._send_packet(b''.join([MSTPONG, radio_id]), addr)
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
         repeater = self._validate_repeater(radio_id, addr)
         if repeater:
-            LOGGER.info(f'Repeater {radio_id.hex()} ({repeater.callsign.decode().strip()}) disconnected')
-            del self._repeaters[radio_id]
+            LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) disconnected')
+            self._remove_repeater(radio_id, "disconnect")
             
     def _handle_status(self, radio_id: bytes, data: bytes, addr: PeerAddress) -> None:
         """Handle repeater status report (including RSSI)"""
         repeater = self._validate_repeater(radio_id, addr)
         if repeater:
             # TODO: Parse and store RSSI and other status info
-            LOGGER.debug(f'Status report from repeater {radio_id.hex()}: {data[8:].hex()}')
+            LOGGER.debug(f'Status report from repeater {int.from_bytes(radio_id, "big")}: {data[8:].hex()}')
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
 
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
@@ -286,8 +352,8 @@ class HBProtocol(DatagramProtocol):
             
         radio_id = data[11:15]
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or not repeater.connected:
-            LOGGER.warning(f'DMR data from unconnected repeater {radio_id.hex()}')
+        if not repeater or repeater.connection_state != 'YES':
+            LOGGER.warning(f'DMR data from repeater {int.from_bytes(radio_id, "big")} in wrong state')
             return
             
         # Extract packet information
@@ -299,14 +365,18 @@ class HBProtocol(DatagramProtocol):
         
         # TODO: Implement DMR data routing logic here
         # For now, just log it
-        LOGGER.debug(f'DMR data from {radio_id.hex()}: seq={_seq}, src={_rf_src.hex()}, dst={_dst_id.hex()}, slot={_slot}')
+        LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")}: seq={_seq}, src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, slot={_slot}')
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
+        cmd = data[:4]
+        if cmd != DMRD:  # Don't log DMR data packets
+            LOGGER.debug(f'Sending {cmd} to {addr[0]}:{addr[1]}')
         self.transport.write(data, addr)
 
     def _send_nak(self, radio_id: bytes, addr: tuple):
         """Send NAK to specified address"""
+        LOGGER.debug(f'Sending NAK to {addr[0]}:{addr[1]} for repeater {int.from_bytes(radio_id, "big")}')
         self._send_packet(b''.join([MSTNAK, radio_id]), addr)
 
 
@@ -315,23 +385,37 @@ from twisted.internet.task import LoopingCall
 
 def setup_logging():
     """Configure logging"""
-    log_level = getattr(logging, CONFIG['global']['log_level'])
-    log_file = CONFIG['global']['log_file']
+    logging_config = CONFIG.get('global', {}).get('logging', {})
+    
+    # Use old config format if new one not present
+    if not logging_config:
+        log_level = getattr(logging, CONFIG['global'].get('log_level', 'INFO'))
+        log_file = CONFIG['global'].get('log_file', 'logs/hblink.log')
+        file_level = console_level = log_level
+    else:
+        log_file = logging_config.get('file', 'logs/hblink.log')
+        file_level = getattr(logging, logging_config.get('file_level', 'DEBUG'))
+        console_level = getattr(logging, logging_config.get('console_level', 'INFO'))
+    
     log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     
+    # Create log directory if it doesn't exist
     pathlib.Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     
+    # Configure file handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(log_format)
-    file_handler.setLevel(log_level)
+    file_handler.setLevel(file_level)
     
+    # Configure console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(log_format)
-    console_handler.setLevel(log_level)
+    console_handler.setLevel(console_level)
     
+    # Add handlers and set level to most verbose of the two
     LOGGER.addHandler(file_handler)
     LOGGER.addHandler(console_handler)
-    LOGGER.setLevel(log_level)
+    LOGGER.setLevel(min(file_level, console_level))
 
 def load_config(config_file: str):
     """Load JSON configuration file"""
