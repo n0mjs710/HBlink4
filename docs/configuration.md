@@ -23,8 +23,14 @@ The `global` section contains server-wide settings that control the basic operat
         "use_ipv6": false,
         "bind_ip": "0.0.0.0",
         "bind_port": 62031,
-        "log_level": "INFO",
-        "log_file": "logs/hblink.log",
+        "logging": {
+            "file": "logs/hblink.log",
+            "console_level": "INFO",
+            "file_level": "DEBUG",
+            "log_protocol": false,
+            "log_dmr_data": false,
+            "log_status_updates": true
+        },
         "stats_interval": 60,
         "report_stats": true
     }
@@ -39,10 +45,20 @@ The `global` section contains server-wide settings that control the basic operat
 | `use_ipv6` | boolean | Enable IPv6 support (default: false) |
 | `bind_ip` | string | IP address to bind the server to ("0.0.0.0" for all interfaces) |
 | `bind_port` | number | UDP port for the server (default: 62031) |
-| `log_level` | string | Logging level ("DEBUG", "INFO", "WARNING", "ERROR") |
-| `log_file` | string | Path to log file |
+| `logging.file` | string | Path to log file |
+| `logging.console_level` | string | Logging level for console output ("DEBUG", "INFO", "WARNING", "ERROR") |
+| `logging.file_level` | string | Logging level for file output ("DEBUG", "INFO", "WARNING", "ERROR") |
+| `logging.log_protocol` | boolean | Log detailed protocol messages (default: false) |
+| `logging.log_dmr_data` | boolean | Log DMR data packets (default: false) |
+| `logging.log_status_updates` | boolean | Log repeater status updates (default: true) |
 | `stats_interval` | number | Seconds between statistics reports |
 | `report_stats` | boolean | Enable statistics reporting |
+
+The logging system supports different levels for console and file output. This allows you to have detailed debugging information in your log files while keeping the console output cleaner. The protocol, DMR data, and status update flags let you control what types of messages are logged:
+
+- `log_protocol`: When enabled, logs all protocol messages (RPTL, RPTK, RPTC, etc.)
+- `log_dmr_data`: When enabled, logs DMR data packets (usually high volume)
+- `log_status_updates`: When enabled, logs repeater status updates like RSSI
 
 ## Blacklist Rules
 
