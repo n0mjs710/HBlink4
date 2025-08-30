@@ -5,9 +5,10 @@ Protocol and system constants
 # HomeBrew Protocol Constants
 DMRD    = b'DMRD'
 MSTCL   = b'MSTCL'
-MSTNAK  = b'MSTNAK'
+MSTNAK  = b'MSTNAK' 
 MSTN    = b'MSTN'
 MSTP    = b'MSTP'
+MSTPONG = b'MSTPONG'  # Added MSTPONG for pong responses
 MSTC    = b'MSTC'
 RPTL    = b'RPTL'
 RPTK    = b'RPTK'

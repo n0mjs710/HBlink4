@@ -31,7 +31,7 @@ import sys
 try:
     from .constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL,
-        DMRD, MSTNAK, MSTP, RPTACK, RPTP
+        DMRD, MSTNAK, MSTP, MSTPONG, RPTACK, RPTP
     )
     from .access_control import RepeaterMatcher
 except ImportError:
@@ -342,7 +342,7 @@ class HBProtocol(DatagramProtocol):
             
         # Only increment ping count for explicit pings
         repeater.ping_count += 1
-        self._send_packet(b''.join([MSTP, radio_id]), addr)
+        self._send_packet(b''.join([MSTPONG, radio_id]), addr)  # Changed to use MSTPONG
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
