@@ -17,6 +17,7 @@ from time import time
 from random import randint
 from hashlib import sha256
 
+import signal
 from twisted.internet import reactor
 from twisted.internet.protocol import DatagramProtocol
 
@@ -30,14 +31,14 @@ import sys
 # Try package-relative imports first, fall back to direct imports
 try:
     from .constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL,
+        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
         DMRD, MSTNAK, MSTP, MSTPONG, RPTACK, RPTP
     )
     from .access_control import RepeaterMatcher
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL,
+        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
         DMRD, MSTNAK, MSTP, MSTPONG, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
@@ -96,6 +97,28 @@ class HBProtocol(DatagramProtocol):
         self._config = CONFIG
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
+        self._transport = None
+
+    def connection_made(self, transport):
+        """Store transport for sending data"""
+        self._transport = transport
+
+    def cleanup(self) -> None:
+        """Send disconnect messages to all repeaters and cleanup resources."""
+        LOGGER.info("Starting graceful shutdown...")
+        
+        # Send MSTCL to all connected repeaters
+        for radio_id, repeater in self._repeaters.items():
+            if repeater.connection_state == 'yes':
+                try:
+                    LOGGER.info(f"Sending disconnect to repeater {radio_id.hex()}")
+                    self._transport.sendto(MSTCL, repeater.sockaddr)
+                except Exception as e:
+                    LOGGER.error(f"Error sending disconnect to repeater {radio_id.hex()}: {e}")
+
+        # Give time for disconnects to be sent
+        import time
+        time.sleep(0.5)  # 500ms should be enough for UDP packets to be sent
 
     def startProtocol(self):
         """Called when transport is connected"""
@@ -452,12 +475,27 @@ def main():
     load_config(sys.argv[1])
     setup_logging()
 
+    # Create protocol instance so we can access it for cleanup
+    protocol = HBProtocol()
+
     # Listen on UDP port only since HomeBrew DMR only uses UDP
     reactor.listenUDP(
         CONFIG['global']['bind_port'],
-        HBProtocol(),
+        protocol,
         interface=CONFIG['global']['bind_ip']
     )
+    
+    # Set up signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        """Handle shutdown signals by cleaning up and stopping reactor"""
+        signame = signal.Signals(signum).name
+        LOGGER.info(f"Received shutdown signal {signame}")
+        protocol.cleanup()
+        reactor.stop()
+
+    # Register handlers for SIGINT (Ctrl+C) and SIGTERM
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     LOGGER.info(f'HBlink4 server is running on {CONFIG["global"]["bind_ip"]}:{CONFIG["global"]["bind_port"]} (UDP)')
     reactor.run()
