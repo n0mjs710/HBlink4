@@ -107,13 +107,11 @@ class HBProtocol(DatagramProtocol):
         if self._port:  # Only attempt to send if we have a port
             for radio_id, repeater in self._repeaters.items():
                 if repeater.connection_state == 'yes':
-                    try:
-                        LOGGER.info(f"Sending disconnect to repeater {radio_id.hex()}")
-                        self._port.write(MSTCL, repeater.sockaddr)
-                    except Exception as e:
-                        LOGGER.error(f"Error sending disconnect to repeater {radio_id.hex()}: {e}")
-
-        # Give time for disconnects to be sent
+                try:
+                    LOGGER.info(f"Sending disconnect to repeater {int.from_bytes(radio_id, 'big')}")
+                    self._port.write(MSTCL, repeater.sockaddr)
+                except Exception as e:
+                    LOGGER.error(f"Error sending disconnect to repeater {int.from_bytes(radio_id, 'big')}: {e}")        # Give time for disconnects to be sent
         import time
         time.sleep(0.5)  # 500ms should be enough for UDP packets to be sent
 
@@ -173,7 +171,7 @@ class HBProtocol(DatagramProtocol):
                 radio_id = data[7:11]  # Fixed offset for RPTP packets
                 
             if radio_id:
-                LOGGER.debug(f'Packet received: cmd={_command}, radio_id={radio_id.hex()}, addr={addr}')
+                LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
             
             # Update ping time for connected repeaters
             if radio_id and radio_id in self._repeaters:
@@ -231,7 +229,7 @@ class HBProtocol(DatagramProtocol):
             repeater = self._repeaters[radio_id]
             
             # Log current state before removal
-            LOGGER.debug(f'Removing repeater {radio_id.hex()}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.debug(f'Removing repeater {int.from_bytes(radio_id, "big")}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Clear all dynamic state
             repeater.authenticated = False
@@ -278,7 +276,7 @@ class HBProtocol(DatagramProtocol):
         """Handle authentication response from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
         if not repeater or repeater.connection_state != 'rptl-received':
-            LOGGER.warning(f'Auth response from repeater {radio_id.hex()} in wrong state')
+            LOGGER.warning(f'Auth response from repeater {int.from_bytes(radio_id, "big")} in wrong state')
             self._send_nak(radio_id, addr)
             return
             
@@ -314,7 +312,7 @@ class HBProtocol(DatagramProtocol):
             radio_id = data[4:8]
             repeater = self._validate_repeater(radio_id, addr)
             if not repeater or not repeater.authenticated or repeater.connection_state != 'waiting-config':
-                LOGGER.warning(f'Config from repeater {radio_id.hex()} in wrong state')
+                LOGGER.warning(f'Config from repeater {int.from_bytes(radio_id, "big")} in wrong state')
                 self._send_nak(radio_id, addr)
                 return
                 
@@ -348,7 +346,7 @@ class HBProtocol(DatagramProtocol):
             repeater.connection_state = 'yes'  # Match HBlink3 state case
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
-            LOGGER.debug(f'Repeater state after config: id={radio_id.hex()}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.debug(f'Repeater state after config: id={int.from_bytes(radio_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
         except Exception as e:
             LOGGER.error(f'Error parsing config: {str(e)}')
