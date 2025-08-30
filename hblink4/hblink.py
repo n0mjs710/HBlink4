@@ -38,7 +38,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL,
-        DMRD, MSTNAK, MSTP, RPTACK, RPTP
+        DMRD, MSTNAK, MSTP, MSTPONG, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
 
