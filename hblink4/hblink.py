@@ -234,7 +234,7 @@ class HBProtocol(DatagramProtocol):
                 
         # Create or update repeater state
         repeater = RepeaterState(radio_id=radio_id, ip=ip, port=port)
-        repeater.connection_state = 'RPTL-RECEIVED'
+        repeater.connection_state = 'rptl-received'
         self._repeaters[radio_id] = repeater
         
         # Send login ACK with salt
@@ -245,7 +245,7 @@ class HBProtocol(DatagramProtocol):
     def _handle_auth_response(self, radio_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or repeater.connection_state != 'RPTL-RECEIVED':
+        if not repeater or repeater.connection_state != 'rptl-received':
             LOGGER.warning(f'Auth response from repeater {radio_id.hex()} in wrong state')
             self._send_nak(radio_id, addr)
             return
@@ -263,7 +263,7 @@ class HBProtocol(DatagramProtocol):
             
             if auth_hash == calc_hash:
                 repeater.authenticated = True
-                repeater.connection_state = 'WAITING-CONFIG'
+                repeater.connection_state = 'waiting-config'
                 self._send_packet(b''.join([RPTACK, radio_id]), addr)
                 LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} authenticated successfully')
             else:
@@ -281,7 +281,7 @@ class HBProtocol(DatagramProtocol):
         try:
             radio_id = data[4:8]
             repeater = self._validate_repeater(radio_id, addr)
-            if not repeater or not repeater.authenticated or repeater.connection_state != 'WAITING-CONFIG':
+            if not repeater or not repeater.authenticated or repeater.connection_state != 'waiting-config':
                 LOGGER.warning(f'Config from repeater {radio_id.hex()} in wrong state')
                 self._send_nak(radio_id, addr)
                 return
@@ -302,8 +302,18 @@ class HBProtocol(DatagramProtocol):
             repeater.software_id = data[222:262]
             repeater.package_id = data[262:302]
             
+            # Log detailed configuration at debug level
+            LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} config:'
+                      f'\n    Callsign: {repeater.callsign.decode().strip()}'
+                      f'\n    RX Freq: {repeater.rx_freq.decode().strip()}'
+                      f'\n    TX Freq: {repeater.tx_freq.decode().strip()}'
+                      f'\n    Power: {repeater.tx_power.decode().strip()}'
+                      f'\n    ColorCode: {repeater.colorcode.decode().strip()}'
+                      f'\n    Location: {repeater.location.decode().strip()}'
+                      f'\n    Software: {repeater.software_id.decode().strip()}')
+
             repeater.connected = True
-            repeater.connection_state = 'YES'
+            repeater.connection_state = 'yes'  # Match HBlink3 state case
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
             
@@ -315,8 +325,8 @@ class HBProtocol(DatagramProtocol):
     def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle ping from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or repeater.connection_state != 'YES':
-            LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state')
+        if not repeater or repeater.connection_state != 'yes':
+            LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state={repeater.connection_state if repeater else "None"})')
             self._send_nak(radio_id, addr)
             return
             
