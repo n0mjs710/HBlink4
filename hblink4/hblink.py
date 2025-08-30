@@ -97,30 +97,30 @@ class HBProtocol(DatagramProtocol):
         self._config = CONFIG
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
-        self._transport = None
-
-    def connection_made(self, transport):
-        """Store transport for sending data"""
-        self._transport = transport
-
+        self._port = None  # Store the port instance instead of transport
+        
     def cleanup(self) -> None:
         """Send disconnect messages to all repeaters and cleanup resources."""
         LOGGER.info("Starting graceful shutdown...")
         
         # Send MSTCL to all connected repeaters
-        for radio_id, repeater in self._repeaters.items():
-            if repeater.connection_state == 'yes':
-                try:
-                    LOGGER.info(f"Sending disconnect to repeater {radio_id.hex()}")
-                    self._transport.sendto(MSTCL, repeater.sockaddr)
-                except Exception as e:
-                    LOGGER.error(f"Error sending disconnect to repeater {radio_id.hex()}: {e}")
+        if self._port:  # Only attempt to send if we have a port
+            for radio_id, repeater in self._repeaters.items():
+                if repeater.connection_state == 'yes':
+                    try:
+                        LOGGER.info(f"Sending disconnect to repeater {radio_id.hex()}")
+                        self._port.write(MSTCL, repeater.sockaddr)
+                    except Exception as e:
+                        LOGGER.error(f"Error sending disconnect to repeater {radio_id.hex()}: {e}")
 
         # Give time for disconnects to be sent
         import time
         time.sleep(0.5)  # 500ms should be enough for UDP packets to be sent
 
     def startProtocol(self):
+        """Called when the protocol starts"""
+        # Get the port instance for sending data
+        self._port = self.transport
         """Called when transport is connected"""
         # Start timeout checker
         timeout_interval = CONFIG.get('timeout', {}).get('repeater', 30)
