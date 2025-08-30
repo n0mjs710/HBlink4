@@ -107,11 +107,13 @@ class HBProtocol(DatagramProtocol):
         if self._port:  # Only attempt to send if we have a port
             for radio_id, repeater in self._repeaters.items():
                 if repeater.connection_state == 'yes':
-                try:
-                    LOGGER.info(f"Sending disconnect to repeater {int.from_bytes(radio_id, 'big')}")
-                    self._port.write(MSTCL, repeater.sockaddr)
-                except Exception as e:
-                    LOGGER.error(f"Error sending disconnect to repeater {int.from_bytes(radio_id, 'big')}: {e}")        # Give time for disconnects to be sent
+                    try:
+                        LOGGER.info(f"Sending disconnect to repeater {int.from_bytes(radio_id, 'big')}")
+                        self._port.write(MSTCL, repeater.sockaddr)
+                    except Exception as e:
+                        LOGGER.error(f"Error sending disconnect to repeater {int.from_bytes(radio_id, 'big')}: {e}")
+
+        # Give time for disconnects to be sent
         import time
         time.sleep(0.5)  # 500ms should be enough for UDP packets to be sent
 
