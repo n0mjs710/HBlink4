@@ -148,6 +148,9 @@ class HBProtocol(DatagramProtocol):
                     radio_id = data[4:8]
             elif _command == RPTP:
                 radio_id = data[4:8]
+                
+            if radio_id:
+                LOGGER.debug(f'Packet received: cmd={_command}, radio_id={radio_id.hex()}, addr={addr}')
             
             # Update ping time for connected repeaters
             if radio_id and radio_id in self._repeaters:
@@ -183,9 +186,12 @@ class HBProtocol(DatagramProtocol):
     def _validate_repeater(self, radio_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
         if radio_id not in self._repeaters:
+            LOGGER.debug(f'Repeater {radio_id.hex()} not found in _repeaters dict')
             return None
             
         repeater = self._repeaters[radio_id]
+        LOGGER.debug(f'Validating repeater {radio_id.hex()}: state={repeater.connection_state}, stored_addr={repeater.sockaddr}, incoming_addr={addr}')
+        
         if repeater.sockaddr != addr:
             LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(radio_id, "big")}')
             self._send_nak(radio_id, addr)
@@ -201,10 +207,13 @@ class HBProtocol(DatagramProtocol):
         if radio_id in self._repeaters:
             repeater = self._repeaters[radio_id]
             
+            # Log current state before removal
+            LOGGER.debug(f'Removing repeater {radio_id.hex()}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            
             # Clear all dynamic state
             repeater.authenticated = False
             repeater.connected = False
-            repeater.connection_state = 'NO'
+            repeater.connection_state = 'no'
             repeater.last_ping = 0
             repeater.ping_count = 0
             repeater.missed_pings = 0
@@ -316,6 +325,7 @@ class HBProtocol(DatagramProtocol):
             repeater.connection_state = 'yes'  # Match HBlink3 state case
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
+            LOGGER.debug(f'Repeater state after config: id={radio_id.hex()}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
         except Exception as e:
             LOGGER.error(f'Error parsing config: {str(e)}')
