@@ -147,7 +147,7 @@ class HBProtocol(DatagramProtocol):
                 else:
                     radio_id = data[4:8]
             elif _command == RPTP:
-                radio_id = data[4:8]
+                radio_id = data[7:11]  # Fixed offset for RPTP packets
                 
             if radio_id:
                 LOGGER.debug(f'Packet received: cmd={_command}, radio_id={radio_id.hex()}, addr={addr}')
