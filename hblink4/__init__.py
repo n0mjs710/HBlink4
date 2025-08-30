@@ -1,9 +1,9 @@
 """
-HBlink4 - Next Generation DMR Master Server Protocol Handler
+HBlink4 - Next Generation DMR Server Protocol Handler
 
 A complete architectural redesign of HBlink3, implementing a repeater-centric
-approach to DMR master services. The HomeBrew DMR protocol is UDP-based, used for 
-communication between DMR repeaters and master servers.
+approach to DMR server services. The HomeBrew DMR protocol is UDP-based, used for 
+communication between DMR repeaters and servers.
 
 License: GNU GPLv3
 """

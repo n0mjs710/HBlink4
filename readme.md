@@ -1,12 +1,12 @@
 # HBlink4
 
-HBlink4 is the next evolution of the HBlink DMR Master Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. This version represents a complete architectural redesign, moving from a master-centric to a repeater-centric model for more granular control and management of connected systems.
+HBlink4 is the next evolution of the HBlink DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. This version represents a complete architectural redesign, moving from a server-centric to a repeater-centric model for more granular control and management of connected systems.
 
 ## Key Architectural Changes
 
-- Elimination of peer mode - HBlink4 operates purely as a master server
-- Individual repeater management rather than master-level system management
-- Direct repeater registration without binding to specific master instances
+- Elimination of peer mode - HBlink4 operates purely as a server
+- Individual repeater management rather than server-level system management
+- Direct repeater registration without binding to specific server instances
 - Granular per-repeater control and monitoring
 
 ## Features

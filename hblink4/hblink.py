@@ -3,8 +3,8 @@
 Copyright (c) 2025 by Cort Buffington, N0MJS
 
 A complete architectural redesign of HBlink3, implementing 
-approach to DMR master services. The HomeBrew DMR protocol is UDP-based, used for 
-communication between DMR repeaters and master servers.
+approach to DMR server services. The HomeBrew DMR protocol is UDP-based, used for 
+communication between DMR repeaters and servers.
 
 License: GNU GPLv3
 """
@@ -89,7 +89,7 @@ class RepeaterState:
         return (self.ip, self.port)
 
 class HBProtocol(DatagramProtocol):
-    """UDP Implementation of HomeBrew DMR Master Protocol"""
+    """UDP Implementation of HomeBrew DMR Server Protocol"""
     def __init__(self, *args, **kwargs):
         super().__init__()
         self._repeaters: Dict[bytes, RepeaterState] = {}
@@ -186,11 +186,11 @@ class HBProtocol(DatagramProtocol):
     def _validate_repeater(self, radio_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
         if radio_id not in self._repeaters:
-            LOGGER.debug(f'Repeater {radio_id.hex()} not found in _repeaters dict')
+            LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} not found in _repeaters dict')
             return None
             
         repeater = self._repeaters[radio_id]
-        LOGGER.debug(f'Validating repeater {radio_id.hex()}: state={repeater.connection_state}, stored_addr={repeater.sockaddr}, incoming_addr={addr}')
+        LOGGER.debug(f'Validating repeater {int.from_bytes(radio_id, "big")}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
         if repeater.sockaddr != addr:
             LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(radio_id, "big")}')
@@ -336,7 +336,7 @@ class HBProtocol(DatagramProtocol):
         """Handle ping from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
         if not repeater or repeater.connection_state != 'yes':
-            LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state={repeater.connection_state if repeater else "None"})')
+            LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
             self._send_nak(radio_id, addr)
             return
             
@@ -386,7 +386,7 @@ class HBProtocol(DatagramProtocol):
         """Send packet to specified address"""
         cmd = data[:4]
         if cmd != DMRD:  # Don't log DMR data packets
-            LOGGER.debug(f'Sending {cmd} to {addr[0]}:{addr[1]}')
+            LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
         self.transport.write(data, addr)
 
     def _send_nak(self, radio_id: bytes, addr: tuple):
@@ -459,7 +459,7 @@ def main():
         interface=CONFIG['global']['bind_ip']
     )
     
-    LOGGER.info(f'HBlink4 master is running on {CONFIG["global"]["bind_ip"]}:{CONFIG["global"]["bind_port"]} (UDP)')
+    LOGGER.info(f'HBlink4 server is running on {CONFIG["global"]["bind_ip"]}:{CONFIG["global"]["bind_port"]} (UDP)')
     reactor.run()
 
 if __name__ == '__main__':
