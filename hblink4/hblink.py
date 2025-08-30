@@ -63,7 +63,7 @@ class RepeaterState:
     ping_count: int = 0
     missed_pings: int = 0
     salt: int = field(default_factory=lambda: randint(0, 0xFFFFFFFF))
-    connection_state: str = 'NO'  # States: NO, RPTL-RECEIVED, CHALLENGE-SENT, WAITING-CONFIG, YES
+    connection_state: str = 'no'  # States: no, rptl-received, waiting-config, yes
     last_rssi: int = 0
     rssi_count: int = 0
     
@@ -152,7 +152,7 @@ class HBProtocol(DatagramProtocol):
             # Update ping time for connected repeaters
             if radio_id and radio_id in self._repeaters:
                 repeater = self._repeaters[radio_id]
-                if repeater.connection_state == 'YES':
+                if repeater.connection_state == 'yes':
                     repeater.last_ping = time()
                     repeater.missed_pings = 0
 
@@ -357,7 +357,7 @@ class HBProtocol(DatagramProtocol):
             
         radio_id = data[11:15]
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or repeater.connection_state != 'YES':
+        if not repeater or repeater.connection_state != 'yes':
             LOGGER.warning(f'DMR data from repeater {int.from_bytes(radio_id, "big")} in wrong state')
             return
             
