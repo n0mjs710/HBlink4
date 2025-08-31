@@ -14,6 +14,7 @@
             "log_dmr_data": false,
             "log_status_updates": true
         },
+        "forward_dmr": true,
         "stats_interval": 60,
         "report_stats": true
     },
