@@ -31,7 +31,6 @@ The `global` section contains server-wide settings that control the basic operat
             "log_dmr_data": false,
             "log_status_updates": true
         },
-        "forward_dmr": true,
         "stats_interval": 60,
         "report_stats": true
     }
@@ -52,7 +51,6 @@ The `global` section contains server-wide settings that control the basic operat
 | `logging.log_protocol` | boolean | Log detailed protocol messages (default: false) |
 | `logging.log_dmr_data` | boolean | Log DMR data packets (default: false) |
 | `logging.log_status_updates` | boolean | Log repeater status updates (default: true) |
-| `forward_dmr` | boolean | Enable DMR packet forwarding between repeaters (default: true) |
 | `stats_interval` | number | Seconds between statistics reports |
 | `report_stats` | boolean | Enable statistics reporting |
 

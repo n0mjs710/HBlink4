@@ -94,7 +94,6 @@ class HBProtocol(DatagramProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__()
         self._repeaters: Dict[bytes, RepeaterState] = {}
-        self._active_ids: set[bytes] = set()  # Just store IDs of fully connected repeaters
         self._config = CONFIG
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
@@ -293,7 +292,7 @@ class HBProtocol(DatagramProtocol):
                 
         # Create or update repeater state
         repeater = RepeaterState(radio_id=radio_id, ip=ip, port=port)
-        self._set_repeater_state(radio_id, 'rptl-received')
+        repeater.connection_state = 'rptl-received'
         self._repeaters[radio_id] = repeater
         
         # Send login ACK with salt
@@ -322,7 +321,7 @@ class HBProtocol(DatagramProtocol):
             
             if auth_hash == calc_hash:
                 repeater.authenticated = True
-                self._set_repeater_state(radio_id, 'waiting-config')
+                repeater.connection_state = 'waiting-config'
                 self._send_packet(b''.join([RPTACK, radio_id]), addr)
                 LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} authenticated successfully')
             else:
@@ -372,7 +371,7 @@ class HBProtocol(DatagramProtocol):
                       f'\n    Software: {repeater.software_id.decode().strip()}')
 
             repeater.connected = True
-            self._set_repeater_state(radio_id, 'yes')  # Match HBlink3 state case
+            repeater.connection_state = 'yes'  # Match HBlink3 state case
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
             LOGGER.debug(f'Repeater state after config: id={int.from_bytes(radio_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
@@ -409,40 +408,28 @@ class HBProtocol(DatagramProtocol):
             LOGGER.debug(f'Status report from repeater {int.from_bytes(radio_id, "big")}: {data[8:].hex()}')
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
 
-    def _set_repeater_state(self, radio_id: bytes, state: str) -> None:
-        """Update repeater state and maintain active set"""
-        if state == 'yes':
-            self._active_ids.add(radio_id)
-        else:
-            self._active_ids.discard(radio_id)
-        self._repeaters[radio_id].connection_state = state
-
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
         if len(data) < 55:
             LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]}')
             return
             
-        source_id = data[11:15]
-        if source_id not in self._active_ids:
-            return  # Ignore packets from inactive repeaters
+        radio_id = data[11:15]
+        repeater = self._validate_repeater(radio_id, addr)
+        if not repeater or repeater.connection_state != 'yes':
+            LOGGER.warning(f'DMR data from repeater {int.from_bytes(radio_id, "big")} in wrong state')
+            return
             
-        # Extract packet information for logging only
-        seq = data[4]
-        rf_src = data[5:8]
-        dst_id = data[8:11]
-        bits = data[15]
-        slot = 2 if (bits & 0x80) else 1
+        # Extract packet information
+        _seq = data[4]
+        _rf_src = data[5:8]
+        _dst_id = data[8:11]
+        _bits = data[15]
+        _slot = 2 if (_bits & 0x80) else 1
         
-        if LOGGER.isEnabledFor(logging.DEBUG):
-            LOGGER.debug(f'DMR data from {int.from_bytes(source_id, "big")}: seq={seq}, src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, slot={slot}')
-            
-        # Only forward if configured to do so
-        if self._config.get('global', {}).get('forward_dmr', True):
-            for target_id in self._active_ids:
-                if target_id != source_id:  # Don't send back to source
-                    target_repeater = self._repeaters[target_id]
-                    self._port.write(data, target_repeater.sockaddr)
+        # TODO: Implement DMR data routing logic here
+        # For now, just log it
+        LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")}: seq={_seq}, src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, slot={_slot}')
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
