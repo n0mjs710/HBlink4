@@ -155,29 +155,38 @@ class HBProtocol(DatagramProtocol):
         """Handle received UDP datagram"""
         ip, port = addr
         
-        # Check minimum packet length
-        if len(data) < 7:  # Minimum length for any valid HomeBrew packet
+        # Check minimum packet length for header
+        if len(data) < 2:  # Need at least length field
             LOGGER.warning(f'Received undersized datagram from {ip}:{port}: {data}')
             return
             
-        _command = data[:4]
+        # Get packet length from first two bytes
+        packet_length = int.from_bytes(data[:2], 'big')
+        
+        # Validate full packet length
+        if len(data) < packet_length + 2:  # +2 for length field
+            LOGGER.warning(f'Incomplete packet from {ip}:{port}, expected {packet_length + 2} bytes, got {len(data)}')
+            return
+            
+        # Command starts after length field
+        _command = data[2:6]
         
         try:
-            # Extract radio_id based on packet type
+            # Extract radio_id based on packet type, accounting for 2-byte length prefix
             radio_id = None
             if _command == DMRD:
-                radio_id = data[11:15]
+                radio_id = data[13:17]  # Was 11:15, add 2 for length
             elif _command == RPTL:
-                radio_id = data[4:8]
+                radio_id = data[6:10]   # Was 4:8, add 2 for length
             elif _command == RPTK:
-                radio_id = data[4:8]
+                radio_id = data[6:10]   # Was 4:8, add 2 for length
             elif _command == RPTC:
-                if data[:5] == RPTCL:
-                    radio_id = data[5:9]
+                if data[2:7] == RPTCL:  # Check RPTCL starting after length
+                    radio_id = data[7:11]   # Was 5:9, add 2 for length
                 else:
-                    radio_id = data[4:8]
+                    radio_id = data[6:10]   # Was 4:8, add 2 for length
             elif _command == RPTP:
-                radio_id = data[7:11]  # Fixed offset for RPTP packets
+                radio_id = data[9:13]   # Was 7:11, add 2 for length
                 
             if radio_id:
                 LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
@@ -399,19 +408,19 @@ class HBProtocol(DatagramProtocol):
 
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
-        if len(data) < 55:
+        if len(data) < 57:  # 55 + 2 for length prefix
             LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]}')
             return
             
-        source_id = data[11:15]
+        source_id = data[13:17]  # Was 11:15, add 2 for length
         if source_id not in self._active_ids:
             return  # Ignore packets from inactive repeaters
             
         # Extract packet information for logging only
-        seq = data[4]
-        rf_src = data[5:8]
-        dst_id = data[8:11]
-        bits = data[15]
+        seq = data[6]     # Was 4, add 2 for length
+        rf_src = data[7:10]   # Was 5:8, add 2 for length
+        dst_id = data[10:13]  # Was 8:11, add 2 for length
+        bits = data[17]   # Was 15, add 2 for length
         slot = 2 if (bits & 0x80) else 1
         
         if LOGGER.isEnabledFor(logging.DEBUG):
