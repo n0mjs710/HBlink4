@@ -158,21 +158,20 @@ class HBProtocol(DatagramProtocol):
         # Debug log the raw packet
         LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
         
-        # Check minimum packet length and handle 4-byte login packets
-        if len(data) < 4:
-            LOGGER.warning(f'Received undersized datagram from {ip}:{port}: {data}')
-            return
-            
-        # Special case: If exactly 4 bytes, treat as repeater login
+        # Very first check - is this a 4-byte login packet?
         if len(data) == 4:
             try:
                 repeater_id = int.from_bytes(data, 'big')
                 LOGGER.debug(f'Treating 4-byte packet as repeater login from {ip}:{port}, ID: {repeater_id}')
                 self._handle_repeater_login(data, addr)
-                return
             except Exception as e:
                 LOGGER.error(f'Error processing potential repeater login from {ip}:{port}: {e}')
-                return
+            return  # Always return after handling 4-byte packet
+            
+        # For all other packets, must be at least 4 bytes for command
+        if len(data) < 4:
+            LOGGER.warning(f'Received undersized datagram from {ip}:{port}: {data}')
+            return
             
         _command = data[:4]
         LOGGER.debug(f'Command bytes: {_command}')
