@@ -166,7 +166,8 @@ class HBProtocol(DatagramProtocol):
         # Special case: If exactly 4 bytes, treat as repeater login
         if len(data) == 4:
             try:
-                LOGGER.debug(f'Treating 4-byte packet as repeater login from {ip}:{port}')
+                repeater_id = int.from_bytes(data, 'big')
+                LOGGER.debug(f'Treating 4-byte packet as repeater login from {ip}:{port}, ID: {repeater_id}')
                 self._handle_repeater_login(data, addr)
                 return
             except Exception as e:
@@ -277,6 +278,8 @@ class HBProtocol(DatagramProtocol):
     def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater login request"""
         ip, port = addr
+        
+        LOGGER.debug(f'Processing login for repeater ID {int.from_bytes(radio_id, "big")} from {ip}:{port}')
         
         if radio_id in self._repeaters:
             repeater = self._repeaters[radio_id]
