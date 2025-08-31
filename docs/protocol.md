@@ -15,10 +15,9 @@ The HomeBrew DMR protocol uses a series of commands exchanged between repeaters 
 ## Connection States
 
 A server will track a repeater in one of the following states:
-- `no` - Not connected/initial state
-- `rptl-received` - Login request received
-- `waiting-config` - Authentication completed, waiting for configuration
-- `yes` - Fully connected and operational
+- `login` - Initial state after login request received
+- `config` - Authentication completed, waiting for configuration
+- `connected` - Fully connected and operational
 
 ## Command Types
 

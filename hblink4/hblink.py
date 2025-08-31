@@ -64,7 +64,7 @@ class RepeaterState:
     ping_count: int = 0
     missed_pings: int = 0
     salt: int = field(default_factory=lambda: randint(0, 0xFFFFFFFF))
-    connection_state: str = 'no'  # States: no, rptl-received, waiting-config, yes
+    connection_state: str = 'login'  # States: login, config, connected
     last_rssi: int = 0
     rssi_count: int = 0
     
@@ -198,7 +198,7 @@ class HBProtocol(DatagramProtocol):
             # Update ping time for connected repeaters
             if radio_id and radio_id in self._repeaters:
                 repeater = self._repeaters[radio_id]
-                if repeater.connection_state == 'yes':
+                if repeater.connection_state == 'connected':
                     repeater.last_ping = time()
                     repeater.missed_pings = 0
 
@@ -257,20 +257,10 @@ class HBProtocol(DatagramProtocol):
             # Log current state before removal
             LOGGER.debug(f'Removing repeater {int.from_bytes(radio_id, "big")}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
-            # Clear all dynamic state
-            repeater.authenticated = False
-            repeater.connected = False
-            repeater.connection_state = 'no'
-            repeater.last_ping = 0
-            repeater.ping_count = 0
-            repeater.missed_pings = 0
-            repeater.last_rssi = 0
-            repeater.rssi_count = 0
-            
             # Remove from active repeaters
             del self._repeaters[radio_id]
             
-            # Force garbage collection of any circular references
+            # Clear local reference to allow garbage collection
             repeater = None
 
     def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
@@ -292,7 +282,7 @@ class HBProtocol(DatagramProtocol):
                 
         # Create or update repeater state
         repeater = RepeaterState(radio_id=radio_id, ip=ip, port=port)
-        repeater.connection_state = 'rptl-received'
+        repeater.connection_state = 'login'
         self._repeaters[radio_id] = repeater
         
         # Send login ACK with salt
@@ -303,7 +293,7 @@ class HBProtocol(DatagramProtocol):
     def _handle_auth_response(self, radio_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or repeater.connection_state != 'rptl-received':
+        if not repeater or repeater.connection_state != 'login':
             LOGGER.warning(f'Auth response from repeater {int.from_bytes(radio_id, "big")} in wrong state')
             self._send_nak(radio_id, addr)
             return
@@ -321,7 +311,7 @@ class HBProtocol(DatagramProtocol):
             
             if auth_hash == calc_hash:
                 repeater.authenticated = True
-                repeater.connection_state = 'waiting-config'
+                repeater.connection_state = 'config'
                 self._send_packet(b''.join([RPTACK, radio_id]), addr)
                 LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} authenticated successfully')
             else:
@@ -339,7 +329,7 @@ class HBProtocol(DatagramProtocol):
         try:
             radio_id = data[4:8]
             repeater = self._validate_repeater(radio_id, addr)
-            if not repeater or not repeater.authenticated or repeater.connection_state != 'waiting-config':
+            if not repeater or not repeater.authenticated or repeater.connection_state != 'config':
                 LOGGER.warning(f'Config from repeater {int.from_bytes(radio_id, "big")} in wrong state')
                 self._send_nak(radio_id, addr)
                 return
@@ -371,7 +361,7 @@ class HBProtocol(DatagramProtocol):
                       f'\n    Software: {repeater.software_id.decode().strip()}')
 
             repeater.connected = True
-            repeater.connection_state = 'yes'  # Match HBlink3 state case
+            repeater.connection_state = 'connected'
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
             LOGGER.debug(f'Repeater state after config: id={int.from_bytes(radio_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
@@ -384,7 +374,7 @@ class HBProtocol(DatagramProtocol):
     def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle ping from repeater"""
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or repeater.connection_state != 'yes':
+        if not repeater or repeater.connection_state != 'connected':
             LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
             self._send_nak(radio_id, addr)
             return
@@ -416,7 +406,7 @@ class HBProtocol(DatagramProtocol):
             
         radio_id = data[11:15]
         repeater = self._validate_repeater(radio_id, addr)
-        if not repeater or repeater.connection_state != 'yes':
+        if not repeater or repeater.connection_state != 'connected':
             LOGGER.warning(f'DMR data from repeater {int.from_bytes(radio_id, "big")} in wrong state')
             return
             

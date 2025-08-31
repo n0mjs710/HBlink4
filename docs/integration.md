@@ -104,7 +104,7 @@ Each connected repeater is represented by a `RepeaterState` object containing me
 | `ip` | str | Repeater's IP address |
 | `port` | int | Repeater's UDP port |
 | `radio_id` | bytes | Repeater's DMR ID (4 bytes) |
-| `connection_state` | str | Current connection state ('no', 'rptl-received', 'waiting-config', 'yes') |
+| `connection_state` | str | Current connection state ('login', 'config', 'connected') |
 | `last_ping` | float | Timestamp of last ping received |
 | `ping_count` | int | Number of pings received |
 | `missed_pings` | int | Number of consecutive missed pings |
@@ -276,7 +276,7 @@ def find_repeater_by_ip(protocol, ip_address: str):
 ### Monitoring Connection States
 ```python
 def get_repeater_states(protocol):
-    states = {'yes': [], 'waiting-config': [], 'rptl-received': [], 'no': []}
+    states = {'connected': [], 'config': [], 'login': []}
     for radio_id, repeater in protocol._repeaters.items():
         states[repeater.connection_state].append(int.from_bytes(radio_id, 'big'))
     return states
