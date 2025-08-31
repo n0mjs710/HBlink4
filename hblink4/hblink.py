@@ -2,7 +2,7 @@
 """
 Copyright (c) 2025 by Cort Buffington, N0MJS
 
-A complete architectural redesign of HBlink3, implementing 
+A complete architectural redesign of HBlink3, implementing a repeater-centric
 approach to DMR server services. The HomeBrew DMR protocol is UDP-based, used for 
 communication between DMR repeaters and servers.
 
@@ -156,21 +156,6 @@ class HBProtocol(DatagramProtocol):
         
         # Debug log the raw packet
         LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
-        
-        # Very first check - is this a 4-byte login packet?
-        if len(data) == 4:
-            try:
-                repeater_id = int.from_bytes(data, 'big')
-                LOGGER.debug(f'Treating 4-byte packet as repeater login from {ip}:{port}, ID: {repeater_id}')
-                self._handle_repeater_login(data, addr)
-            except Exception as e:
-                LOGGER.error(f'Error processing potential repeater login from {ip}:{port}: {e}')
-            return  # Always return after handling 4-byte packet
-            
-        # For all other packets, must be at least 4 bytes for command
-        if len(data) < 4:
-            LOGGER.warning(f'Received undersized datagram from {ip}:{port}: {data}')
-            return
             
         _command = data[:4]
         LOGGER.debug(f'Command bytes: {_command}')
