@@ -155,7 +155,7 @@ class HBProtocol(DatagramProtocol):
         ip, port = addr
         
         # Debug log the raw packet
-        LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
+        #LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
             
         _command = data[:4]
         LOGGER.debug(f'Command bytes: {_command}')
@@ -165,20 +165,20 @@ class HBProtocol(DatagramProtocol):
             radio_id = None
             if _command == DMRD:
                 radio_id = data[11:15]
+            elif _command == RPTP:
+                radio_id = data[7:11]
             elif _command == RPTL:
                 radio_id = data[4:8]
             elif _command == RPTK:
                 radio_id = data[4:8]
             elif _command == RPTC:
-                if data[:5] == RPTCL:
-                    radio_id = data[5:9]
-                else:
-                    radio_id = data[4:8]
-            elif _command == RPTP:
-                radio_id = data[7:11]  # Fixed offset for RPTP packets
+                radio_id = data[4:8]
                 
             if radio_id:
                 LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
+            else:
+                LOGGER.warning(f'Packet received with unknown command: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')   
+                return
             
             # Update ping time for connected repeaters
             if radio_id and radio_id in self._repeaters:
