@@ -154,6 +154,12 @@ class HBProtocol(DatagramProtocol):
     def datagramReceived(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
         ip, port = addr
+        
+        # Check minimum packet length
+        if len(data) < 7:  # Minimum length for any valid HomeBrew packet
+            LOGGER.warning(f'Received undersized datagram from {ip}:{port}: {data}')
+            return
+            
         _command = data[:4]
         
         try:
