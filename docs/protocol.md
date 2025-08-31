@@ -6,6 +6,12 @@ This document describes the HomeBrew DMR protocol used for communication between
 
 The HomeBrew DMR protocol uses a series of commands exchanged between repeaters and servers to establish and maintain connections, authenticate devices, and transfer DMR data.
 
+## Important DMR Specifications
+
+- All Radio IDs are 32-bit (4-byte) fields
+- This matches the DMR over-the-air protocol where IDs map to IPv4 addresses
+- Radio IDs in all packets must be exactly 4 bytes, including any necessary leading zeros
+
 ## Connection States
 
 A server will track a repeater in one of the following states:
@@ -22,6 +28,7 @@ A server will track a repeater in one of the following states:
    - Direction: Repeater → Server
    - Purpose: Initial login request
    - Format: `RPTL` + `radio_id[4 bytes]`
+   - Note: Radio ID is always a 32-bit (4-byte) field as per DMR specification
    - State Change: `no` → `rptl-received`
 
 2. **MSTNAK (Server NAK)**

@@ -155,38 +155,43 @@ class HBProtocol(DatagramProtocol):
         """Handle received UDP datagram"""
         ip, port = addr
         
-        # Check minimum packet length for header
-        if len(data) < 2:  # Need at least length field
+        # Debug log the raw packet
+        LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
+        
+        # Check minimum packet length and handle 4-byte login packets
+        if len(data) < 4:
             LOGGER.warning(f'Received undersized datagram from {ip}:{port}: {data}')
             return
             
-        # Get packet length from first two bytes
-        packet_length = int.from_bytes(data[:2], 'big')
-        
-        # Validate full packet length
-        if len(data) < packet_length + 2:  # +2 for length field
-            LOGGER.warning(f'Incomplete packet from {ip}:{port}, expected {packet_length + 2} bytes, got {len(data)}')
-            return
+        # Special case: If exactly 4 bytes, treat as repeater login
+        if len(data) == 4:
+            try:
+                LOGGER.debug(f'Treating 4-byte packet as repeater login from {ip}:{port}')
+                self._handle_repeater_login(data, addr)
+                return
+            except Exception as e:
+                LOGGER.error(f'Error processing potential repeater login from {ip}:{port}: {e}')
+                return
             
-        # Command starts after length field
-        _command = data[2:6]
+        _command = data[:4]
+        LOGGER.debug(f'Command bytes: {_command}')
         
         try:
-            # Extract radio_id based on packet type, accounting for 2-byte length prefix
+            # Extract radio_id based on packet type
             radio_id = None
             if _command == DMRD:
-                radio_id = data[13:17]  # Was 11:15, add 2 for length
+                radio_id = data[11:15]
             elif _command == RPTL:
-                radio_id = data[6:10]   # Was 4:8, add 2 for length
+                radio_id = data[4:8]
             elif _command == RPTK:
-                radio_id = data[6:10]   # Was 4:8, add 2 for length
+                radio_id = data[4:8]
             elif _command == RPTC:
-                if data[2:7] == RPTCL:  # Check RPTCL starting after length
-                    radio_id = data[7:11]   # Was 5:9, add 2 for length
+                if data[:5] == RPTCL:
+                    radio_id = data[5:9]
                 else:
-                    radio_id = data[6:10]   # Was 4:8, add 2 for length
+                    radio_id = data[4:8]
             elif _command == RPTP:
-                radio_id = data[9:13]   # Was 7:11, add 2 for length
+                radio_id = data[7:11]  # Fixed offset for RPTP packets
                 
             if radio_id:
                 LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
@@ -204,6 +209,10 @@ class HBProtocol(DatagramProtocol):
             elif _command == RPTL:
                 LOGGER.debug(f'Received RPTL from {ip}:{port} - Repeater Login Request')
                 self._handle_repeater_login(radio_id, addr)
+            elif len(data) == 4:  # Special case: raw repeater ID login
+                # Try to interpret as a raw repeater ID
+                LOGGER.debug(f'Received possible raw repeater ID login from {ip}:{port}')
+                self._handle_repeater_login(data, addr)
             elif _command == RPTK:
                 LOGGER.debug(f'Received RPTK from {ip}:{port} - Authentication Response')
                 self._handle_auth_response(radio_id, data[8:], addr)
@@ -408,19 +417,19 @@ class HBProtocol(DatagramProtocol):
 
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
-        if len(data) < 57:  # 55 + 2 for length prefix
+        if len(data) < 55:
             LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]}')
             return
             
-        source_id = data[13:17]  # Was 11:15, add 2 for length
+        source_id = data[11:15]
         if source_id not in self._active_ids:
             return  # Ignore packets from inactive repeaters
             
         # Extract packet information for logging only
-        seq = data[6]     # Was 4, add 2 for length
-        rf_src = data[7:10]   # Was 5:8, add 2 for length
-        dst_id = data[10:13]  # Was 8:11, add 2 for length
-        bits = data[17]   # Was 15, add 2 for length
+        seq = data[4]
+        rf_src = data[5:8]
+        dst_id = data[8:11]
+        bits = data[15]
         slot = 2 if (bits & 0x80) else 1
         
         if LOGGER.isEnabledFor(logging.DEBUG):
