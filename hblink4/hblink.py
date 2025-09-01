@@ -11,6 +11,7 @@ License: GNU GPLv3
 
 import json
 import logging
+import logging.handlers
 import pathlib
 from typing import Dict, Any, Optional, Tuple, Union
 from time import time
