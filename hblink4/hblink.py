@@ -376,6 +376,7 @@ class HBProtocol(DatagramProtocol):
         repeater.ping_count += 1
         
         # Send MSTPONG in response to RPTPING/RPTP from repeater
+        LOGGER.debug(f'Sending MSTPONG to repeater {int.from_bytes(radio_id, "big")}')
         self._send_packet(b''.join([MSTPONG, radio_id]), addr)
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:

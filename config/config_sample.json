@@ -10,10 +10,7 @@
             "file": "logs/hblink.log",
             "console_level": "INFO",
             "file_level": "DEBUG",
-            "retention_days": 30,
-            "log_protocol": false,
-            "log_dmr_data": false,
-            "log_status_updates": true
+            "retention_days": 30
         },
         "stats_interval": 60,
         "report_stats": true
