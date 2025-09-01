@@ -8,7 +8,6 @@ MSTCL   = b'MSTCL'
 MSTNAK  = b'MSTNAK' 
 MSTN    = b'MSTN'
 MSTP    = b'MSTP'
-MSTPONG = b'MSTPONG'  # Added MSTPONG for pong responses
 MSTC    = b'MSTC'
 RPTL    = b'RPTL'
 RPTK    = b'RPTK'

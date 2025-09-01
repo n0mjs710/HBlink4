@@ -77,26 +77,23 @@ A server will track a repeater in one of the following states:
 
 ### Connection Maintenance
 
-1. **RPTP (Repeater Ping)**
+1. **MSTP (Repeater Ping)**
    - Direction: Repeater → Server
-   - Format: `RPTP` + `radio_id[4 bytes]`
-   - Purpose: Keepalive message
-   - Timing: Sent periodically to maintain connection
+   - Format: `MSTP` + `radio_id[4 bytes]`
+   - Purpose: Repeater keepalive message
    - Notes: 
-     - Increments ping counter
+     - Sent periodically by repeater
+     - Server responds with RPTACK + radio_id
      - Updates last_ping timestamp
      - Resets missed_pings counter
 
-2. **MSTPONG (Server Pong)**
+2. **RPTACK (Server Response)**
    - Direction: Server → Repeater
-   - Format: `MSTPONG`
-   - Purpose: Response to RPTP
-   - Notes: Confirms server is still alive and connection is valid
-
-3. **MSTP (Server Ping)**
-   - Direction: Server → Repeater
-   - Format: `MSTP`
-   - Purpose: Server-initiated keepalive check
+   - Format: `RPTACK` + `radio_id[4 bytes]`
+   - Purpose: Acknowledge messages from repeater
+   - Usage:
+     - Server sends in response to MSTP
+     - Confirms server received and accepted message
 
 ### Data Transfer
 
