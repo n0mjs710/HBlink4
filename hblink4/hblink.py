@@ -148,6 +148,8 @@ class HBProtocol(DatagramProtocol):
                 
                 if repeater.missed_pings >= max_missed:
                     LOGGER.error(f'Repeater {int.from_bytes(radio_id, "big")} timed out after {repeater.missed_pings} missed pings')
+                    # Send NAK to trigger re-registration
+                    self._send_nak(radio_id, (repeater.ip, repeater.port))
                     self._remove_repeater(radio_id, "timeout")
 
     def datagramReceived(self, data: bytes, addr: tuple):
