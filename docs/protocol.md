@@ -1,8 +1,6 @@
 # HomeBrew DMR Protocol Specification
 
-This document describes the HomeBrew DMR protocol used for communication between DMR re      |<-------- MSTP -------->|
-      |<------- RPTACK --------|
-      |                          |rs and servers. The protocol is based on UDP packets and implements a connection-oriented approach with authentication and keepalive mechanisms.
+This document describes the HomeBrew DMR protocol used for communication between DMR repeaters and servers. The protocol is based on UDP packets and implements a quasi connection-oriented approach with authentication and keepalive mechanisms.
 
 ## Protocol Overview
 
@@ -10,13 +8,13 @@ The HomeBrew DMR protocol uses a series of commands exchanged between repeaters 
 
 ## Important DMR Specifications
 
-- All Radio IDs are 32-bit (4-byte) fields
+- All Radio and Talkgroup IDs are 32-bit (4-byte) fields
 - This matches the DMR over-the-air protocol where IDs map to IPv4 addresses
-- Radio IDs in all packets must be exactly 4 bytes, including any necessary leading zeros
+- Radio and Talkgroup IDs in all packets must be exactly 4 bytes, including any necessary leading zeros
 
 ## Connection States
 
-A server will track a repeater in one of the following states:
+A server will, at a minimum, need to track a repeater in the following states:
 - `login` - Initial state after login request received
 - `config` - Authentication completed, waiting for configuration
 - `connected` - Fully connected and operational
@@ -141,13 +139,11 @@ A server will track a repeater in one of the following states:
 
 2. **Keepalive Flow**
    ```
-   Repeater                    Server
-      |                          |
-      |---------- RPTP -------->|
+   Repeater                   Server
+      |                         |
+      |-------- RPTPING ------->|
       |<------- MSTPONG --------|
-      |                          |
-      |<-------- MSTP ----------|
-      |--------- RPTACK ------->|
+      |                         |
    ```
 
 ## Timing and Reliability
