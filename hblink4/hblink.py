@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright (C) 2025 by Cort Buffington, N0MJS
+Copyright (C) 2025 Cort Buffington, N0MJS
 
 A complete architectural redesign of HBlink3, implementing a repeater-centric
 approach to DMR server services. The HomeBrew DMR protocol is UDP-based, used for 
@@ -34,14 +34,14 @@ import sys
 try:
     from .constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTP, RPTACK, RPTP
+        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
     )
     from .access_control import RepeaterMatcher
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTP, RPTACK, RPTP
+        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
 
@@ -135,7 +135,7 @@ class HBProtocol(DatagramProtocol):
             self._timeout_task.stop()
             
     def _check_repeater_timeouts(self):
-        """Check for and handle repeater timeouts. Also sends MSTP to check repeater status."""
+        """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
         current_time = time()
         timeout_duration = CONFIG.get('timeout', {}).get('repeater', 30)  # 30 second default
         max_missed = CONFIG.get('timeout', {}).get('max_missed', 3)  # 3 missed pings default
@@ -150,9 +150,6 @@ class HBProtocol(DatagramProtocol):
             if time_since_ping > timeout_duration:
                 repeater.missed_pings += 1
                 LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} missed ping #{repeater.missed_pings}')
-                
-                # Send MSTP to check if repeater is still there
-                self._send_packet(MSTP, (repeater.ip, repeater.port))
                 
                 if repeater.missed_pings >= max_missed:
                     LOGGER.error(f'Repeater {int.from_bytes(radio_id, "big")} timed out after {repeater.missed_pings} missed pings')
@@ -217,8 +214,8 @@ class HBProtocol(DatagramProtocol):
                 else:
                     LOGGER.debug(f'Received RPTC from {ip}:{port} - Configuration Data')
                     self._handle_config(data, addr)
-            elif _command == MSTP:
-                LOGGER.debug(f'Received MSTP from {ip}:{port} - Keepalive Request')
+            elif _command[:4] == RPTP:  # Check just RPTP prefix since that's enough to identify RPTPING
+                LOGGER.debug(f'Received RPTPING from {ip}:{port} - Repeater Keepalive')
                 self._handle_ping(radio_id, addr)
             else:
                 LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
@@ -366,7 +363,7 @@ class HBProtocol(DatagramProtocol):
                 self._send_nak(radio_id, addr)
 
     def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
-        """Handle ping (MSTP) from repeater"""
+        """Handle ping (RPTPING/RPTP) from the repeater as a keepalive."""
         repeater = self._validate_repeater(radio_id, addr)
         if not repeater or repeater.connection_state != 'connected':
             LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
@@ -378,8 +375,8 @@ class HBProtocol(DatagramProtocol):
         repeater.missed_pings = 0
         repeater.ping_count += 1
         
-        # Send RPTACK with radio_id in response to MSTP from repeater
-        self._send_packet(b''.join([RPTACK, radio_id]), addr)
+        # Send MSTPONG in response to RPTPING/RPTP from repeater
+        self._send_packet(b''.join([MSTPONG, radio_id]), addr)
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""

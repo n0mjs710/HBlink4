@@ -7,14 +7,15 @@ DMRD    = b'DMRD'
 MSTCL   = b'MSTCL'
 MSTNAK  = b'MSTNAK' 
 MSTN    = b'MSTN'
-MSTP    = b'MSTP'
 MSTC    = b'MSTC'
+MSTPONG = b'MSTPONG'  # Server response to repeater's RPTPING/RPTP
 RPTL    = b'RPTL'
 RPTK    = b'RPTK'
 RPTC    = b'RPTC'
 RPTACK  = b'RPTACK'
 RPTCL   = b'RPTCL'
-RPTP    = b'RPTP'  # Repeater ping (keepalive) message
+RPTPING = b'RPTPING'  # Full command sent by repeater for keepalive
+RPTP    = b'RPTP'     # Prefix used to identify RPTPING commands when parsing
 RPTA    = b'RPTA'
 
 # Protocol Configuration
