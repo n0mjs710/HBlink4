@@ -2,6 +2,8 @@
 
 This document describes the HomeBrew DMR protocol used for communication between DMR repeaters and servers. The protocol is based on UDP packets and implements a quasi connection-oriented approach with authentication and keepalive mechanisms.
 
+> **Important Note**: The protocol specification at wiki.brandmeister.network contains errors in the keepalive/ping mechanism. Specifically, it reverses the command prefixes, incorrectly stating that MSTPING is sent from repeater to server and RPTPONG is sent back. The correct flow is: repeater sends RPTPING and server responds with MSTPONG. This document provides the correct implementation.
+
 ## Protocol Overview
 
 The HomeBrew DMR protocol uses a series of commands exchanged between repeaters and servers to establish and maintain connections, authenticate devices, and transfer DMR data.
