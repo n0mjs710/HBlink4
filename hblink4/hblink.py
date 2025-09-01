@@ -151,7 +151,7 @@ class HBProtocol(DatagramProtocol):
                 if repeater.missed_pings >= max_missed:
                     LOGGER.error(f'Repeater {int.from_bytes(radio_id, "big")} timed out after {repeater.missed_pings} missed pings')
                     # Send NAK to trigger re-registration
-                    self._send_nak(radio_id, (repeater.ip, repeater.port))
+                    self._send_nak(radio_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
                     self._remove_repeater(radio_id, "timeout")
 
     def datagramReceived(self, data: bytes, addr: tuple):
@@ -223,7 +223,7 @@ class HBProtocol(DatagramProtocol):
         """Validate repeater state and address"""
         if radio_id not in self._repeaters:
             LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} not found in _repeaters dict')
-            self._send_nak(radio_id, addr)  # Send NAK to force re-registration
+            self._send_nak(radio_id, addr, reason="Repeater not registered")
             return None
             
         repeater = self._repeaters[radio_id]
@@ -231,7 +231,7 @@ class HBProtocol(DatagramProtocol):
         
         if repeater.sockaddr != addr:
             LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(radio_id, "big")}')
-            self._send_nak(radio_id, addr)
+            self._send_nak(radio_id, addr, reason="Message from incorrect IP address")
             return None
             
         return repeater
@@ -261,7 +261,7 @@ class HBProtocol(DatagramProtocol):
             repeater = self._repeaters[radio_id]
             if repeater.sockaddr != addr:
                 LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
-                self._send_nak(radio_id, addr)
+                self._send_nak(radio_id, addr, reason="Already connected from different address")
                 return
             else:
                 # Same repeater reconnecting from same IP:port
@@ -304,7 +304,7 @@ class HBProtocol(DatagramProtocol):
                 LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} authenticated successfully')
             else:
                 LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} failed authentication')
-                self._send_nak(radio_id, addr)
+                self._send_nak(radio_id, addr, reason="Authentication failed")
                 self._remove_repeater(radio_id, "auth_failed")
                 
         except Exception as e:
@@ -416,9 +416,21 @@ class HBProtocol(DatagramProtocol):
             LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
         self.transport.write(data, addr)
 
-    def _send_nak(self, radio_id: bytes, addr: tuple):
-        """Send NAK to specified address"""
-        LOGGER.debug(f'Sending NAK to {addr[0]}:{addr[1]} for repeater {int.from_bytes(radio_id, "big")}')
+    def _send_nak(self, radio_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
+        """Send NAK to specified address
+        
+        Args:
+            radio_id: The repeater's ID
+            addr: The address to send the NAK to
+            reason: Why the NAK is being sent
+            is_shutdown: Whether this NAK is part of a graceful shutdown
+        """
+        log_level = logging.DEBUG if is_shutdown else logging.WARNING
+        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {int.from_bytes(radio_id, "big")}'
+        if reason:
+            log_msg += f' - {reason}'
+        
+        LOGGER.log(log_level, log_msg)
         self._send_packet(b''.join([MSTNAK, radio_id]), addr)
 
 
