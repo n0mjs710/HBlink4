@@ -10,16 +10,16 @@ You can create an isolated Python environment for your application without affec
 
 ```bash
 # Create virtual environment (Python 3.8 or higher recommended)
-python3 -m venv /path/to/your/project/.venv
+python3 -m venv /path/to/your/project/venv
 
 # Install required packages without activating the environment
-/path/to/your/project/.venv/bin/pip install twisted
+/path/to/your/project/venv/bin/pip install twisted
 
 # If HBlink4 is installed via pip
-/path/to/your/project/.venv/bin/pip install hblink4
+/path/to/your/project/venv/bin/pip install hblink4
 
 # Or if using HBlink4 from source
-/path/to/your/project/.venv/bin/pip install -e /path/to/hblink4/source
+/path/to/your/project/venv/bin/pip install -e /path/to/hblink4/source
 ```
 
 ### Running Your Application
@@ -28,21 +28,21 @@ You can run your application using the Python interpreter from the virtual envir
 
 ```bash
 # Run in foreground
-/path/to/your/project/.venv/bin/python /path/to/your/application.py /path/to/config.json
+/path/to/your/project/venv/bin/python /path/to/your/hblink.py /path/to/config.json
 
 # Run in background with nohup (logs to nohup.out)
-nohup /path/to/your/project/.venv/bin/python /path/to/your/application.py /path/to/config.json &
+nohup /path/to/your/project/venv/bin/python /path/to/your/hblink.py /path/to/config.json &
 
 # Run in background with custom log file
-nohup /path/to/your/project/.venv/bin/python /path/to/your/application.py /path/to/config.json > /path/to/logfile.log 2>&1 &
+nohup /path/to/your/project/venv/bin/python /path/to/your/hblink.py /path/to/config.json > /path/to/logfile.log 2>&1 &
 
 # Run in background and disown (no hangup on shell exit)
-/path/to/your/project/.venv/bin/python /path/to/your/application.py /path/to/config.json &
+/path/to/your/project/venv/bin/python /path/to/your/hblink.py /path/to/config.json &
 disown
 
 # Or using a shell script
 #!/bin/bash
-VENV_PATH="/path/to/your/project/.venv"
+VENV_PATH="/path/to/your/project/venv"
 APP_PATH="/path/to/your/application.py"
 CONFIG_PATH="/path/to/config.json"
 LOG_PATH="/path/to/logfile.log"
@@ -67,7 +67,7 @@ After=network.target
 Type=simple
 User=dmr
 Group=dmr
-ExecStart=/path/to/your/project/.venv/bin/python /path/to/your/application.py /path/to/config.json
+ExecStart=/path/to/your/project/venv/bin/python /path/to/your/application.py /path/to/config.json
 WorkingDirectory=/path/to/your/project
 Restart=always
 RestartSec=5
