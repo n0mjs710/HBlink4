@@ -34,14 +34,14 @@ import sys
 try:
     from .constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTP, MSTPONG, RPTACK, RPTP
+        DMRD, MSTNAK, MSTP, RPTACK, RPTP
     )
     from .access_control import RepeaterMatcher
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTP, MSTPONG, RPTACK, RPTP
+        DMRD, MSTNAK, MSTP, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
 
