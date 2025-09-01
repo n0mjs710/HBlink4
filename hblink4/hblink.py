@@ -20,6 +20,7 @@ from hashlib import sha256
 import signal
 from twisted.internet import reactor
 from twisted.internet.protocol import DatagramProtocol
+from twisted.internet.task import LoopingCall
 
 # Global configuration dictionary
 CONFIG: Dict[str, Any] = {}
@@ -247,8 +248,6 @@ class HBProtocol(DatagramProtocol):
             # Remove from active repeaters
             del self._repeaters[radio_id]
             
-            # Clear local reference to allow garbage collection
-            repeater = None
 
     def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater login request"""
@@ -420,9 +419,6 @@ class HBProtocol(DatagramProtocol):
         LOGGER.debug(f'Sending NAK to {addr[0]}:{addr[1]} for repeater {int.from_bytes(radio_id, "big")}')
         self._send_packet(b''.join([MSTNAK, radio_id]), addr)
 
-
-
-from twisted.internet.task import LoopingCall
 
 def setup_logging():
     """Configure logging"""
