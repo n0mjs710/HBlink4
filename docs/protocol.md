@@ -1,6 +1,8 @@
 # HomeBrew DMR Protocol Specification
 
-This document describes the HomeBrew DMR protocol used for communication between DMR repeaters and servers. The protocol is based on UDP packets and implements a connection-oriented approach with authentication and keepalive mechanisms.
+This document describes the HomeBrew DMR protocol used for communication between DMR re      |<-------- MSTP -------->|
+      |<------- RPTACK --------|
+      |                          |rs and servers. The protocol is based on UDP packets and implements a connection-oriented approach with authentication and keepalive mechanisms.
 
 ## Protocol Overview
 
@@ -133,9 +135,9 @@ A server will track a repeater in one of the following states:
 
 ## Timing and Reliability
 
-- Repeaters must send RPTP messages regularly to maintain the connection
+- Repeaters must send MSTP messages regularly to maintain the connection
 - If a repeater misses multiple pings, the connection is considered dead
-- Servers should respond to each RPTP with MSTPONG
+- Server responds to each MSTP with RPTACK + radio_id
 - Connection timeouts should be handled gracefully with RPTCL messages
 
 ## Error Handling

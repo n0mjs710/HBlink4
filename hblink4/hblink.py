@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright (c) 2025 by Cort Buffington, N0MJS
+Copyright (C) 2025 by Cort Buffington, N0MJS
 
 A complete architectural redesign of HBlink3, implementing a repeater-centric
 approach to DMR server services. The HomeBrew DMR protocol is UDP-based, used for 
