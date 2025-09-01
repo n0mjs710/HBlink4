@@ -45,7 +45,30 @@ A server will track a repeater in one of the following states:
    - Direction: Repeater → Server
    - Format: `RPTC` + `radio_id[4 bytes]` + `configuration_data`
    - Purpose: Send repeater configuration
-   - State Change: `waiting-config` → `yes`
+   - State Change: `config` → `connected`
+   - Total Length: 302 bytes
+   
+   Configuration Data Fields (all fields are fixed length):
+   | Field         | Offset | Length | Description |
+   |---------------|--------|--------|-------------|
+   | Command       | 0      | 4      | 'RPTC' |
+   | Radio ID      | 4      | 4      | 32-bit DMR ID |
+   | Callsign      | 8      | 8      | Station callsign |
+   | RX Frequency  | 16     | 9      | Receive frequency |
+   | TX Frequency  | 25     | 9      | Transmit frequency |
+   | TX Power      | 34     | 2      | Transmit power |
+   | Color Code    | 36     | 2      | DMR color code |
+   | Latitude      | 38     | 8      | Station latitude |
+   | Longitude     | 46     | 9      | Station longitude |
+   | Height        | 55     | 3      | Antenna height |
+   | Location      | 58     | 20     | Station location description |
+   | Description   | 78     | 19     | Station description |
+   | Slots         | 97     | 1      | Enabled timeslots |
+   | URL           | 98     | 124    | Station URL |
+   | Software ID   | 222    | 40     | Software identifier |
+   | Package ID    | 262    | 40     | Package identifier |
+   
+   Note: All string fields are fixed length and should be null-padded if shorter than their allocated length.
 
 5. **RPTCL (Repeater Close)**
    - Direction: Repeater → Server
