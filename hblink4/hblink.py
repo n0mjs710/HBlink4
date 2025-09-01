@@ -368,7 +368,7 @@ class HBProtocol(DatagramProtocol):
             
         # Only increment ping count for explicit pings
         repeater.ping_count += 1
-        self._send_packet(b''.join([MSTPONG, radio_id]), addr)  # Changed to use MSTPONG
+        self._send_packet(b''.join([MSTP, radio_id]), addr)  # Changed to use MSTP
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
