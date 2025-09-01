@@ -518,9 +518,10 @@ def load_config(config_file: str):
 
 def main():
     """Main program entry point"""
-    if len(sys.argv) != 2:
-        print('Usage: hblink.py config/config.json')
-        print('Note: Copy config_sample.json to config.json and edit as needed')
+    if len(sys.argv) < 2:
+        print('Usage: run.py [config/config.json]')
+        print('Note: If no config file specified, config/config.json will be used')
+        print('      Copy config_sample.json to config.json and edit as needed')
         sys.exit(1)
 
     load_config(sys.argv[1])
