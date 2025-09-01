@@ -372,6 +372,8 @@ class HBProtocol(DatagramProtocol):
             
         # Update ping time and reset missed pings
         repeater.last_ping = time()
+        if repeater.missed_pings > 0:
+            LOGGER.info(f'Ping counter reset for repeater {int.from_bytes(radio_id, "big")} after {repeater.missed_pings} missed pings')
         repeater.missed_pings = 0
         repeater.ping_count += 1
         
