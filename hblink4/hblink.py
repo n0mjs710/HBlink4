@@ -420,8 +420,8 @@ class HBProtocol(DatagramProtocol):
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
         cmd = data[:4]
-        if cmd != DMRD:  # Don't log DMR data packets
-            LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
+        #if cmd != DMRD:  # Don't log DMR data packets
+        #    LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
         self.transport.write(data, addr)
 
     def _send_nak(self, radio_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
