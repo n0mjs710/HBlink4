@@ -223,6 +223,7 @@ class HBProtocol(DatagramProtocol):
         """Validate repeater state and address"""
         if radio_id not in self._repeaters:
             LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} not found in _repeaters dict')
+            self._send_nak(radio_id, addr)  # Send NAK to force re-registration
             return None
             
         repeater = self._repeaters[radio_id]
