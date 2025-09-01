@@ -364,7 +364,7 @@ class HBProtocol(DatagramProtocol):
         repeater = self._validate_repeater(radio_id, addr)
         if not repeater or repeater.connection_state != 'connected':
             LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
-            self._send_nak(radio_id, addr)
+            self._send_nak(radio_id, addr, reason="Wrong connection state")
             return
             
         # Update ping time and reset missed pings
@@ -372,8 +372,8 @@ class HBProtocol(DatagramProtocol):
         repeater.missed_pings = 0
         repeater.ping_count += 1
         
-        # Send MSTP response (should be just MSTP, no radio_id)
-        self._send_packet(MSTP, addr)
+        # Send RPTACK with radio_id as per HBlink3 protocol
+        self._send_packet(b''.join([RPTACK, radio_id]), addr)
 
     def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
