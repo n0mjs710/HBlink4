@@ -420,27 +420,57 @@ class HBProtocol(DatagramProtocol):
         self._send_packet(b''.join([MSTNAK, radio_id]), addr)
 
 
+def cleanup_old_logs(log_dir: pathlib.Path, max_days: int) -> None:
+    """Clean up log files older than max_days based on their date suffix"""
+    from datetime import datetime, timedelta
+    current_date = datetime.now()
+    cutoff_date = current_date - timedelta(days=max_days)
+    
+    try:
+        for log_file in log_dir.glob('hblink.log.*'):
+            try:
+                # Extract date from filename (expecting format: hblink.log.YYYY-MM-DD)
+                date_str = log_file.name.split('.')[-1]
+                file_date = datetime.strptime(date_str, '%Y-%m-%d')
+                
+                if file_date < cutoff_date:
+                    log_file.unlink()
+                    LOGGER.debug(f'Deleted old log file from {date_str}: {log_file}')
+            except (OSError, ValueError) as e:
+                LOGGER.warning(f'Error processing old log file {log_file}: {e}')
+    except Exception as e:
+        LOGGER.error(f'Error during log cleanup: {e}')
+
 def setup_logging():
     """Configure logging"""
     logging_config = CONFIG.get('global', {}).get('logging', {})
     
-    # Use old config format if new one not present
-    if not logging_config:
-        log_level = getattr(logging, CONFIG['global'].get('log_level', 'INFO'))
-        log_file = CONFIG['global'].get('log_file', 'logs/hblink.log')
-        file_level = console_level = log_level
-    else:
-        log_file = logging_config.get('file', 'logs/hblink.log')
-        file_level = getattr(logging, logging_config.get('file_level', 'DEBUG'))
-        console_level = getattr(logging, logging_config.get('console_level', 'INFO'))
+    # Get logging configuration with defaults
+    log_file = logging_config.get('file', 'logs/hblink.log')
+    file_level = getattr(logging, logging_config.get('file_level', 'DEBUG'))
+    console_level = getattr(logging, logging_config.get('console_level', 'INFO'))
+    max_days = logging_config.get('retention_days', 30)
     
     log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     
     # Create log directory if it doesn't exist
-    pathlib.Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    log_path = pathlib.Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Configure file handler
-    file_handler = logging.FileHandler(log_file)
+    # Clean up old log files
+    cleanup_old_logs(log_path.parent, max_days)
+    
+    # Configure rotating file handler with date-based suffix
+    file_handler = logging.handlers.TimedRotatingFileHandler(
+        str(log_path),
+        when='midnight',
+        interval=1,
+        backupCount=max_days
+    )
+    # Set the suffix for rotated files to YYYY-MM-DD
+    file_handler.suffix = '%Y-%m-%d'
+    # Don't include seconds in date suffix
+    file_handler.namer = lambda name: name.replace('.%Y-%m-%d%H%M%S', '.%Y-%m-%d')
     file_handler.setFormatter(log_format)
     file_handler.setLevel(file_level)
     
