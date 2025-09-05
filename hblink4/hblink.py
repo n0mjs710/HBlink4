@@ -264,8 +264,12 @@ class HBProtocol(DatagramProtocol):
             repeater = self._repeaters[radio_id]
             if repeater.sockaddr != addr:
                 LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
-                self._send_nak(radio_id, addr, reason="Already connected from different address")
-                return
+                # Remove the old registration first
+                old_addr = repeater.sockaddr
+                self._remove_repeater(radio_id, "reconnect_different_port")
+                # Then send NAK to the old address to ensure cleanup
+                self._send_nak(radio_id, old_addr, reason="Repeater reconnecting from new address")
+                # Continue with new connection below
             else:
                 # Same repeater reconnecting from same IP:port
                 old_state = repeater.connection_state
