@@ -179,7 +179,10 @@ class HBProtocol(DatagramProtocol):
             elif _command == RPTK:
                 radio_id = data[4:8]
             elif _command == RPTC:
-                radio_id = data[4:8]
+                if data[:5] == RPTCL:
+                    radio_id = data[5:9]
+                else:
+                    radio_id = data[4:8]
                 
             if radio_id:
                 LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
