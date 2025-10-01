@@ -7,34 +7,26 @@ A human-readable name/callsign transmitted in DMR that displays on receiving rad
 ## Transmission Structure
 
 ```
-+---------------------------------------------+
-| Talker Alias Transmission (4 LC Frames)    |
-+---------------------------------------------+
-|                                             |
-|  Header (FLCO=4)                            |
-|  +-------------------------------------+   |
-|  | Format: 2 bits (0-3)                |   |
-|  | Length: 6 bits (0-63 bytes)         |   |
-|  | Data: 7 bytes                       |   |
-|  +-------------------------------------+   |
-|                                             |
-|  Block 1 (FLCO=5)                           |
-|  +-------------------------------------+   |
-|  | Data: 7 bytes                       |   |
-|  +-------------------------------------+   |
-|                                             |
-|  Block 2 (FLCO=6)                           |
-|  +-------------------------------------+   |
-|  | Data: 7 bytes                       |   |
-|  +-------------------------------------+   |
-|                                             |
-|  Block 3 (FLCO=7)                           |
-|  +-------------------------------------+   |
-|  | Data: 7 bytes                       |   |
-|  +-------------------------------------+   |
-|                                             |
-|  Total: 28 bytes maximum                    |
-+---------------------------------------------+
++-------------------------------------------+
+| Talker Alias Transmission (4 LC Frames)   |
++-------------------------------------------+
+|                                           |
+| Header (FLCO=4)                           |
+|   Format: 2 bits (0-3)                    |
+|   Length: 6 bits (0-63 bytes)             |
+|   Data: 7 bytes                           |
+|                                           |
+| Block 1 (FLCO=5)                          |
+|   Data: 7 bytes                           |
+|                                           |
+| Block 2 (FLCO=6)                          |
+|   Data: 7 bytes                           |
+|                                           |
+| Block 3 (FLCO=7)                          |
+|   Data: 7 bytes                           |
+|                                           |
+| Total: 28 bytes maximum                   |
++-------------------------------------------+
 ```
 
 ## Encoding Formats
@@ -98,26 +90,29 @@ current_stream.talker_alias_blocks   # {0: b'N0MJS C', 1: b'ort\x00...'}
 
 ```
 Receive LC Frame
-     |
-     v
- Is FLCO=4?  --Yes--> Extract format & length
-     |                Store block 0 data
-     |                     |
-     No                    v
-     |              Have enough blocks?
-     v                     |
- Is FLCO=5,6,7?  --Yes--> Store block N data
-     |                     |
-     No                    v
-     |              Try to decode
-     v                     |
-  Ignore                   v
-                  Success? --Yes--> Log and store alias
-                           |
-                          No
-                           |
-                           v
-                    Wait for more blocks
+       |
+       v
+   Is FLCO=4?  --Yes--> Extract format & length
+       |                Store block 0 data
+       No                      |
+       |                       v
+       v                 Have enough blocks?
+   Is FLCO=5,6,7?              |
+       |                       v
+      Yes  ---> Store block N data
+       |                       |
+       No                      v
+       |                 Try to decode
+       v                       |
+     Ignore                    v
+                         Success?
+                               |
+                              Yes --> Log and store alias
+                               |
+                              No
+                               |
+                               v
+                        Wait for more blocks
 ```
 
 ## Logging Example
