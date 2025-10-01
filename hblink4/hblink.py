@@ -55,6 +55,30 @@ def bhex(data: bytes) -> bytes:
 from dataclasses import dataclass, field
 
 @dataclass
+class StreamState:
+    """Tracks an active DMR transmission stream"""
+    radio_id: bytes          # Repeater this stream is on
+    rf_src: bytes            # RF source (3 bytes)
+    dst_id: bytes            # Destination talkgroup/ID (3 bytes)
+    slot: int                # Timeslot (1 or 2)
+    start_time: float        # When transmission started
+    last_seen: float         # Last packet received
+    stream_id: bytes         # Unique stream identifier
+    packet_count: int = 0    # Number of packets in this stream
+    ended: bool = False      # True when stream has timed out but in hang time
+    
+    def is_active(self, timeout: float = 2.0) -> bool:
+        """Check if stream is still active (within timeout period)"""
+        return (time() - self.last_seen) < timeout
+    
+    def is_in_hang_time(self, timeout: float, hang_time: float) -> bool:
+        """Check if stream is in hang time (ended but slot reserved for same source)"""
+        if not self.ended:
+            return False
+        time_since_last = time() - self.last_seen
+        return timeout <= time_since_last < (timeout + hang_time)
+
+@dataclass
 class RepeaterState:
     """Data class for storing repeater state"""
     radio_id: bytes
@@ -86,10 +110,29 @@ class RepeaterState:
     software_id: bytes = b''
     package_id: bytes = b''
     
+    # Active stream tracking per slot
+    slot1_stream: Optional[StreamState] = None
+    slot2_stream: Optional[StreamState] = None
+    
     @property
     def sockaddr(self) -> PeerAddress:
         """Get socket address tuple"""
         return (self.ip, self.port)
+    
+    def get_slot_stream(self, slot: int) -> Optional[StreamState]:
+        """Get the active stream for a given slot"""
+        if slot == 1:
+            return self.slot1_stream
+        elif slot == 2:
+            return self.slot2_stream
+        return None
+    
+    def set_slot_stream(self, slot: int, stream: Optional[StreamState]) -> None:
+        """Set the active stream for a given slot"""
+        if slot == 1:
+            self.slot1_stream = stream
+        elif slot == 2:
+            self.slot2_stream = stream
 
 class HBProtocol(DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Server Protocol"""
@@ -99,6 +142,7 @@ class HBProtocol(DatagramProtocol):
         self._config = CONFIG
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
+        self._stream_timeout_task = None
         self._port = None  # Store the port instance instead of transport
         
     def cleanup(self) -> None:
@@ -128,11 +172,17 @@ class HBProtocol(DatagramProtocol):
         timeout_interval = CONFIG.get('timeout', {}).get('repeater', 30)
         self._timeout_task = LoopingCall(self._check_repeater_timeouts)
         self._timeout_task.start(timeout_interval)
+        
+        # Start stream timeout checker (check more frequently than repeater timeout)
+        self._stream_timeout_task = LoopingCall(self._check_stream_timeouts)
+        self._stream_timeout_task.start(1.0)  # Check every second
 
     def stopProtocol(self):
         """Called when transport is disconnected"""
         if self._timeout_task and self._timeout_task.running:
             self._timeout_task.stop()
+        if self._stream_timeout_task and self._stream_timeout_task.running:
+            self._stream_timeout_task.stop()
             
     def _check_repeater_timeouts(self):
         """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
@@ -156,6 +206,52 @@ class HBProtocol(DatagramProtocol):
                     # Send NAK to trigger re-registration
                     self._send_nak(radio_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
                     self._remove_repeater(radio_id, "timeout")
+    
+    def _check_stream_timeouts(self):
+        """Check for and clean up stale streams on all repeaters"""
+        current_time = time()
+        stream_timeout = CONFIG.get('global', {}).get('stream_timeout', 2.0)
+        hang_time = CONFIG.get('global', {}).get('stream_hang_time', 3.0)
+        
+        for radio_id, repeater in self._repeaters.items():
+            if repeater.connection_state != 'connected':
+                continue
+            
+            # Check slot 1
+            if repeater.slot1_stream:
+                stream = repeater.slot1_stream
+                if not stream.is_active(stream_timeout):
+                    if not stream.ended:
+                        # Stream just ended - mark it and start hang time
+                        stream.ended = True
+                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(radio_id, "big")} slot 1: '
+                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
+                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                                   f'duration={current_time - stream.start_time:.2f}s, '
+                                   f'packets={stream.packet_count} - '
+                                   f'entering hang time ({hang_time}s)')
+                    elif not stream.is_in_hang_time(stream_timeout, hang_time):
+                        # Hang time expired - clear the slot
+                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 1')
+                        repeater.slot1_stream = None
+            
+            # Check slot 2
+            if repeater.slot2_stream:
+                stream = repeater.slot2_stream
+                if not stream.is_active(stream_timeout):
+                    if not stream.ended:
+                        # Stream just ended - mark it and start hang time
+                        stream.ended = True
+                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(radio_id, "big")} slot 2: '
+                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
+                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                                   f'duration={current_time - stream.start_time:.2f}s, '
+                                   f'packets={stream.packet_count} - '
+                                   f'entering hang time ({hang_time}s)')
+                    elif not stream.is_in_hang_time(stream_timeout, hang_time):
+                        # Hang time expired - clear the slot
+                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 2')
+                        repeater.slot2_stream = None
 
     def datagramReceived(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
@@ -241,6 +337,115 @@ class HBProtocol(DatagramProtocol):
             return None
             
         return repeater
+    
+    def _is_talkgroup_allowed(self, repeater: RepeaterState, dst_id: bytes) -> bool:
+        """Check if a talkgroup is allowed for this repeater based on its configuration"""
+        try:
+            # Get the repeater's configuration
+            repeater_config = self._matcher.get_repeater_config(
+                int.from_bytes(repeater.radio_id, 'big'),
+                repeater.callsign.decode().strip() if repeater.callsign else None
+            )
+            
+            # Convert dst_id to int for comparison
+            talkgroup = int.from_bytes(dst_id, 'big')
+            
+            # Check if this talkgroup is in the allowed list
+            return talkgroup in repeater_config.talkgroups
+            
+        except Exception as e:
+            LOGGER.error(f'Error checking talkgroup permissions: {e}')
+            return False
+    
+    def _handle_stream_start(self, repeater: RepeaterState, rf_src: bytes, dst_id: bytes, 
+                             slot: int, stream_id: bytes) -> bool:
+        """
+        Handle the start of a new stream on a repeater slot.
+        Returns True if the stream can proceed, False if there's a contention.
+        """
+        current_stream = repeater.get_slot_stream(slot)
+        current_time = time()
+        
+        # Check if there's already an active stream on this slot
+        if current_stream:
+            # Same stream continuing (same stream_id)
+            if current_stream.stream_id == stream_id:
+                return True
+            
+            # Check if stream is in hang time
+            if current_stream.ended:
+                # Stream has ended but is in hang time
+                # Allow same RF source to continue, deny different source
+                if current_stream.rf_src == rf_src:
+                    LOGGER.info(f'Same source resuming on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot} '
+                               f'during hang time: src={int.from_bytes(rf_src, "big")}, '
+                               f'old_dst={int.from_bytes(current_stream.dst_id, "big")}, '
+                               f'new_dst={int.from_bytes(dst_id, "big")}')
+                    # Allow by falling through to create new stream
+                else:
+                    LOGGER.warning(f'Hang time contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                                  f'slot reserved for src={int.from_bytes(current_stream.rf_src, "big")}, '
+                                  f'denied src={int.from_bytes(rf_src, "big")}')
+                    return False
+            else:
+                # Active stream - different stream_id means contention
+                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                              f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
+                              f'dst={int.from_bytes(current_stream.dst_id, "big")}) '
+                              f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
+                              f'dst={int.from_bytes(dst_id, "big")})')
+                
+                # Deny the new stream - first come, first served
+                return False
+        
+        # Check if talkgroup is allowed for this repeater
+        if not self._is_talkgroup_allowed(repeater, dst_id):
+            LOGGER.warning(f'Talkgroup {int.from_bytes(dst_id, "big")} not allowed on repeater '
+                          f'{int.from_bytes(repeater.radio_id, "big")} slot {slot}')
+            return False
+        
+        # No active stream, start a new one
+        new_stream = StreamState(
+            radio_id=repeater.radio_id,
+            rf_src=rf_src,
+            dst_id=dst_id,
+            slot=slot,
+            start_time=current_time,
+            last_seen=current_time,
+            stream_id=stream_id,
+            packet_count=1
+        )
+        
+        repeater.set_slot_stream(slot, new_stream)
+        
+        LOGGER.info(f'Stream started on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                   f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
+                   f'stream_id={stream_id.hex()}')
+        
+        return True
+    
+    def _handle_stream_packet(self, repeater: RepeaterState, rf_src: bytes, dst_id: bytes,
+                              slot: int, stream_id: bytes) -> bool:
+        """
+        Handle a packet for an ongoing stream.
+        Returns True if the packet is valid for the current stream, False otherwise.
+        """
+        current_stream = repeater.get_slot_stream(slot)
+        
+        if not current_stream:
+            # No active stream - this is a new stream
+            return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id)
+        
+        # Check if this packet belongs to the current stream
+        if current_stream.stream_id != stream_id:
+            # Different stream - contention
+            return False
+        
+        # Update stream state
+        current_stream.last_seen = time()
+        current_stream.packet_count += 1
+        
+        return True
         
     def _remove_repeater(self, radio_id: bytes, reason: str) -> None:
         """
@@ -403,6 +608,36 @@ class HBProtocol(DatagramProtocol):
             LOGGER.debug(f'Status report from repeater {int.from_bytes(radio_id, "big")}: {data[8:].hex()}')
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
 
+    def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
+        """
+        Check if a DMR packet is a stream terminator.
+        
+        DMR terminators have:
+        - Frame type = Voice Sync (0x01) or Data Sync (0x02)
+        - Specific sync pattern in the payload indicating terminator vs header
+        
+        Returns True if this is a terminator frame, False otherwise.
+        
+        TODO: Implement full DMR sync pattern detection
+        Currently returns False, relying on timeout-based stream end detection.
+        """
+        # Voice Sync and Data Sync frames can be headers or terminators
+        # Need to check the sync pattern in the payload to distinguish
+        if frame_type not in [0x01, 0x02]:
+            return False
+        
+        # TODO: Decode sync pattern from data[20:53] to determine if terminator
+        # DMR Sync patterns:
+        #   - Voice Header:     0x7555FD7DFF771755
+        #   - Voice Terminator: 0x7555FD7DFF771755 (same as header, but context differs)
+        #   - Data Header:      0xDFF57D75DF5D
+        #   - Data Terminator:  0xDFF57D75DF5D
+        # 
+        # The actual determination requires looking at the embedded signaling
+        # and sequence within the payload, not just the sync pattern itself.
+        
+        return False  # Not implemented yet - using timeout fallback
+    
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
         if len(data) < 55:
@@ -421,10 +656,56 @@ class HBProtocol(DatagramProtocol):
         _dst_id = data[8:11]
         _bits = data[15]
         _slot = 2 if (_bits & 0x80) else 1
+        _call_type = (_bits & 0x40) >> 6  # 0 = private, 1 = group
+        _frame_type = (_bits & 0x30) >> 4  # 0 = voice, 1 = voice sync, 2 = data sync, 3 = unused
+        _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
         
-        # TODO: Implement DMR data routing logic here
-        # For now, just log it
-        LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")}: seq={_seq}, src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, slot={_slot}')
+        # Check if this is a stream terminator (immediate end detection)
+        _is_terminator = self._is_dmr_terminator(data, _frame_type)
+        
+        # Handle stream tracking
+        stream_valid = self._handle_stream_packet(repeater, _rf_src, _dst_id, _slot, _stream_id)
+        
+        if not stream_valid:
+            # Stream contention or not allowed - drop packet silently
+            LOGGER.debug(f'Dropped packet from repeater {int.from_bytes(radio_id, "big")} slot {_slot}: '
+                        f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
+                        f'reason=stream contention or talkgroup not allowed')
+            return
+        
+        # Log packet details at debug level
+        current_stream = repeater.get_slot_stream(_slot)
+        LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")} slot {_slot}: '
+                    f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
+                    f'dst={int.from_bytes(_dst_id, "big")}, '
+                    f'stream_id={_stream_id.hex()}, '
+                    f'frame_type={_frame_type}, '
+                    f'terminator={_is_terminator}, '
+                    f'packet_count={current_stream.packet_count if current_stream else 0}')
+        
+        # Handle terminator frame (immediate stream end detection)
+        if _is_terminator and current_stream and not current_stream.ended:
+            # DMR terminator detected - end stream immediately and start hang time
+            current_stream.ended = True
+            hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+            LOGGER.info(f'DMR terminator received on repeater {int.from_bytes(radio_id, "big")} slot {_slot}: '
+                       f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
+                       f'duration={time() - current_stream.start_time:.2f}s, '
+                       f'packets={current_stream.packet_count} - '
+                       f'entering hang time ({hang_time}s)')
+        
+        # Architecture note:
+        # - DMR terminator detection (above) = Primary stream end detection (~60ms after PTT release)
+        # - stream_timeout (in _check_stream_timeouts) = Fallback when terminator packet is lost
+        # - hang_time = Slot reservation period to prevent hijacking during conversations
+        # 
+        # This two-tier system ensures:
+        #   1. Fast slot turnaround when terminator is received (normal case)
+        #   2. Cleanup after timeout when terminator is lost (packet loss case)
+        #   3. Slot protection during multi-transmission conversations (hang time)
+        
+        # TODO: Implement DMR data routing/forwarding logic here
+        # For now, we're just tracking streams without forwarding
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""

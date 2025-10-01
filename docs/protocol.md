@@ -118,9 +118,49 @@ A server will, at a minimum, need to track a repeater in the following states:
 
 1. **DMRD (DMR Data)**
    - Direction: Bidirectional
-   - Format: `DMRD` + `sequence[4 bytes]` + `radio_id[4 bytes]` + `data`
+   - Format: `DMRD` + `sequence[1 byte]` + `rf_src[3 bytes]` + `dst_id[3 bytes]` + `radio_id[4 bytes]` + `_bits[1 byte]` + `stream_id[4 bytes]` + `payload[33 bytes]`
    - Purpose: Transfer DMR voice/data packets
-   - Notes: Only processed when connection state is 'yes'
+   - Notes: Only processed when connection state is 'connected'
+   - Total Length: 53 bytes (4 + 1 + 3 + 3 + 4 + 1 + 4 + 33)
+
+   **DMRD Packet Structure:**
+   
+   | Field       | Offset | Length | Description |
+   |-------------|--------|--------|-------------|
+   | Command     | 0      | 4      | 'DMRD' |
+   | Sequence    | 4      | 1      | Packet sequence number (0-255) |
+   | RF Source   | 5      | 3      | Source radio ID (24-bit) |
+   | Destination | 8      | 3      | Destination talkgroup/ID (24-bit) |
+   | Radio ID    | 11     | 4      | Repeater ID (32-bit) |
+   | _bits       | 15     | 1      | Control bits (see below) |
+   | Stream ID   | 16     | 4      | Unique stream identifier |
+   | Payload     | 20     | 33     | DMR voice/data payload |
+
+   **_bits Field (byte 15):**
+   - Bit 7: Timeslot (0=Slot 1, 1=Slot 2)
+   - Bit 6: Call Type (0=Private, 1=Group)
+   - Bits 4-5: Frame Type
+     - `00` - Voice frame
+     - `01` - Voice Sync (header/terminator)
+     - `10` - Data Sync (header/terminator)
+     - `11` - Unused
+   - Bits 0-3: Reserved
+
+   **DMR Stream Terminator Detection:**
+   
+   DMR transmissions end with an explicit terminator frame:
+   - Frame Type = Voice Sync (0x01) or Data Sync (0x02)
+   - Payload contains specific sync pattern indicating terminator vs header
+   - When detected, stream ends immediately (~60ms after PTT release)
+   - Enables fast slot turnaround for new transmissions
+   
+   **Sync Patterns** (in payload bytes 20-53):
+   - Voice Header: `0x7555FD7DFF771755`
+   - Voice Terminator: Different pattern (distinguishes from header)
+   - Data Header: `0xDFF57D75DF5D`
+   - Data Terminator: Different pattern (distinguishes from header)
+   
+   Note: HBlink4 has infrastructure to detect terminators, with sync pattern decoding as a stub. Falls back to 2.0s timeout when terminator not detected.
 
 ## Connection Flow
 

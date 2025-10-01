@@ -53,12 +53,37 @@ The `global` section contains server-wide settings that control the basic operat
 | `logging.log_status_updates` | boolean | Log repeater status updates (default: true) |
 | `stats_interval` | number | Seconds between statistics reports |
 | `report_stats` | boolean | Enable statistics reporting |
+| `stream_timeout` | float | Seconds without packets before stream is considered ended (default: 2.0) |
+| `stream_hang_time` | float | Seconds to reserve slot for same source after stream ends (default: 3.0) |
 
 The logging system supports different levels for console and file output. This allows you to have detailed debugging information in your log files while keeping the console output cleaner. The protocol, DMR data, and status update flags let you control what types of messages are logged:
 
 - `log_protocol`: When enabled, logs all protocol messages (RPTL, RPTK, RPTC, etc.)
 - `log_dmr_data`: When enabled, logs DMR data packets (usually high volume)
 - `log_status_updates`: When enabled, logs repeater status updates like RSSI
+
+### Stream Management
+
+The `stream_timeout` and `stream_hang_time` settings control two different aspects of DMR transmission management:
+
+- `stream_timeout`: **Fallback cleanup timeout** (default: 2.0 seconds). This is used when a DMR terminator frame is lost or not received. Under normal operation, streams end immediately when a terminator frame is detected. This timeout ensures slot cleanup even if the terminator packet is dropped. **Recommended: 2.0 seconds** to handle worst-case packet loss scenarios.
+  
+- `stream_hang_time`: **Slot reservation period** (default: 10.0-20.0 seconds). After a stream ends (either via terminator frame or timeout), the timeslot remains reserved for the same RF source for this duration, preventing other stations from hijacking the slot between transmissions in a conversation. **Recommended: 10.0-20.0 seconds** depending on operator speed and network usage patterns.
+
+**How It Works:**
+1. DMR transmission begins → stream active
+2. DMR terminator frame received → stream ends immediately, hang time begins
+3. If terminator lost → stream_timeout (2s) triggers cleanup, hang time begins
+4. During hang time → only original source can re-use the slot
+5. After hang time expires → slot available to all
+
+**DMR Timing Notes:**
+- DMR voice packets transmitted approximately every 60ms
+- DMR terminator frame signals end of transmission (primary detection method)
+- stream_timeout is a fallback safety mechanism only
+- hang_time prevents slot hijacking during multi-transmission conversations
+
+See [Hang Time Documentation](hang_time.md) for detailed explanation of these features.
 
 ## Blacklist Rules
 

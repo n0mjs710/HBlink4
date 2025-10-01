@@ -13,7 +13,28 @@
             "retention_days": 30
         },
         "stats_interval": 60,
-        "report_stats": true
+        "report_stats": true,
+        "stream_timeout": 2.0,
+        "stream_hang_time": 10.0
+    },
+    "global_alternate_example": {
+        "comment": "Alternative configuration showing longer hang time for slower operators",
+        "path": "./",
+        "ping_time": 5,
+        "max_missed": 3,
+        "use_ipv6": false,
+        "bind_ip": "0.0.0.0",
+        "bind_port": 62031,
+        "logging": {
+            "file": "logs/hblink.log",
+            "console_level": "INFO",
+            "file_level": "DEBUG",
+            "retention_days": 30
+        },
+        "stats_interval": 60,
+        "report_stats": true,
+        "stream_timeout": 2.0,
+        "stream_hang_time": 20.0
     },
     "blacklist": {
         "patterns": [

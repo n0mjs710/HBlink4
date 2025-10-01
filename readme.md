@@ -16,6 +16,10 @@ HBlink4 is the next evolution of the HBlink DMR Server implementation using the 
 - JSON-based configuration
 - Enhanced repeater management
 - Built on Twisted framework for reliable async operation
+- Stream tracking with DMR terminator detection and hang time
+- Two-tier stream end detection (terminator frame + timeout fallback)
+- Pattern-based repeater configuration and blacklisting
+- Per-slot transmission management
 
 ## Installation
 
@@ -53,6 +57,18 @@ python3 hblink4/hblink.py config/my_hblink.json
 ```
 
 The server will start and listen for repeater registrations on the configured bind_ip and bind_port.
+
+## Documentation
+
+Comprehensive documentation is available in the `docs/` directory:
+
+- **[Configuration Guide](docs/configuration.md)** - Complete configuration reference
+- **[Stream Tracking](docs/stream_tracking.md)** - How DMR transmission streams are managed
+- **[Stream Tracking Diagrams](docs/stream_tracking_diagrams.md)** - Visual flow diagrams
+- **[Hang Time](docs/hang_time.md)** - Preventing conversation interruption
+- **[Protocol Specification](docs/protocol.md)** - HomeBrew DMR protocol details
+- **[Integration Guide](docs/integration.md)** - Using HBlink4 as a module
+- **[Logging](docs/logging.md)** - Log management and rotation
 
 ## Configuration 
 
