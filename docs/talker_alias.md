@@ -7,34 +7,34 @@ A human-readable name/callsign transmitted in DMR that displays on receiving rad
 ## Transmission Structure
 
 ```
-┌─────────────────────────────────────────────┐
-│ Talker Alias Transmission (4 LC Frames)    │
-├─────────────────────────────────────────────┤
-│                                             │
-│  Header (FLCO=4)                            │
-│  ┌─────────────────────────────────────┐   │
-│  │ Format: 2 bits (0-3)                │   │
-│  │ Length: 6 bits (0-63 bytes)         │   │
-│  │ Data: 7 bytes                       │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│  Block 1 (FLCO=5)                           │
-│  ┌─────────────────────────────────────┐   │
-│  │ Data: 7 bytes                       │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│  Block 2 (FLCO=6)                           │
-│  ┌─────────────────────────────────────┐   │
-│  │ Data: 7 bytes                       │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│  Block 3 (FLCO=7)                           │
-│  ┌─────────────────────────────────────┐   │
-│  │ Data: 7 bytes                       │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│  Total: 28 bytes maximum                    │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+| Talker Alias Transmission (4 LC Frames)    |
++---------------------------------------------+
+|                                             |
+|  Header (FLCO=4)                            |
+|  +-------------------------------------+   |
+|  | Format: 2 bits (0-3)                |   |
+|  | Length: 6 bits (0-63 bytes)         |   |
+|  | Data: 7 bytes                       |   |
+|  +-------------------------------------+   |
+|                                             |
+|  Block 1 (FLCO=5)                           |
+|  +-------------------------------------+   |
+|  | Data: 7 bytes                       |   |
+|  +-------------------------------------+   |
+|                                             |
+|  Block 2 (FLCO=6)                           |
+|  +-------------------------------------+   |
+|  | Data: 7 bytes                       |   |
+|  +-------------------------------------+   |
+|                                             |
+|  Block 3 (FLCO=7)                           |
+|  +-------------------------------------+   |
+|  | Data: 7 bytes                       |   |
+|  +-------------------------------------+   |
+|                                             |
+|  Total: 28 bytes maximum                    |
++---------------------------------------------+
 ```
 
 ## Encoding Formats
@@ -51,13 +51,13 @@ A human-readable name/callsign transmitted in DMR that displays on receiving rad
 Each LC frame packs 7 bytes of alias data into the LC fields:
 
 ```
-┌──────────────────────────────────────────┐
-│ LC Structure (per frame)                 │
-├──────────────────────────────────────────┤
-│ dst_id (3 bytes)  -> Bytes 0-2 of alias │
-│ src_id (3 bytes)  -> Bytes 3-5 of alias │
-│ fid (1 byte)      -> Byte 6 of alias    │
-└──────────────────────────────────────────┘
++------------------------------------------+
+| LC Structure (per frame)                 |
++------------------------------------------+
+| dst_id (3 bytes)  -> Bytes 0-2 of alias |
+| src_id (3 bytes)  -> Bytes 3-5 of alias |
+| fid (1 byte)      -> Byte 6 of alias    |
++------------------------------------------+
 ```
 
 ## Example: "N0MJS Cort"
@@ -157,18 +157,18 @@ Total: 22 bytes
 
 ## Benefits
 
-✅ **User-friendly**: Display names instead of numbers
-✅ **Multi-language**: Support for international characters
-✅ **Efficient**: Only 28 bytes maximum
-✅ **Automatic**: No manual configuration needed
-✅ **Real-time**: Updates during transmission
+[OK] **User-friendly**: Display names instead of numbers
+[OK] **Multi-language**: Support for international characters
+[OK] **Efficient**: Only 28 bytes maximum
+[OK] **Automatic**: No manual configuration needed
+[OK] **Real-time**: Updates during transmission
 
 ## Limitations
 
-❌ **Length**: Maximum 28 bytes (varies by encoding)
-❌ **Overhead**: Requires multiple LC frames
-❌ **Not universal**: Not all radios support it
-❌ **No verification**: No authentication of alias
+[X] **Length**: Maximum 28 bytes (varies by encoding)
+[X] **Overhead**: Requires multiple LC frames
+[X] **Not universal**: Not all radios support it
+[X] **No verification**: No authentication of alias
 
 ## Testing
 
