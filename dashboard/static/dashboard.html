@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBlink4 Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; 
+            background: #0f172a; 
+            color: #e2e8f0; 
+            padding: 20px; 
+        }
+        
+        .container { max-width: 1600px; margin: 0 auto; }
+        
+        header { 
+            margin-bottom: 30px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+        }
+        
+        h1 { color: #38bdf8; font-size: 32px; }
+        
+        .connection-status {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .connection-status.connected { background: #10b981; color: white; }
+        .connection-status.disconnected { background: #ef4444; color: white; }
+        
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: #1e293b;
+            padding: 15px 20px;
+            border-radius: 8px;
+            border-left: 4px solid #38bdf8;
+        }
+        
+        .stat-label { color: #94a3b8; font-size: 12px; margin-bottom: 5px; }
+        .stat-value { color: #e2e8f0; font-size: 24px; font-weight: 600; }
+        
+        .grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); 
+            gap: 20px; 
+            margin-bottom: 20px;
+        }
+        
+        .card { 
+            background: #1e293b; 
+            border-radius: 8px; 
+            padding: 20px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3); 
+        }
+        
+        .card h2 { 
+            color: #94a3b8; 
+            font-size: 14px; 
+            margin-bottom: 15px; 
+            text-transform: uppercase; 
+            letter-spacing: 0.5px;
+        }
+        
+        table { width: 100%; border-collapse: collapse; }
+        
+        th, td { 
+            text-align: left; 
+            padding: 12px 10px; 
+            border-bottom: 1px solid #334155; 
+        }
+        
+        th { 
+            color: #64748b; 
+            font-weight: 500; 
+            font-size: 12px; 
+            text-transform: uppercase;
+        }
+        
+        td { font-size: 14px; }
+        
+        .status { 
+            display: inline-block; 
+            padding: 4px 12px; 
+            border-radius: 12px; 
+            font-size: 11px; 
+            font-weight: 600; 
+            text-transform: uppercase;
+        }
+        
+        .status.active { background: #10b981; color: white; }
+        .status.hang { background: #f59e0b; color: white; }
+        .status.connected { background: #3b82f6; color: white; }
+        .status.ended_terminator { background: #6366f1; color: white; }
+        .status.ended_timeout { background: #ef4444; color: white; }
+        
+        .event { 
+            padding: 12px; 
+            border-left: 3px solid #3b82f6; 
+            margin-bottom: 8px; 
+            background: #334155; 
+            border-radius: 4px; 
+            font-size: 13px; 
+        }
+        
+        .event .time { 
+            color: #64748b; 
+            font-size: 11px; 
+            margin-bottom: 4px;
+        }
+        
+        .event .type {
+            display: inline-block;
+            background: #475569;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-right: 8px;
+        }
+        
+        .empty-state {
+            text-align: center;
+            color: #64748b;
+            padding: 40px 20px;
+            font-style: italic;
+        }
+        
+        .tg-list { 
+            color: #64748b; 
+            font-size: 12px; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📡 HBlink4 Dashboard</h1>
+            <div class="connection-status" id="connectionStatus">Connecting...</div>
+        </header>
+        
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-label">Connected Repeaters</div>
+                <div class="stat-value" id="statRepeaters">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Streams</div>
+                <div class="stat-value" id="statStreams">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Streams Today</div>
+                <div class="stat-value" id="statTotalStreams">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Packets Today</div>
+                <div class="stat-value" id="statTotalPackets">0</div>
+            </div>
+        </div>
+        
+        <div class="grid">
+            <div class="card">
+                <h2>Connected Repeaters</h2>
+                <table id="repeatersTable">
+                    <thead>
+                        <tr>
+                            <th>Radio ID</th>
+                            <th>Callsign</th>
+                            <th>Status</th>
+                            <th>Talkgroups</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <div class="card">
+                <h2>Active Streams</h2>
+                <div id="streamsContainer">
+                    <table id="streamsTable">
+                        <thead>
+                            <tr>
+                                <th>Repeater</th>
+                                <th>Slot</th>
+                                <th>Source → Dest</th>
+                                <th>Duration</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Recent Events</h2>
+            <div id="eventsLog"></div>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let reconnectTimeout = null;
+        
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateConnectionStatus(true);
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                updateConnectionStatus(false);
+                // Reconnect after 3 seconds
+                reconnectTimeout = setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'initial_state') {
+                    updateRepeaters(data.data.repeaters);
+                    updateStreams(data.data.streams);
+                    updateEvents(data.data.events);
+                    updateStats(data.data.stats, data.data.repeaters, data.data.streams);
+                } else {
+                    handleEvent(data);
+                }
+            };
+        }
+        
+        function updateConnectionStatus(connected) {
+            const el = document.getElementById('connectionStatus');
+            el.textContent = connected ? 'Connected' : 'Disconnected';
+            el.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+        }
+        
+        function updateStats(stats, repeaters, streams) {
+            document.getElementById('statRepeaters').textContent = 
+                repeaters.filter(r => r.status === 'connected').length;
+            document.getElementById('statStreams').textContent = 
+                streams.filter(s => s.status === 'active').length;
+            document.getElementById('statTotalStreams').textContent = 
+                stats.total_streams_today.toLocaleString();
+            document.getElementById('statTotalPackets').textContent = 
+                stats.total_packets_today.toLocaleString();
+        }
+        
+        function updateRepeaters(repeaters) {
+            const tbody = document.querySelector('#repeatersTable tbody');
+            
+            if (repeaters.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No repeaters connected</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = repeaters
+                .filter(r => r.status === 'connected')
+                .map(r => `
+                    <tr>
+                        <td><strong>${r.radio_id}</strong></td>
+                        <td>${r.callsign || 'UNKNOWN'}</td>
+                        <td><span class="status connected">Connected</span></td>
+                        <td class="tg-list">TG ${r.talkgroups.join(', ')}</td>
+                    </tr>
+                `).join('');
+        }
+        
+        function updateStreams(streams) {
+            const tbody = document.querySelector('#streamsTable tbody');
+            
+            if (streams.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No active streams</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = streams.map(s => {
+                const statusClass = s.status.replace('_', '');
+                const talkerAlias = s.talker_alias ? ` (${s.talker_alias})` : '';
+                return `
+                    <tr>
+                        <td>${s.repeater_id}</td>
+                        <td>Slot ${s.slot}</td>
+                        <td>${s.src_id}${talkerAlias} → TG ${s.dst_id}</td>
+                        <td>${s.duration.toFixed(1)}s (${s.packets} pkts)</td>
+                        <td><span class="status ${statusClass}">${s.status.replace('_', ' ')}</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        function updateEvents(events) {
+            const log = document.getElementById('eventsLog');
+            
+            if (events.length === 0) {
+                log.innerHTML = '<div class="empty-state">No events yet</div>';
+                return;
+            }
+            
+            log.innerHTML = events.slice(-20).reverse().map(e => {
+                const time = new Date(e.timestamp * 1000).toLocaleTimeString();
+                const dataStr = formatEventData(e.type, e.data);
+                return `
+                    <div class="event">
+                        <div class="time">${time}</div>
+                        <span class="type">${e.type}</span>
+                        <span>${dataStr}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function formatEventData(type, data) {
+            switch(type) {
+                case 'repeater_connected':
+                    return `Repeater ${data.radio_id} (${data.callsign || 'UNKNOWN'}) connected from ${data.address}`;
+                case 'stream_start':
+                    const alias = data.talker_alias ? ` "${data.talker_alias}"` : '';
+                    return `Stream started: ${data.src_id}${alias} → TG ${data.dst_id} on repeater ${data.repeater_id} slot ${data.slot}`;
+                case 'stream_update':
+                    return `Stream update: ${data.packets} packets, ${data.duration}s`;
+                case 'stream_end':
+                    return `Stream ended (${data.reason}): ${data.packets} packets, ${data.duration}s`;
+                case 'hang_start':
+                    return `Hang time started: ${data.duration}s for ${data.rf_src}`;
+                default:
+                    return JSON.stringify(data);
+            }
+        }
+        
+        function handleEvent(event) {
+            // Re-fetch state (could be optimized with incremental updates)
+            fetch('/api/repeaters').then(r => r.json()).then(data => updateRepeaters(data.repeaters));
+            fetch('/api/streams').then(r => r.json()).then(data => updateStreams(data.streams));
+            fetch('/api/events?limit=20').then(r => r.json()).then(data => updateEvents(data.events));
+            fetch('/api/stats').then(r => r.json()).then(data => {
+                document.getElementById('statRepeaters').textContent = data.repeaters_connected;
+                document.getElementById('statStreams').textContent = data.active_streams;
+                document.getElementById('statTotalStreams').textContent = data.stats.total_streams_today.toLocaleString();
+                document.getElementById('statTotalPackets').textContent = data.stats.total_packets_today.toLocaleString();
+            });
+        }
+        
+        // Keep connection alive
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('ping');
+            }
+        }, 30000);
+        
+        // Start connection
+        connectWebSocket();
+    </script>
+</body>
+</html>
