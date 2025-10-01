@@ -16,8 +16,10 @@ HBlink4 is the next evolution of the HBlink DMR Server implementation using the 
 - JSON-based configuration
 - Enhanced repeater management
 - Built on Twisted framework for reliable async operation
-- Stream tracking with DMR terminator detection and hang time
-- Two-tier stream end detection (terminator frame + timeout fallback)
+- **Stream tracking with DMR terminator detection and hang time**
+- **Two-tier stream end detection (terminator frame + timeout fallback)**
+- **DMR Link Control (LC) metadata extraction from voice frames**
+- **Talker alias extraction with multi-format support (7-bit, ISO-8859-1, UTF-8, UTF-16)**
 - Pattern-based repeater configuration and blacklisting
 - Per-slot transmission management
 
@@ -66,6 +68,7 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[Stream Tracking](docs/stream_tracking.md)** - How DMR transmission streams are managed
 - **[Stream Tracking Diagrams](docs/stream_tracking_diagrams.md)** - Visual flow diagrams
 - **[Hang Time](docs/hang_time.md)** - Preventing conversation interruption
+- **[LC Extraction](docs/lc_extraction.md)** - DMR Link Control metadata extraction
 - **[Protocol Specification](docs/protocol.md)** - HomeBrew DMR protocol details
 - **[Integration Guide](docs/integration.md)** - Using HBlink4 as a module
 - **[Logging](docs/logging.md)** - Log management and rotation

@@ -14,12 +14,12 @@ logging.basicConfig(level=logging.INFO,
 
 class TestRepeaterMatcher(unittest.TestCase):
     def setUp(self):
-        """Load test configuration from the actual config file"""
+        """Load test configuration from the sample config file"""
         import json
         import os
 
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 
-                                 'config', 'hblink.json')
+                                 'config', 'config_sample.json')
         
         with open(config_path, 'r') as f:
             full_config = json.load(f)
@@ -169,8 +169,8 @@ class TestRepeaterMatcher(unittest.TestCase):
         
         self.assertEqual(config.timeout, 30)
         self.assertEqual(config.description, "Default Repeater Configuration")
-        self.assertEqual(config.passphrase, "default-network-key")
-        self.assertEqual(config.talkgroups, [3100])
+        self.assertEqual(config.passphrase, "passw0rd")
+        self.assertEqual(config.talkgroups, [8])
 
     def test_match_priority(self):
         """Test that match priority is enforced correctly"""
@@ -202,7 +202,7 @@ class TestRepeaterMatcher(unittest.TestCase):
     def test_blacklist_specific_id(self):
         """Test that blacklisted IDs are rejected"""
         logging.info("\n=== Testing Blacklist Specific ID ===")
-        radio_id = 310666
+        radio_id = 1
         callsign = "TEST"
         logging.info(f"Testing repeater - ID: {radio_id}, Callsign: {callsign}")
         
