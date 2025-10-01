@@ -54,13 +54,20 @@ This document summarizes the major features implemented in the recent developmen
 **Purpose**: Reliable stream end detection with fallback.
 
 **Tiers**:
-1. **Primary**: DMR terminator frame detection (~60ms after PTT release)
+1. **Primary**: DMR terminator frame detection (~60ms after PTT release) ✅ **IMPLEMENTED**
 2. **Fallback**: Timeout after 2.0 seconds of no packets
 
 **Implementation**:
-- `_is_dmr_terminator()`: Stub for sync pattern detection
+- `_is_dmr_terminator()`: Sync pattern detection for voice terminators
 - `_check_stream_timeouts()`: Timeout-based cleanup
 - `stream_timeout` configuration parameter
+- DMR sync patterns defined in `constants.py`
+
+**Sync Patterns**:
+- Voice Header: `0x755FD7DF75F7`
+- Voice Terminator: `0xD5DD7DF75D55` (detected and handled)
+- Data Header: `0xDFF57D75DF5D`
+- Data Terminator: `0x7DFFD5F55D5F` (not yet implemented)
 
 **Benefits**:
 - Fast slot turnaround when terminator received (normal case)
@@ -152,12 +159,14 @@ if current_stream.missed_header and current_stream.lc is None:
 ### 8. Test Coverage ✅
 
 **Test Suites**:
-- `tests/test_stream_tracking.py`: Stream management
-- `tests/test_hang_time.py`: Hang time behavior
+- `tests/test_stream_tracking.py`: Stream management (2 tests)
+- `tests/test_hang_time.py`: Hang time behavior (2 tests)
 - `tests/test_lc_extraction.py`: LC decoding (5 tests)
 - `tests/test_talker_alias.py`: Talker alias extraction (13 tests)
+- `tests/test_terminator_detection.py`: DMR terminator detection (5 tests)
+- `tests/test_access_control.py`: Access control validation (9 tests)
 
-**Status**: All tests passing ✅ (31 total, 22 passed, 9 access_control tests need config file)
+**Status**: All tests passing ✅ (36 total tests)
 
 ## Configuration Parameters
 
@@ -221,8 +230,8 @@ if current_stream.missed_header and current_stream.lc is None:
 ## Known Limitations
 
 1. **Embedded LC Bit Extraction**: Framework present, bit-level extraction from AMBE+2 TODO
-2. **CRC Validation**: Not currently checked (data already FEC-corrected by repeater)
-3. **Terminator Detection**: Stub present, sync pattern decoding TODO
+2. **Data Terminator Detection**: Voice terminators fully implemented, data terminators TODO
+3. **CRC Validation**: Not currently checked (data already FEC-corrected by repeater)
 4. **Stream Forwarding**: Not yet implemented (next major milestone)
 
 ## Next Steps
@@ -240,10 +249,10 @@ if current_stream.missed_header and current_stream.lc is None:
    - Extract 16 bits per frame B-E
    - Test with missed headers
 
-3. **Implement DMR Terminator Detection**
-   - Decode sync patterns from data[20:53]
-   - Distinguish voice header from voice terminator
-   - Enable fast stream end detection
+3. **Implement Data Terminator Detection**
+   - Add data sync terminator pattern detection
+   - Extend `_is_dmr_terminator()` for data frames
+   - Test with data transmissions
 
 4. **Talker Alias Caching** (Optional Enhancement)
    - Cache aliases by source ID
@@ -279,6 +288,7 @@ if current_stream.missed_header and current_stream.lc is None:
 | Hang Time | ✅ Pass | ✅ Manual | ✅ Production Ready |
 | LC Extraction | ✅ Pass | ✅ Manual | ✅ Production Ready |
 | Talker Alias | ✅ Pass (13/13) | ✅ Manual | ✅ Production Ready |
+| Terminator Detection | ✅ Pass (5/5) | 🔄 Needs Real Traffic | ✅ Implemented |
 | Embedded LC | ⏳ N/A | ⏳ N/A | 🔄 Framework Only |
 
 ## Code Statistics

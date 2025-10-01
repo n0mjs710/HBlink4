@@ -154,13 +154,13 @@ A server will, at a minimum, need to track a repeater in the following states:
    - When detected, stream ends immediately (~60ms after PTT release)
    - Enables fast slot turnaround for new transmissions
    
-   **Sync Patterns** (in payload bytes 20-53):
-   - Voice Header: `0x7555FD7DFF771755`
-   - Voice Terminator: Different pattern (distinguishes from header)
+   **Sync Patterns** (in payload bytes 20-25):
+   - Voice Header: `0x755FD7DF75F7`
+   - Voice Terminator: `0xD5DD7DF75D55` ✅ **IMPLEMENTED**
    - Data Header: `0xDFF57D75DF5D`
-   - Data Terminator: Different pattern (distinguishes from header)
+   - Data Terminator: `0x7DFFD5F55D5F` (not yet implemented)
    
-   Note: HBlink4 has infrastructure to detect terminators, with sync pattern decoding as a stub. Falls back to 2.0s timeout when terminator not detected.
+   HBlink4 detects voice terminators and ends streams immediately. Falls back to 2.0s timeout when terminator not received (packet loss).
 
 ## Connection Flow
 

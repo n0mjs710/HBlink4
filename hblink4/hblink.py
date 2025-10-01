@@ -907,27 +907,37 @@ class HBProtocol(DatagramProtocol):
         - Frame type = Voice Sync (0x01) or Data Sync (0x02)
         - Specific sync pattern in the payload indicating terminator vs header
         
-        Returns True if this is a terminator frame, False otherwise.
+        The terminator uses a different embedded signaling pattern than the header.
+        Voice terminator with LC has sync pattern: 0xD5DD7DF75D55
+        Voice header with LC has sync pattern: 0x755FD7DF75F7
         
-        TODO: Implement full DMR sync pattern detection
-        Currently returns False, relying on timeout-based stream end detection.
+        Returns True if this is a terminator frame, False otherwise.
         """
         # Voice Sync and Data Sync frames can be headers or terminators
         # Need to check the sync pattern in the payload to distinguish
         if frame_type not in [0x01, 0x02]:
             return False
         
-        # TODO: Decode sync pattern from data[20:53] to determine if terminator
-        # DMR Sync patterns:
-        #   - Voice Header:     0x7555FD7DFF771755
-        #   - Voice Terminator: 0x7555FD7DFF771755 (same as header, but context differs)
-        #   - Data Header:      0xDFF57D75DF5D
-        #   - Data Terminator:  0xDFF57D75DF5D
-        # 
-        # The actual determination requires looking at the embedded signaling
-        # and sequence within the payload, not just the sync pattern itself.
+        if len(data) < 26:  # Need at least enough bytes to check sync pattern
+            return False
         
-        return False  # Not implemented yet - using timeout fallback
+        # Extract the sync pattern from the payload (bytes 20-25, 6 bytes total)
+        sync_pattern = data[20:26]
+        
+        # Check for terminator sync patterns
+        # Voice Terminator with LC (VOICE_TERM_LC) - most common
+        VOICE_TERM_SYNC = bytes.fromhex('D5DD7DF75D55')
+        
+        # Voice Header with LC for comparison (should NOT match)
+        # VOICE_HEADER_SYNC = bytes.fromhex('755FD7DF75F7')
+        
+        # Data terminator patterns (less common in voice systems)
+        # DATA_TERM_SYNC = bytes.fromhex('7DFFD5F55D5F')
+        
+        if sync_pattern == VOICE_TERM_SYNC:
+            return True
+        
+        return False
     
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
