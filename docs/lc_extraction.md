@@ -334,7 +334,12 @@ class TalkerAliasCache:
 
 When forwarding/bridging streams with modified LC (future feature):
 
+**Note**: Will use `dmr-utils3` library from PyPI for FEC calculations.
+
 ```python
+# Using dmr-utils3 for FEC encoding
+from dmrlink import fec
+
 def encode_lc(lc: DMRLC) -> bytes:
     """Encode LC structure with FEC and CRC for forwarding"""
     # Pack LC fields into bytes
@@ -344,8 +349,8 @@ def encode_lc(lc: DMRLC) -> bytes:
     crc = calculate_crc_ccitt(lc_bytes)
     lc_with_crc = lc_bytes + crc.to_bytes(2, 'big')
     
-    # Apply FEC encoding (Hamming, Golay, etc. as per DMR spec)
-    fec_encoded = apply_dmr_fec(lc_with_crc)
+    # Apply FEC encoding using dmr-utils3
+    fec_encoded = fec.encode_lc(lc_with_crc)
     
     return fec_encoded
 

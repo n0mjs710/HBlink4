@@ -229,17 +229,23 @@ if current_stream.missed_header and current_stream.lc is None:
 
 ### Immediate Priorities
 
-1. **Implement AMBE+2 Embedded LC Extraction**
+1. **Add dmr-utils3 Dependency**
+   - Add `dmr-utils3` from PyPI to requirements.txt
+   - Provides FEC (Forward Error Correction) calculations
+   - Needed for reassembling/modifying DMR frames from scratch
+   - Will be used for stream forwarding with LC modification
+
+2. **Implement AMBE+2 Embedded LC Extraction**
    - Research AMBE+2 bit positions
    - Extract 16 bits per frame B-E
    - Test with missed headers
 
-2. **Implement DMR Terminator Detection**
+3. **Implement DMR Terminator Detection**
    - Decode sync patterns from data[20:53]
    - Distinguish voice header from voice terminator
    - Enable fast stream end detection
 
-3. **Talker Alias Caching** (Optional Enhancement)
+4. **Talker Alias Caching** (Optional Enhancement)
    - Cache aliases by source ID
    - Reduce redundant processing
    - TTL-based expiration
