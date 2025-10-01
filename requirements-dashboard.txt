@@ -1,0 +1,11 @@
+# HBlink4 Dashboard Requirements
+# Install with: pip install -r requirements-dashboard.txt
+
+# Web framework
+fastapi>=0.104.0
+
+# ASGI server with WebSocket support
+uvicorn[standard]>=0.24.0
+
+# WebSocket support (included in uvicorn[standard])
+websockets>=12.0

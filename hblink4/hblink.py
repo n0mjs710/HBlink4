@@ -37,6 +37,7 @@ try:
         DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
     )
     from .access_control import RepeaterMatcher
+    from .events import EventEmitter
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
@@ -44,6 +45,7 @@ except ImportError:
         DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
+    from events import EventEmitter
 
 # Type definitions
 PeerAddress = Tuple[str, int]
@@ -473,6 +475,7 @@ class HBProtocol(DatagramProtocol):
         self._timeout_task = None
         self._stream_timeout_task = None
         self._port = None  # Store the port instance instead of transport
+        self._events = EventEmitter()  # Dashboard event emitter
         
     def cleanup(self) -> None:
         """Send disconnect messages to all repeaters and cleanup resources."""
@@ -553,12 +556,30 @@ class HBProtocol(DatagramProtocol):
                     if not stream.ended:
                         # Stream just ended - mark it and start hang time
                         stream.ended = True
+                        duration = current_time - stream.start_time
                         LOGGER.info(f'Stream ended on repeater {int.from_bytes(radio_id, "big")} slot 1: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
                                    f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                                   f'duration={current_time - stream.start_time:.2f}s, '
+                                   f'duration={duration:.2f}s, '
                                    f'packets={stream.packet_count} - '
                                    f'entering hang time ({hang_time}s)')
+                        # Emit stream_end event
+                        self._events.emit('stream_end', {
+                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'slot': 1,
+                            'src_id': int.from_bytes(stream.rf_src, 'big'),
+                            'dst_id': int.from_bytes(stream.dst_id, 'big'),
+                            'duration': round(duration, 2),
+                            'packets': stream.packet_count,
+                            'reason': 'timeout'
+                        })
+                        # Emit hang_start event
+                        self._events.emit('hang_start', {
+                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'slot': 1,
+                            'rf_src': int.from_bytes(stream.rf_src, 'big'),
+                            'duration': hang_time
+                        })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
                         LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 1')
@@ -571,12 +592,30 @@ class HBProtocol(DatagramProtocol):
                     if not stream.ended:
                         # Stream just ended - mark it and start hang time
                         stream.ended = True
+                        duration = current_time - stream.start_time
                         LOGGER.info(f'Stream ended on repeater {int.from_bytes(radio_id, "big")} slot 2: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
                                    f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                                   f'duration={current_time - stream.start_time:.2f}s, '
+                                   f'duration={duration:.2f}s, '
                                    f'packets={stream.packet_count} - '
                                    f'entering hang time ({hang_time}s)')
+                        # Emit stream_end event
+                        self._events.emit('stream_end', {
+                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'slot': 2,
+                            'src_id': int.from_bytes(stream.rf_src, 'big'),
+                            'dst_id': int.from_bytes(stream.dst_id, 'big'),
+                            'duration': round(duration, 2),
+                            'packets': stream.packet_count,
+                            'reason': 'timeout'
+                        })
+                        # Emit hang_start event
+                        self._events.emit('hang_start', {
+                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'slot': 2,
+                            'rf_src': int.from_bytes(stream.rf_src, 'big'),
+                            'duration': hang_time
+                        })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
                         LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 2')
@@ -751,6 +790,16 @@ class HBProtocol(DatagramProtocol):
                    f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
                    f'stream_id={stream_id.hex()}')
         
+        # Emit stream_start event
+        self._events.emit('stream_start', {
+            'repeater_id': int.from_bytes(repeater.radio_id, 'big'),
+            'slot': slot,
+            'src_id': int.from_bytes(rf_src, 'big'),
+            'dst_id': int.from_bytes(dst_id, 'big'),
+            'stream_id': stream_id.hex(),
+            'talker_alias': new_stream.talker_alias
+        })
+        
         return True
     
     def _handle_stream_packet(self, repeater: RepeaterState, rf_src: bytes, dst_id: bytes,
@@ -897,6 +946,24 @@ class HBProtocol(DatagramProtocol):
             self._send_packet(b''.join([RPTACK, radio_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
             LOGGER.debug(f'Repeater state after config: id={int.from_bytes(radio_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            
+            # Emit repeater_connected event
+            try:
+                repeater_config = self._matcher.get_repeater_config(
+                    int.from_bytes(radio_id, 'big'),
+                    repeater.callsign.decode().strip() if repeater.callsign else None
+                )
+                talkgroups = repeater_config.talkgroups if repeater_config else []
+            except:
+                talkgroups = []
+            
+            self._events.emit('repeater_connected', {
+                'radio_id': int.from_bytes(radio_id, 'big'),
+                'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
+                'address': f'{repeater.ip}:{repeater.port}',
+                'color_code': int.from_bytes(repeater.colorcode, 'big') if repeater.colorcode else 0,
+                'talkgroups': talkgroups
+            })
             
         except Exception as e:
             LOGGER.error(f'Error parsing config: {str(e)}')
@@ -1111,11 +1178,41 @@ class HBProtocol(DatagramProtocol):
             # DMR terminator detected - end stream immediately and start hang time
             current_stream.ended = True
             hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+            duration = time() - current_stream.start_time
             LOGGER.info(f'DMR terminator received on repeater {int.from_bytes(radio_id, "big")} slot {_slot}: '
                        f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
-                       f'duration={time() - current_stream.start_time:.2f}s, '
+                       f'duration={duration:.2f}s, '
                        f'packets={current_stream.packet_count} - '
                        f'entering hang time ({hang_time}s)')
+            # Emit stream_end event
+            self._events.emit('stream_end', {
+                'repeater_id': int.from_bytes(radio_id, 'big'),
+                'slot': _slot,
+                'src_id': int.from_bytes(_rf_src, 'big'),
+                'dst_id': int.from_bytes(_dst_id, 'big'),
+                'duration': round(duration, 2),
+                'packets': current_stream.packet_count,
+                'reason': 'terminator'
+            })
+            # Emit hang_start event
+            self._events.emit('hang_start', {
+                'repeater_id': int.from_bytes(radio_id, 'big'),
+                'slot': _slot,
+                'rf_src': int.from_bytes(_rf_src, 'big'),
+                'duration': hang_time
+            })
+        
+        # Emit stream_update every 60 packets (10 superframes = 1 second)
+        if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
+            self._events.emit('stream_update', {
+                'repeater_id': int.from_bytes(radio_id, 'big'),
+                'slot': _slot,
+                'src_id': int.from_bytes(_rf_src, 'big'),
+                'dst_id': int.from_bytes(_dst_id, 'big'),
+                'duration': round(time() - current_stream.start_time, 2),
+                'packets': current_stream.packet_count,
+                'talker_alias': current_stream.talker_alias
+            })
         
         # Architecture note:
         # - DMR terminator detection (above) = Primary stream end detection (~60ms after PTT release)
