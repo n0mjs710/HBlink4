@@ -119,19 +119,15 @@ class EventReceiver:
         elif event_type == 'stream_end':
             key = f"{data['repeater_id']}.{data['slot']}"
             if key in state.streams:
-                state.streams[key]['status'] = f"ended_{data['reason']}"
+                # Stream ended and entering hang time (combined event)
+                state.streams[key]['status'] = 'hang_time'
                 state.streams[key]['packets'] = data['packets']
                 state.streams[key]['duration'] = data['duration']
                 state.streams[key]['end_reason'] = data['reason']
-                # Remove after 5 seconds (keep for display)
-                asyncio.create_task(self.remove_stream_delayed(key, 5))
-        
-        elif event_type == 'hang_start':
-            key = f"{data['repeater_id']}.{data['slot']}"
-            if key in state.streams:
-                state.streams[key]['status'] = 'hang_time'
-                state.streams[key]['hang_duration'] = data['duration']
-                state.streams[key]['hang_rf_src'] = data['rf_src']
+                state.streams[key]['hang_time'] = data.get('hang_time', 0)
+                # Remove after hang time expires (keep for display)
+                hang_delay = data.get('hang_time', 5)
+                asyncio.create_task(self.remove_stream_delayed(key, hang_delay))
         
         # Add to event log
         state.events.append(event)

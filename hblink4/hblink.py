@@ -563,7 +563,7 @@ class HBProtocol(DatagramProtocol):
                                    f'duration={duration:.2f}s, '
                                    f'packets={stream.packet_count} - '
                                    f'entering hang time ({hang_time}s)')
-                        # Emit stream_end event
+                        # Emit stream_end event (includes hang_time since they happen together)
                         self._events.emit('stream_end', {
                             'repeater_id': int.from_bytes(radio_id, 'big'),
                             'slot': 1,
@@ -571,14 +571,8 @@ class HBProtocol(DatagramProtocol):
                             'dst_id': int.from_bytes(stream.dst_id, 'big'),
                             'duration': round(duration, 2),
                             'packets': stream.packet_count,
-                            'reason': 'timeout'
-                        })
-                        # Emit hang_start event
-                        self._events.emit('hang_start', {
-                            'repeater_id': int.from_bytes(radio_id, 'big'),
-                            'slot': 1,
-                            'rf_src': int.from_bytes(stream.rf_src, 'big'),
-                            'duration': hang_time
+                            'reason': 'timeout',
+                            'hang_time': hang_time
                         })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
@@ -599,7 +593,7 @@ class HBProtocol(DatagramProtocol):
                                    f'duration={duration:.2f}s, '
                                    f'packets={stream.packet_count} - '
                                    f'entering hang time ({hang_time}s)')
-                        # Emit stream_end event
+                        # Emit stream_end event (includes hang_time since they happen together)
                         self._events.emit('stream_end', {
                             'repeater_id': int.from_bytes(radio_id, 'big'),
                             'slot': 2,
@@ -607,14 +601,8 @@ class HBProtocol(DatagramProtocol):
                             'dst_id': int.from_bytes(stream.dst_id, 'big'),
                             'duration': round(duration, 2),
                             'packets': stream.packet_count,
-                            'reason': 'timeout'
-                        })
-                        # Emit hang_start event
-                        self._events.emit('hang_start', {
-                            'repeater_id': int.from_bytes(radio_id, 'big'),
-                            'slot': 2,
-                            'rf_src': int.from_bytes(stream.rf_src, 'big'),
-                            'duration': hang_time
+                            'reason': 'timeout',
+                            'hang_time': hang_time
                         })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
@@ -1184,7 +1172,7 @@ class HBProtocol(DatagramProtocol):
                        f'duration={duration:.2f}s, '
                        f'packets={current_stream.packet_count} - '
                        f'entering hang time ({hang_time}s)')
-            # Emit stream_end event
+            # Emit stream_end event (includes hang_time since they happen together)
             self._events.emit('stream_end', {
                 'repeater_id': int.from_bytes(radio_id, 'big'),
                 'slot': _slot,
@@ -1192,14 +1180,8 @@ class HBProtocol(DatagramProtocol):
                 'dst_id': int.from_bytes(_dst_id, 'big'),
                 'duration': round(duration, 2),
                 'packets': current_stream.packet_count,
-                'reason': 'terminator'
-            })
-            # Emit hang_start event
-            self._events.emit('hang_start', {
-                'repeater_id': int.from_bytes(radio_id, 'big'),
-                'slot': _slot,
-                'rf_src': int.from_bytes(_rf_src, 'big'),
-                'duration': hang_time
+                'reason': 'terminator',
+                'hang_time': hang_time
             })
         
         # Emit stream_update every 60 packets (10 superframes = 1 second)

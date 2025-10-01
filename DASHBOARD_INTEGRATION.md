@@ -60,12 +60,11 @@ Features:
 Changes:
 1. Import EventEmitter
 2. Initialize in HBProtocol.__init__: self._events = EventEmitter()
-3. Emit 5 event types at strategic points:
+3. Emit 4 event types at strategic points:
    - repeater_connected (after config)
    - stream_start (first packet)
    - stream_update (every 60 packets)
-   - stream_end (terminator/timeout)
-   - hang_start (hang time begins)
+   - stream_end (terminator/timeout + hang time begins)
 ```
 
 ## Event Types & Timing
@@ -75,8 +74,9 @@ Changes:
 | repeater_connected | Config complete | Once per connection | radio_id, callsign, address, color_code, talkgroups |
 | stream_start | First packet | Once per stream | repeater_id, slot, src_id, dst_id, stream_id, talker_alias |
 | stream_update | During transmission | Every 60 packets (1 sec) | repeater_id, slot, src_id, dst_id, duration, packets, talker_alias |
-| stream_end | Terminator/timeout | Once per stream | repeater_id, slot, src_id, dst_id, duration, packets, reason |
-| hang_start | Stream ends | Once per stream | repeater_id, slot, rf_src, duration |
+| stream_end | Terminator/timeout + hang time | Once per stream | repeater_id, slot, src_id, dst_id, duration, packets, reason, hang_time |
+
+**Note**: Stream end and hang time start are combined into a single `stream_end` event since they happen sequentially with no human-perceivable gap. This reduces event traffic by 50% during stream termination.
 
 ## Performance Characteristics
 

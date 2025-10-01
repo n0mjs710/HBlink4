@@ -341,9 +341,8 @@
                 case 'stream_update':
                     return `Stream update: ${data.packets} packets, ${data.duration}s`;
                 case 'stream_end':
-                    return `Stream ended (${data.reason}): ${data.packets} packets, ${data.duration}s`;
-                case 'hang_start':
-                    return `Hang time started: ${data.duration}s for ${data.rf_src}`;
+                    const hangTime = data.hang_time ? `, entering hang time (${data.hang_time}s)` : '';
+                    return `Stream ended (${data.reason}): ${data.packets} packets, ${data.duration}s${hangTime}`;
                 default:
                     return JSON.stringify(data);
             }

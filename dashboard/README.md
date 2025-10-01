@@ -134,7 +134,7 @@ Emitted every 60 packets (1 second) during active transmission:
 ```
 
 ### stream_end
-Emitted when transmission ends (terminator or timeout):
+Emitted when transmission ends (terminator or timeout) and hang time begins:
 ```json
 {
   "type": "stream_end",
@@ -146,25 +146,13 @@ Emitted when transmission ends (terminator or timeout):
     "dst_id": 91,
     "duration": 2.5,
     "packets": 150,
-    "reason": "terminator"  // or "timeout"
+    "reason": "terminator",  // or "timeout"
+    "hang_time": 3.0  // hang time duration in seconds
   }
 }
 ```
 
-### hang_start
-Emitted when hang time begins (slot reservation):
-```json
-{
-  "type": "hang_start",
-  "timestamp": 1727827203.5,
-  "data": {
-    "repeater_id": 3110001,
-    "slot": 2,
-    "rf_src": 3110099,
-    "duration": 3.0
-  }
-}
-```
+**Note**: Stream end and hang time start happen sequentially and are combined into a single event since no human can perceive the gap between them. This reduces event traffic by 50% during stream termination.
 
 ## Configuration
 
