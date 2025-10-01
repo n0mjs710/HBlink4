@@ -1,37 +1,37 @@
 ## Packet Processing Flow
 
 ```
-+----------------------------------------------------------------+
-|                    DMRD Packet Received                        |
-+----------------------------------------------------------------+
-                             |
-                             ▼
-                    +----------------+
-                    | Extract Fields |
-                    | - radio_id     |
-                    | - rf_src       |
-                    | - dst_id       |
-                    | - slot         |
-                    | - stream_id    |
-                    +--------+-------+
-                             |
-                             ▼
-                    +----------------+
-                    |   Validate     |
-                    |   Repeater     |
-                    +--------+-------+
-                             |
-                  +----------+----------+
-                  |                     |
-            Connected?              Not Connected
-                  |                     |
-                  ▼                     ▼
-    +---------------------+     +----------+
-    | _handle_stream_     |     |   Drop   |
-    |    _packet()        |     |  Packet  |
-    +----------+----------+     +----------+
++---------------------------------------------------------------+
+|                   DMRD Packet Received                        |
++---------------------------------------------------------------+
+                            |
+                            v
+                   +------------------+
+                   |  Extract Fields  |
+                   |  - radio_id      |
+                   |  - rf_src        |
+                   |  - dst_id        |
+                   |  - slot          |
+                   |  - stream_id     |
+                   +--------+---------+
+                            |
+                            v
+                   +------------------+
+                   |    Validate      |
+                   |    Repeater      |
+                   +--------+---------+
+                            |
+                +-----------+-----------+
+                |                       |
+            Connected              Not Connected
+                |                       |
+                v                       v
+    +---------------------+     +---------------+
+    | _handle_stream_     |     |     Drop      |
+    |    _packet()        |     |    Packet     |
+    +----------+----------+     +---------------+
                |
-               ▼
+               v
     +---------------------+
     | Get Current Stream  |
     |   for Slot          |
@@ -39,117 +39,117 @@
                |
     +----------+----------+
     |                     |
-  Empty?              Has Stream
+  Empty                Has Stream
     |                     |
-    ▼                     ▼
-+---------+    +-----------------+
-|  Start  |    | stream_id match?|
-|   New   |    +--------+--------+
-| Stream  |                      |
-+----+----+    +--------+--------+
-     |       Yes               No
+    v                     v
++----------+    +------------------+
+|  Start   |    | stream_id match? |
+|   New    |    +--------+---------+
+|  Stream  |             |
++----+-----+    +--------+--------+
+     |       Yes                No
      |         |                 |
-     |         ▼                 ▼
-     |  +-----------+    +------------+
-     |  |  Update   |    | CONTENTION |
-     |  |  Stream   |    |    Drop    |
-     |  |  State    |    |   Packet   |
-     |  +-----+-----+    +------------+
+     |         v                 v
+     |  +------------+    +-------------+
+     |  |   Update   |    | CONTENTION  |
+     |  |   Stream   |    |    Drop     |
+     |  |   State    |    |   Packet    |
+     |  +-----+------+    +-------------+
      |        |
+     +--------+
+              |
+              v
+     +------------------+
+     |   Talkgroup      |
+     |   Allowed?       |
      +--------+---------+
-                        |
-                        ▼
-              +------------------+
-              | Talkgroup        |
-              | Allowed?         |
-              +--------+---------+
-                       |
-          +------------+------------+
-         Yes                       No
-          |                         |
-          ▼                         ▼
-    +----------+            +----------+
-    |  Accept  |            |   Drop   |
-    |  Packet  |            |  Packet  |
-    +-----+----+            +----------+
-          |
-          ▼
-    +------------------+
-    | Check if DMR     |
-    | Terminator Frame |
-    | (_is_dmr_        |
-    |  terminator)     |
-    +--------+---------+
-             |
-    +--------+--------+
-    |                 |
-  Terminator      Normal Packet
-    |                 |
-    ▼                 |
-+--------------+      |
-| End Stream   |      |
-| immediately  |      |
-| + Start Hang |      |
-|   Time       |      |
-+--------------+      |
-                      ▼
-            +------------------+
-            | TODO: Forward    |
-            | to other         |
-            | repeaters        |
-            +------------------+
+              |
+    +---------+----------+
+   Yes                  No
+    |                    |
+    v                    v
++----------+      +----------+
+|  Accept  |      |   Drop   |
+|  Packet  |      |  Packet  |
++-----+----+      +----------+
+      |
+      v
++------------------+
+| Check if DMR     |
+| Terminator Frame |
+| (_is_dmr_        |
+|  terminator)     |
++--------+---------+
+         |
+   +-----+-----+
+   |           |
+Terminator  Normal Packet
+   |           |
+   v           |
++-------------+|
+| End Stream  ||
+| immediately ||
+| + Start Hang||
+|   Time      ||
++-------------+|
+               v
+      +------------------+
+      | TODO: Forward    |
+      | to other         |
+      | repeaters        |
+      +------------------+
 ```
 
 ## Stream State Machine
 
 ```
-                    +----------------------+
-                    |   Slot Available     |
-                    |  (no active stream)  |
-                    +----------+-----------+
-                               |
-                               | First Packet Arrives
-                               | + Talkgroup Allowed
-                               ▼
-                    +----------------------+
-                    |   Stream Active      |
-                    |                      |
-                    | - Accepting packets  |
-                    | - Updating last_seen |
-                    | - Counting packets   |
-                    +----------+-----------+
-                               |
-              +----------------┼----------------+------------------+
-              |                |                |                  |
-    Same stream_id    Different stream_id  Terminator        No packets
-    (continue)        (contention - deny)  detected          for 2 seconds
-              |                |                |                  |
-              ▼                ▼                ▼                  ▼
-    +-----------------+ +--------------+ +---------------+  +------------+
-    |  Update State   | | Drop Packet  | |  End Stream   |  |  Timeout   |
-    |  + Keep Active  | | + Log Warning| |  + Hang Time  |  |  + Cleanup |
-    +-----------------+ +--------------+ +-------+-------+  +-----+------+
-              |                                   |               |
-              |                                   +---------------+
-              |                                           |
-              |                                          ▼
-              |                                +------------------+
-              |                                |  HANG TIME       |
-              |                                |  - ended=True    |
-              |                                |  - Same rf_src OK|
-              |                                |  - Others DENIED |
-              |                                +----------+-------+
-              |                                         |
-              |                                         | hang_time
-              |                                         | expires
-              |                                         ▼
-              +---------------------------------------->|
-                                                        |
-                                             +----------------------+
-                                             |   Slot Available     |
-                                             |  (ready for new      |
-                                             |   transmission)      |
-                                             +----------------------+
+                 +----------------------+
+                 |   Slot Available     |
+                 |  (no active stream)  |
+                 +----------+-----------+
+                            |
+                            | First Packet Arrives
+                            | + Talkgroup Allowed
+                            v
+                 +----------------------+
+                 |   Stream Active      |
+                 |                      |
+                 | - Accepting packets  |
+                 | - Updating last_seen |
+                 | - Counting packets   |
+                 +----------+-----------+
+                            |
+       +--------------------+--------------------+------------------+
+       |                    |                    |                  |
+  Same stream_id   Different stream_id      Terminator       No packets
+   (continue)       (contention - deny)      detected       for 2 seconds
+       |                    |                    |                  |
+       v                    v                    v                  v
++--------------+   +--------------+   +---------------+   +-------------+
+| Update State |   | Drop Packet  |   |  End Stream   |   |   Timeout   |
+| + Keep Active|   | + Log Warning|   |  + Hang Time  |   |  + Cleanup  |
++--------------+   +--------------+   +-------+-------+   +------+------+
+       |                                      |                   |
+       |                                      +-------------------+
+       |                                                |
+       |                                                v
+       |                                    +-------------------+
+       |                                    |  HANG TIME        |
+       |                                    |  - ended=True     |
+       |                                    |  - Same rf_src OK |
+       |                                    |  - Others DENIED  |
+       |                                    +---------+---------+
+       |                                              |
+       |                                              | hang_time
+       |                                              | expires
+       |                                              v
+       +--------------------------------------------->|
+                                                      |
+                                          +----------------------+
+                                          |   Slot Available     |
+                                          |  (ready for new      |
+                                          |   transmission)      |
+                                          +----------------------+
 ```
 
 ## Multi-Slot Operation per Repeater

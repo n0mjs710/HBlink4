@@ -16,19 +16,19 @@ Real-time monitoring dashboard for HBlink4 DMR server.
 The dashboard runs as a separate process from HBlink4:
 
 ```
-┌─────────────┐        UDP Events         ┌──────────────┐
-│   HBlink4   │ ───────────────────────> │  Dashboard   │
-│   Server    │     (localhost:8765)      │   Server     │
-│  (Twisted)  │     fire-and-forget       │  (FastAPI)   │
-└─────────────┘                           └──────────────┘
-                                                 │
-                                          WebSocket updates
-                                                 │
-                                                 ▼
-                                          ┌──────────────┐
-                                          │   Browser    │
-                                          │   Client     │
-                                          └──────────────┘
++-------------+        UDP Events         +--------------+
+|   HBlink4   | -----------------------> |  Dashboard   |
+|   Server    |     (localhost:8765)     |   Server     |
+|  (Twisted)  |     fire-and-forget      |  (FastAPI)   |
++-------------+                          +--------------+
+                                                |
+                                         WebSocket updates
+                                                |
+                                                v
+                                         +--------------+
+                                         |   Browser    |
+                                         |   Client     |
+                                         +--------------+
 ```
 
 **Benefits:**

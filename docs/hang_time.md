@@ -122,24 +122,24 @@ A stream progresses through three states:
 ### State Transitions
 
 ```
-┌─────────────┐
-│   ACTIVE    │ ◄─── New packet, same stream_id
-│ ended=False │
-└──────┬──────┘
-       │
-       │ No packets for stream_timeout
-       ▼
-┌─────────────┐
-│  HANG TIME  │ ◄─── Same rf_src can resume
-│ ended=True  │      Different rf_src DENIED
-└──────┬──────┘
-       │
-       │ stream_hang_time elapses
-       ▼
-┌─────────────┐
-│   EXPIRED   │
-│ slot=None   │ ◄─── Any source can use slot
-└─────────────┘
++---------------+
+|    ACTIVE     | <--- New packet, same stream_id
+| ended=False   |
++-------+-------+
+        |
+        | No packets for stream_timeout
+        v
++---------------+
+|   HANG TIME   | <--- Same rf_src can resume
+| ended=True    |      Different rf_src DENIED
++-------+-------+
+        |
+        | stream_hang_time elapses
+        v
++---------------+
+|    EXPIRED    |
+| slot=None     | <--- Any source can use slot
++---------------+
 ```
 
 ## Code Implementation
