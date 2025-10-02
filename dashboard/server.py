@@ -6,7 +6,7 @@ Updates every 10 superframes (60 packets = 1 second) for smooth real-time feel
 """
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, date
 from collections import deque
 from typing import Dict, List, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -66,8 +66,16 @@ class DashboardState:
         self.stats = {
             'total_streams_today': 0,
             'total_duration_today': 0.0,  # Total duration in seconds
-            'start_time': datetime.now().isoformat()
+            'start_time': datetime.now().isoformat(),
+            'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
+    
+    def reset_daily_stats(self):
+        """Reset daily statistics at midnight"""
+        self.stats['total_streams_today'] = 0
+        self.stats['total_duration_today'] = 0.0
+        self.stats['last_reset_date'] = date.today().isoformat()
+        logger.info(f"📊 Daily stats reset at midnight (server time)")
 
 state = DashboardState()
 
@@ -278,8 +286,45 @@ async def startup_event():
     """Start event receiver on startup"""
     receiver = EventReceiver()
     asyncio.create_task(receiver.start())
+    asyncio.create_task(midnight_reset_task())
     logger.info("🚀 HBlink4 Dashboard started!")
     logger.info("📊 Access dashboard at http://localhost:8080")
+
+
+async def midnight_reset_task():
+    """Background task to reset daily stats at midnight"""
+    while True:
+        # Check if date has changed
+        current_date = date.today().isoformat()
+        if current_date != state.stats.get('last_reset_date'):
+            state.reset_daily_stats()
+            # Broadcast stats update to all WebSocket clients
+            await broadcast_stats_update()
+        
+        # Check every 60 seconds
+        await asyncio.sleep(60)
+
+
+async def broadcast_stats_update():
+    """Broadcast stats update to all WebSocket clients"""
+    if not state.websocket_clients:
+        return
+    
+    message = json.dumps({
+        'type': 'stats_reset',
+        'timestamp': datetime.now().timestamp(),
+        'data': state.stats
+    })
+    
+    disconnected = set()
+    for client in state.websocket_clients:
+        try:
+            await client.send_text(message)
+        except:
+            disconnected.add(client)
+    
+    # Remove disconnected clients
+    state.websocket_clients -= disconnected
 
 
 if __name__ == "__main__":

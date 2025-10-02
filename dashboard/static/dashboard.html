@@ -396,6 +396,11 @@
                     updateStreams(state.streams);
                     updateEvents(state.events);
                     updateStats(state.stats, state.repeaters, state.streams);
+                } else if (data.type === 'stats_reset') {
+                    // Midnight reset - update stats immediately
+                    state.stats = data.data;
+                    updateStats(state.stats, state.repeaters, state.streams);
+                    console.log('📊 Daily stats reset at midnight');
                 } else {
                     // Process event immediately for real-time updates
                     processEventUpdate(data);
