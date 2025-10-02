@@ -496,16 +496,11 @@
             const packets = stream?.packets || 0;
             const talkerAlias = stream?.talker_alias ? `"${stream.talker_alias}"` : '';
             
-            // Show hang time when in hang_time status
-            const hangTimeDisplay = (stream?.status === 'hang_time' && stream?.hang_time) 
-                ? ` (Hang: ${stream.hang_time}s)` 
-                : '';
-            
             return `
                 <div class="slot ${status}">
                     <div class="slot-col">
                         <div class="slot-col-label">Slot ${slotNum}</div>
-                        <div class="slot-status-badge ${status}">${statusLabel}${hangTimeDisplay}</div>
+                        <div class="slot-status-badge ${status}">${statusLabel}</div>
                     </div>
                     <div class="slot-col">
                         <div class="slot-col-label">Source</div>
