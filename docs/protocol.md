@@ -158,9 +158,9 @@ A server will, at a minimum, need to track a repeater in the following states:
    - Voice Header: `0x755FD7DF75F7`
    - Voice Terminator: `0xD5DD7DF75D55` ✅ **IMPLEMENTED**
    - Data Header: `0xDFF57D75DF5D`
-   - Data Terminator: `0x7DFFD5F55D5F` (not yet implemented)
+   - Data Terminator: `0x7DFFD5F55D5F` ✅ **IMPLEMENTED**
    
-   HBlink4 detects voice terminators and ends streams immediately. Falls back to 2.0s timeout when terminator not received (packet loss).
+   HBlink4 detects both voice and data terminators and ends streams immediately. Falls back to 2.0s timeout when terminator not received (packet loss).
 
 ## Connection Flow
 

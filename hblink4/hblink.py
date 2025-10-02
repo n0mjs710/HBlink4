@@ -783,7 +783,7 @@ class HBProtocol(DatagramProtocol):
             last_seen=current_time,
             stream_id=stream_id,
             packet_count=1,
-            call_type="group" if call_type_bit == 1 else "private"  # Set from packet header bit
+            call_type="group" if call_type_bit else "private"  # Set from packet header bit (0=private, 1=group)
         )
         
         repeater.set_slot_stream(slot, new_stream)
@@ -1036,13 +1036,14 @@ class HBProtocol(DatagramProtocol):
         # Voice Terminator with LC (VOICE_TERM_LC) - most common
         VOICE_TERM_SYNC = bytes.fromhex('D5DD7DF75D55')
         
+        # Data Terminator with LC (DATA_TERM_LC) - used for voice + data calls
+        DATA_TERM_SYNC = bytes.fromhex('7DFFD5F55D5F')
+        
         # Voice Header with LC for comparison (should NOT match)
         # VOICE_HEADER_SYNC = bytes.fromhex('755FD7DF75F7')
+        # DATA_HEADER_SYNC = bytes.fromhex('DFF57D75DF5D')
         
-        # Data terminator patterns (less common in voice systems)
-        # DATA_TERM_SYNC = bytes.fromhex('7DFFD5F55D5F')
-        
-        if sync_pattern == VOICE_TERM_SYNC:
+        if sync_pattern == VOICE_TERM_SYNC or sync_pattern == DATA_TERM_SYNC:
             return True
         
         return False

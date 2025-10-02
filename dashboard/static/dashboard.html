@@ -565,6 +565,8 @@
                 case 'stream_end':
                     const hangTime = data.hang_time ? `, entering hang time (${data.hang_time}s)` : '';
                     return `Stream ended (${data.reason}): ${data.packets} packets, ${data.duration}s${hangTime}`;
+                case 'hang_time_expired':
+                    return `Hang time expired: Repeater ${data.repeater_id} slot ${data.slot}`;
                 default:
                     return JSON.stringify(data);
             }
