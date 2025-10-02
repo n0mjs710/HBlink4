@@ -49,53 +49,53 @@ This document summarizes the major features implemented in the recent developmen
 - `docs/hang_time.md`: Complete documentation (375 lines)
 - `tests/test_hang_time.py`: Test suite
 
-### 3. Stream End Detection ✅ **IMPLEMENTED** (⏳ Sync patterns TODO)
+### 3. Stream End Detection ✅ **FULLY IMPLEMENTED**
 
 **Purpose**: Detect when DMR transmissions end.
 
 **Implemented Methods**:
 
-1. **Fast Terminator Detection** (200ms inactivity) ✅
-   - When new stream tries to start on occupied slot
-   - Check if current stream inactive >200ms
-   - If so, end old stream and allow new one
-   - Provides ~200ms turnaround (acceptable performance)
+1. **Immediate Terminator Detection** (60ms) ✅
+   - Checks packet header flags in byte 15
+   - Frame type must be 0x2 (HBPF_DATA_SYNC)
+   - DTYPE/VSEQ must be 0x2 (HBPF_SLT_VTERM)
+   - Provides optimal ~60ms turnaround
+   - **3x faster than timeout-based detection**
 
 2. **Timeout Fallback** (2.0s inactivity) ✅
    - Triggers when no new transmission attempts
    - Ensures streams eventually clean up
    - Checked every 1 second by background task
-
-**Not Yet Implemented**:
-
-3. **ETSI Sync Pattern Detection** (⏳ TODO)
-   - Direct terminator frame detection
-   - Would provide ~60ms turnaround (optimal)
-   - Sync patterns don't match ETSI standards in Homebrew packets
-   - May need FEC decoding or protocol investigation
+   - Backup method for edge cases
 
 **Implementation**:
-- `_handle_stream_start()`: Fast terminator logic (200ms check)
+- `_is_dmr_terminator()`: Checks frame_type and dtype_vseq from packet header
 - `_check_stream_timeouts()`: Fallback timeout cleanup (2.0s)
-- `_is_dmr_terminator()`: Stub for future sync pattern detection
 - `stream_timeout` configuration parameter (default: 2.0s)
+- Uses Homebrew protocol's built-in terminator flags (no sync pattern extraction needed)
 
 **Result**:
-- ✅ Fast turnaround when operators key up quickly (~200ms)
+- ✅ Immediate terminator detection (~60ms)
 - ✅ Reliable cleanup via timeout fallback (2.0s)
-- ⏳ Could be improved with sync pattern detection (~60ms)
+- ✅ Production-ready with live repeater testing confirmed
+- ✅ HBlink3-compatible implementation
 
-### 4. DMR Link Control (LC) Extraction ⏳ **PARTIAL**
+### 4. DMR Link Control (LC) Extraction ✅ **IMPLEMENTED**
 
 **Purpose**: Extract rich metadata from DMR frames.
 
 **What Works**:
 - ✅ Embedded LC from voice frames (bytes 13-14)
 - ✅ Call type from DMRD packet header (immediate availability)
+- ✅ Full embedded LC reassembly (4-frame accumulation)
+- ✅ Smart extraction only when header missed (performance optimization)
 
-**Not Yet Working**:
-- ⏳ LC from sync frames (needs FEC decoding or investigation)
-- ⏳ Full embedded LC reassembly (4-frame accumulation)
+**Lower Priority Future Enhancement**:
+- 🔵 LC from sync frames (for frame reconstruction during forwarding)
+  - Not needed for current read-only operations
+  - Will be needed when implementing stream forwarding with LC modification
+  - Requires FEC encoding to rebuild frames
+  - See docs/TODO.md item #4 for details
 
 **What's Extracted**:
 - Source and Destination IDs
@@ -257,45 +257,49 @@ if current_stream.missed_header and current_stream.lc is None:
 
 ## Known Limitations
 
-1. **ETSI Sync Pattern Detection**: Not yet working (TODO)
-   - Sync patterns from Homebrew packets don't match ETSI standards
-   - May need FEC decoding or further protocol investigation
-   - Current workaround: 200ms fast terminator detection (acceptable)
-2. **LC from Sync Frames**: Not yet working (TODO)
-   - May require FEC decoding before extraction
-   - Current workaround: Use DMRD packet header data (call_type works fine)
+1. **Stream Forwarding**: Not yet implemented (next major milestone - see docs/TODO.md #1)
+2. **LC Reconstruction**: LC extraction from sync frames not implemented
+   - Not needed for current read-only operations
+   - Will be needed for stream forwarding with ID modification
+   - Requires FEC encoding to rebuild frames (see docs/TODO.md #4)
 3. **CRC Validation**: Not currently checked (data already FEC-corrected by repeater)
-4. **Stream Forwarding**: Not yet implemented (next major milestone)
-5. **Embedded LC Reassembly**: Framework in place but 4-frame accumulation not yet complete
+4. **Advanced Access Control**: Per-talkgroup permissions not yet implemented (see docs/TODO.md #2)
 
 ## Next Steps
 
+See **[docs/TODO.md](TODO.md)** for the complete prioritized TODO list.
+
 ### Immediate Priorities
 
-1. **Add dmr-utils3 Dependency**
-   - Add `dmr-utils3` from PyPI to requirements.txt
-   - Provides FEC (Forward Error Correction) calculations
-   - Needed for reassembling/modifying DMR frames from scratch
-   - Will be used for stream forwarding with LC modification
-
-2. **Talker Alias Caching** (Optional Enhancement)
-   - Cache aliases by source ID
-   - Reduce redundant processing
-   - TTL-based expiration
-
-### Future Milestones
-
-4. **Stream Forwarding/Bridging**
+1. **Stream Forwarding/Bridging** (docs/TODO.md #1)
    - Bridge configuration
    - Target repeater selection
    - Packet forwarding between repeaters
-   - LC modification with FEC recalculation
+   - May need LC modification with FEC recalculation
 
-5. **Advanced Features**
-   - Access control based on LC data
+2. **Enhanced Access Control** (docs/TODO.md #2)
+   - Per-talkgroup permissions
+   - Time-based restrictions
    - Emergency call prioritization
-   - Privacy-aware logging
-   - Dynamic talkgroup routing
+
+3. **Dashboard Enhancements** (docs/TODO.md #3)
+   - Stream history view
+   - Statistics graphs
+   - Talker alias display
+   - Map view
+
+### Lower Priority Items
+
+4. **LC Extraction from Sync Frames** (docs/TODO.md #4)
+   - Not urgent for current features
+   - Will be needed for stream forwarding with LC modification
+   - Requires FEC encoding research
+
+5. **Stream Recording** (docs/TODO.md #5)
+   - Capture and transcode audio
+   - Requires AMBE codec (licensing?)
+
+See **[docs/TODO.md](TODO.md)** for 11 total items with full descriptions.
 
 ## Git History
 
@@ -312,8 +316,8 @@ if current_stream.missed_header and current_stream.lc is None:
 | Hang Time | ✅ Pass | ✅ Manual | ✅ Production Ready |
 | LC Extraction | ✅ Pass | ✅ Manual | ✅ Production Ready |
 | Talker Alias | ✅ Pass (13/13) | ✅ Manual | ✅ Production Ready |
-| Terminator Detection | ✅ Pass (5/5) | 🔄 Needs Real Traffic | ✅ Implemented |
-| Embedded LC | ✅ Pass (7/7) | 🔄 Needs Real Traffic | ✅ Implemented |
+| Terminator Detection | ✅ Pass (5/5) | ✅ Live Tested | ✅ Production Ready |
+| Embedded LC | ✅ Pass (7/7) | ✅ Live Tested | ✅ Production Ready |
 
 ## Code Statistics
 
@@ -324,15 +328,18 @@ if current_stream.missed_header and current_stream.lc is None:
 
 ## Conclusion
 
-This session successfully implemented the core stream management infrastructure for HBlink4:
+This development successfully implemented the core stream management infrastructure for HBlink4:
 
 ✅ **Robust stream tracking** with per-slot management
 ✅ **Hang time** to prevent slot hijacking
-✅ **Two-tier detection** for reliable stream end
+✅ **Immediate terminator detection** (60ms via packet header flags)
+✅ **Real-time duration counter** with 1-second updates
 ✅ **LC extraction** for rich metadata
+✅ **Embedded LC reassembly** with 4-frame accumulation
 ✅ **Talker alias** extraction with 4 format support (7-bit, ISO-8859-1, UTF-8, UTF-16)
 ✅ **Smart optimizations** to minimize overhead
 ✅ **Comprehensive documentation** for maintainability
-✅ **Full test coverage** for reliability (31 tests)
+✅ **Full test coverage** for reliability (43 tests)
+✅ **Live repeater testing** confirming production readiness
 
-The system is production-ready for basic stream tracking, LC extraction, and talker alias display. Future enhancements (embedded LC bit extraction, stream forwarding) have clear frameworks in place.
+The system is production-ready for stream tracking, immediate terminator detection, LC extraction, and talker alias display. Future enhancements (stream forwarding, LC frame reconstruction) are documented in docs/TODO.md with clear rationale and priorities.

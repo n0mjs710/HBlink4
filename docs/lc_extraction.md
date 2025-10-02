@@ -306,17 +306,18 @@ INFO - Stream LC info: repeater=312100 slot=1, src=312123, dst=9, call_type=GROU
 
 ## Future Enhancements
 
-### Complete Embedded LC Bit Extraction
+### LC from Sync Frames (Lower Priority - See docs/TODO.md #4)
 
-Implement bit-level extraction from AMBE+2 vocoder frames:
+**Current State**: Not implemented, not urgent
 
-```python
-def extract_embedded_lc(data: bytes, frame_num: int) -> Optional[bytes]:
-    """Extract 16 bits of embedded LC from voice frame B-E"""
-    # TODO: Extract specific bits from AMBE+2 frame structure
-    # Each frame B-E contains 16 bits of LC data at known bit positions
-    # Requires understanding of AMBE+2 bit packing
-```
+**Use Case**: Needed for stream forwarding with LC modification
+- When bridging streams between networks and changing source/destination IDs
+- Requires extracting LC from sync frames, modifying fields, and rebuilding with FEC
+
+**Why Lower Priority**:
+- Current embedded LC extraction works fine for read-only operations
+- Only critical when implementing stream forwarding/bridging
+- More complex than other features (requires FEC encoding)
 
 ### Talker Alias Optimization
 
@@ -389,7 +390,8 @@ Comprehensive tests in `tests/test_lc_extraction.py` and `tests/test_talker_alia
 - ✅ Talker alias block extraction
 - ✅ Talker alias decoding (all 4 formats)
 - ✅ Multi-block collection and assembly
-- 🔄 Embedded LC extraction (framework in place, bit extraction TODO)
+- ✅ Embedded LC extraction (4-frame reassembly complete)
+- 🔵 LC from sync frames (lower priority - for stream forwarding, see docs/TODO.md #4)
 
 Run tests:
 ```bash

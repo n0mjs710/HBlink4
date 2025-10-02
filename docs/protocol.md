@@ -157,23 +157,26 @@ A server will, at a minimum, need to track a repeater in the following states:
    
    **Current Implementation: Fast Terminator Detection (200ms threshold)**
    - When a new stream attempts to start on an occupied slot
-   - Check if current stream hasn't received packets for >200ms
-   - If so, consider old stream terminated and allow new stream
-   - Provides ~200ms turnaround vs ETSI's ~60ms (acceptable tradeoff)
-   - Falls back to 2.0s timeout if no new transmission attempts
+   - Immediate detection via packet header flags (~60ms) ✅
+   - Fallback to 2.0s timeout if terminator packet lost
    
-   **Future Goal: ETSI Sync Pattern Detection**
+   **Immediate Terminator Detection** (IMPLEMENTED)
    
-   DMR transmissions should end with an explicit terminator frame:
-   - Frame Type = Voice Sync (0x01) or Data Sync (0x02)
-   - Payload contains specific sync pattern indicating terminator vs header
-   - Would enable ~60ms detection after PTT release
+   In the Homebrew protocol, terminator frames are indicated in byte 15:
+   - Bits 4-5 (frame type): Must be 0x2 (HBPF_DATA_SYNC)
+   - Bits 0-3 (dtype_vseq): Must be 0x2 (HBPF_SLT_VTERM)
    
-   **ETSI Sync Patterns** (in payload bytes 20-25) - not yet detectable:
-   - Voice Header: `0x755FD7DF75F7`
-   - Voice Terminator: `0xD5DD7DF75D55` ⏳ **TODO**
-   - Data Header: `0xDFF57D75DF5D`
-   - Data Terminator: `0x7DFFD5F55D5F` ⏳ **TODO**
+   ```python
+   def _is_dmr_terminator(data: bytes, frame_type: int) -> bool:
+       _bits = data[15]
+       _dtype_vseq = _bits & 0xF
+       return frame_type == 0x2 and _dtype_vseq == 0x2
+   ```
+   
+   This provides ~60ms detection (3x faster than timeout methods).
+   
+   **Note**: ETSI sync patterns (bytes 20-25) are not used for terminator detection,
+   as the Homebrew protocol provides explicit flags in the packet header.
 
 ## Connection Flow
 

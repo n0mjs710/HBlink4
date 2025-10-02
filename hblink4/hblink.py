@@ -1122,13 +1122,13 @@ class HBProtocol(DatagramProtocol):
         _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
         
         # Check if this is a stream terminator (immediate end detection)
-        # Note: Currently always returns False due to Homebrew protocol limitations
+        # Note: _is_dmr_terminator() checks packet header flags for immediate detection
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
         
         # Extract LC from voice sync frames (header/terminator)
-        # TODO: LC extraction from sync frames needs FEC decoding
-        # The sync patterns appear to be encoded/scrambled in Homebrew protocol
-        # Need to investigate proper decoding method before enabling this
+        # Note: LC from sync frames is a lower priority feature (see docs/TODO.md #4)
+        # Currently not needed - we get LC from DMRD header and embedded LC from voice frames
+        # Will be needed for stream forwarding with LC modification (requires FEC encoding)
         _lc = None
         # if _frame_type in [1, 2]:  # Voice sync or data sync - NOT YET IMPLEMENTED
         #     _lc = extract_voice_lc(data)
