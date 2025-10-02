@@ -130,6 +130,10 @@
             gap: 5px;
         }
         
+        .repeater-meta-item:first-child {
+            min-width: 140px;  /* Fixed width for "Connected: H:MM:SS" */
+        }
+        
         .repeater-meta-label {
             color: #94a3b8;
             font-weight: 500;
@@ -231,6 +235,13 @@
         .slot-status-badge.hang_time {
             background: #6366f1;
             color: white;
+        }
+        
+        .repeater-header-warning {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #fbbf24; /* Yellow warning color */
         }
         
         .slot-talker {
@@ -450,14 +461,27 @@
             container.innerHTML = repeaters
                 .filter(r => r.status === 'connected')
                 .map(r => {
-                    // Find active streams for this repeater
-                    const slot1Stream = streams.find(s => s.repeater_id == r.radio_id && s.slot == 1 && s.status !== 'ended');
-                    const slot2Stream = streams.find(s => s.repeater_id == r.radio_id && s.slot == 2 && s.status !== 'ended');
+                    // Find active streams for this repeater (only active or hang_time, not ended)
+                    const slot1Stream = streams.find(s => 
+                        s.repeater_id == r.radio_id && 
+                        s.slot == 1 && 
+                        (s.status === 'active' || s.status === 'hang_time')
+                    );
+                    const slot2Stream = streams.find(s => 
+                        s.repeater_id == r.radio_id && 
+                        s.slot == 2 && 
+                        (s.status === 'active' || s.status === 'hang_time')
+                    );
+                    
+                    // Calculate initial connection duration
+                    const connectedDuration = r.connected_at ? formatDuration(Date.now() / 1000 - r.connected_at) : '—';
+                    const hasMissedPings = r.missed_pings > 0;
+                    const headerClass = hasMissedPings ? 'repeater-header-warning' : 'repeater-header';
                     
                     return `
                         <div class="repeater-card">
                             <div class="repeater-info">
-                                <div class="repeater-header">
+                                <div class="${headerClass}">
                                     📡 ${r.callsign || 'Unknown'} (${r.radio_id})
                                 </div>
                                 <div class="repeater-location">
@@ -465,8 +489,8 @@
                                 </div>
                                 <div class="repeater-meta">
                                     <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">Color Code:</span>
-                                        <span>${r.color_code || 'N/A'}</span>
+                                        <span class="repeater-meta-label">Connected:</span>
+                                        <span data-connected-duration data-connected-at="${r.connected_at || ''}">${connectedDuration}</span>
                                     </div>
                                     ${r.talkgroups && r.talkgroups.length > 0 ? `
                                     <div class="repeater-meta-item">
@@ -520,10 +544,15 @@
                 if (stream.status === 'active' && stream.start_time) {
                     // For active streams, calculate elapsed time from start_time
                     const elapsed = Date.now() / 1000 - stream.start_time;
-                    duration = elapsed.toFixed(1) + 's';
+                    // Only show if elapsed time is reasonable (not negative, not more than 1 hour)
+                    if (elapsed >= 0 && elapsed < 3600) {
+                        duration = Math.round(elapsed) + 's';
+                    } else {
+                        duration = '0s';  // Reset if time is invalid
+                    }
                 } else if (stream.duration !== undefined) {
                     // For ended/hang_time streams, use the final duration
-                    duration = stream.duration.toFixed(1) + 's';
+                    duration = Math.round(stream.duration) + 's';
                 }
             }
             
@@ -550,7 +579,11 @@
                     </div>
                     <div class="slot-col">
                         <div class="slot-col-label">Duration</div>
-                        <div class="slot-col-value ${stream ? '' : 'empty'}">${duration}${packets ? ' (' + packets + ')' : ''}</div>
+                        <div class="slot-col-value ${stream ? '' : 'empty'}" 
+                             data-stream-duration 
+                             data-start-time="${stream?.start_time || ''}" 
+                             data-status="${stream?.status || ''}" 
+                             data-final-duration="${stream?.duration || ''}">${duration}</div>
                     </div>
                     <div class="slot-col">
                         <div class="slot-col-label">Talker</div>
@@ -595,6 +628,27 @@
             const data = event.data;
             
             switch(eventType) {
+                case 'stream_start':
+                    // Add or replace stream in state immediately with fresh start_time
+                    const startStreamIndex = state.streams.findIndex(s => 
+                        s.repeater_id == data.repeater_id && s.slot == data.slot
+                    );
+                    const newStream = {
+                        ...data,
+                        status: 'active',
+                        start_time: event.timestamp  // Use fresh timestamp from event
+                    };
+                    if (startStreamIndex >= 0) {
+                        state.streams[startStreamIndex] = newStream;
+                    } else {
+                        state.streams.push(newStream);
+                    }
+                    // Immediately update the display
+                    if (state.repeaters) {
+                        updateRepeaters(state.repeaters);
+                    }
+                    break;
+                    
                 case 'stream_end':
                     // Update stream status to hang_time
                     const streamKey = `${data.repeater_id}.${data.slot}`;
@@ -656,7 +710,7 @@
                 state.streams = data.streams;
                 updateStreams(data.streams);
             });
-            fetch('/api/events?limit=20').then(r => r.json()).then(data => {
+            fetch('/api/events?limit=10').then(r => r.json()).then(data => {
                 state.events = data.events;
                 updateEvents(data.events);
             });
@@ -669,14 +723,37 @@
             });
         }
         
-        // Update active stream durations every second
+        // Update active stream durations and connection durations every second (without re-rendering everything)
         setInterval(() => {
-            // Check if there are any active streams
-            const hasActiveStreams = state.streams.some(s => s.status === 'active');
-            if (hasActiveStreams && state.repeaters) {
-                // Update the display to show live duration counters
-                updateRepeaters(state.repeaters);
-            }
+            // Update stream durations
+            document.querySelectorAll('[data-stream-duration]').forEach(el => {
+                const status = el.dataset.status;
+                const startTime = parseFloat(el.dataset.startTime);
+                const finalDuration = parseFloat(el.dataset.finalDuration);
+                
+                if (status === 'active' && startTime) {
+                    const elapsed = Date.now() / 1000 - startTime;
+                    // Only update if elapsed time is reasonable (between 0 and 10 minutes)
+                    // This prevents showing huge elapsed times when old data hasn't been cleared yet
+                    if (elapsed >= 0 && elapsed < 600) {
+                        el.textContent = Math.round(elapsed) + 's';
+                    }
+                } else if (finalDuration && status !== 'active') {
+                    // For ended/hang_time streams, show final duration (don't let timer run)
+                    if (!el.textContent.startsWith(Math.round(finalDuration) + 's')) {
+                        el.textContent = Math.round(finalDuration) + 's';
+                    }
+                }
+            });
+            
+            // Update connection durations
+            document.querySelectorAll('[data-connected-duration]').forEach(el => {
+                const connectedAt = parseFloat(el.dataset.connectedAt);
+                if (connectedAt) {
+                    const elapsed = Date.now() / 1000 - connectedAt;
+                    el.textContent = formatDuration(elapsed);
+                }
+            });
         }, 1000);
         
         // Keep connection alive

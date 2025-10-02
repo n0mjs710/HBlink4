@@ -1026,7 +1026,9 @@ class HBProtocol(DatagramProtocol):
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
                 'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
                 'address': f'{repeater.ip}:{repeater.port}',
-                'talkgroups': talkgroups
+                'talkgroups': talkgroups,
+                'last_ping': repeater.last_ping,
+                'missed_pings': repeater.missed_pings
             })
             
         except Exception as e:

@@ -126,9 +126,17 @@ class EventReceiver:
                 **data,
                 'connected_at': event['timestamp'],
                 'last_activity': event['timestamp'],
+                'last_ping': data.get('last_ping', event['timestamp']),
+                'missed_pings': data.get('missed_pings', 0),
                 'status': 'connected'
             }
             logger.info(f"Repeater connected: {data['radio_id']} ({data.get('callsign', 'UNKNOWN')})")
+        
+        elif event_type == 'repeater_keepalive':
+            if data['radio_id'] in state.repeaters:
+                state.repeaters[data['radio_id']]['last_ping'] = data.get('last_ping', event['timestamp'])
+                state.repeaters[data['radio_id']]['missed_pings'] = data.get('missed_pings', 0)
+                state.repeaters[data['radio_id']]['last_activity'] = event['timestamp']
         
         elif event_type == 'repeater_disconnected':
             if data['radio_id'] in state.repeaters:
