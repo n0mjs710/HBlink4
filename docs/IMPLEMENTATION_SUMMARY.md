@@ -49,34 +49,53 @@ This document summarizes the major features implemented in the recent developmen
 - `docs/hang_time.md`: Complete documentation (375 lines)
 - `tests/test_hang_time.py`: Test suite
 
-### 3. Two-Tier Stream End Detection ✅
+### 3. Stream End Detection ✅ **IMPLEMENTED** (⏳ Sync patterns TODO)
 
-**Purpose**: Reliable stream end detection with fallback.
+**Purpose**: Detect when DMR transmissions end.
 
-**Tiers**:
-1. **Primary**: DMR terminator frame detection (~60ms after PTT release) ✅ **IMPLEMENTED**
-2. **Fallback**: Timeout after 2.0 seconds of no packets
+**Implemented Methods**:
+
+1. **Fast Terminator Detection** (200ms inactivity) ✅
+   - When new stream tries to start on occupied slot
+   - Check if current stream inactive >200ms
+   - If so, end old stream and allow new one
+   - Provides ~200ms turnaround (acceptable performance)
+
+2. **Timeout Fallback** (2.0s inactivity) ✅
+   - Triggers when no new transmission attempts
+   - Ensures streams eventually clean up
+   - Checked every 1 second by background task
+
+**Not Yet Implemented**:
+
+3. **ETSI Sync Pattern Detection** (⏳ TODO)
+   - Direct terminator frame detection
+   - Would provide ~60ms turnaround (optimal)
+   - Sync patterns don't match ETSI standards in Homebrew packets
+   - May need FEC decoding or protocol investigation
 
 **Implementation**:
-- `_is_dmr_terminator()`: Sync pattern detection for voice terminators
-- `_check_stream_timeouts()`: Timeout-based cleanup
-- `stream_timeout` configuration parameter
-- DMR sync patterns defined in `constants.py`
+- `_handle_stream_start()`: Fast terminator logic (200ms check)
+- `_check_stream_timeouts()`: Fallback timeout cleanup (2.0s)
+- `_is_dmr_terminator()`: Stub for future sync pattern detection
+- `stream_timeout` configuration parameter (default: 2.0s)
 
-**Sync Patterns**:
-- Voice Header: `0x755FD7DF75F7`
-- Voice Terminator: `0xD5DD7DF75D55` (detected and handled)
-- Data Header: `0xDFF57D75DF5D`
-- Data Terminator: `0x7DFFD5F55D5F` (not yet implemented)
+**Result**:
+- ✅ Fast turnaround when operators key up quickly (~200ms)
+- ✅ Reliable cleanup via timeout fallback (2.0s)
+- ⏳ Could be improved with sync pattern detection (~60ms)
 
-**Benefits**:
-- Fast slot turnaround when terminator received (normal case)
-- Cleanup when terminator lost (packet loss case)
-- Prevents stuck streams
-
-### 4. DMR Link Control (LC) Extraction ✅
+### 4. DMR Link Control (LC) Extraction ⏳ **PARTIAL**
 
 **Purpose**: Extract rich metadata from DMR frames.
+
+**What Works**:
+- ✅ Embedded LC from voice frames (bytes 13-14)
+- ✅ Call type from DMRD packet header (immediate availability)
+
+**Not Yet Working**:
+- ⏳ LC from sync frames (needs FEC decoding or investigation)
+- ⏳ Full embedded LC reassembly (4-frame accumulation)
 
 **What's Extracted**:
 - Source and Destination IDs
@@ -232,17 +251,22 @@ if current_stream.missed_header and current_stream.lc is None:
 
 ## Performance Optimizations
 
-1. **Embedded LC**: Only extracted when needed (missed header)
-2. **Stream Tracking**: O(1) lookup per slot
-3. **Hang Time**: Prevents unnecessary stream creation attempts
-4. **Logging**: Debug-level for packet details, INFO for significant events
+1. **Stream Tracking**: O(1) lookup per slot
+2. **Hang Time**: Prevents unnecessary stream creation attempts
+3. **Logging**: Debug-level for packet details, INFO for significant events
 
 ## Known Limitations
 
-1. **Data Terminator Detection**: Voice terminators fully implemented, data terminators TODO
-2. **CRC Validation**: Not currently checked (data already FEC-corrected by repeater)
-3. **Stream Forwarding**: Not yet implemented (next major milestone)
-4. **Embedded LC Accuracy**: Simplified extraction from bytes 13-14; may need refinement for edge cases
+1. **ETSI Sync Pattern Detection**: Not yet working (TODO)
+   - Sync patterns from Homebrew packets don't match ETSI standards
+   - May need FEC decoding or further protocol investigation
+   - Current workaround: 200ms fast terminator detection (acceptable)
+2. **LC from Sync Frames**: Not yet working (TODO)
+   - May require FEC decoding before extraction
+   - Current workaround: Use DMRD packet header data (call_type works fine)
+3. **CRC Validation**: Not currently checked (data already FEC-corrected by repeater)
+4. **Stream Forwarding**: Not yet implemented (next major milestone)
+5. **Embedded LC Reassembly**: Framework in place but 4-frame accumulation not yet complete
 
 ## Next Steps
 
@@ -254,12 +278,7 @@ if current_stream.missed_header and current_stream.lc is None:
    - Needed for reassembling/modifying DMR frames from scratch
    - Will be used for stream forwarding with LC modification
 
-2. **Implement Data Terminator Detection**
-   - Add data sync terminator pattern detection
-   - Extend `_is_dmr_terminator()` for data frames
-   - Test with data transmissions
-
-3. **Talker Alias Caching** (Optional Enhancement)
+2. **Talker Alias Caching** (Optional Enhancement)
    - Cache aliases by source ID
    - Reduce redundant processing
    - TTL-based expiration

@@ -572,7 +572,7 @@ class HBProtocol(DatagramProtocol):
                             'dst_id': int.from_bytes(stream.dst_id, 'big'),
                             'duration': round(duration, 2),
                             'packets': stream.packet_count,
-                            'reason': 'timeout',
+                            'end_reason': 'timeout',
                             'hang_time': hang_time,
                             'call_type': stream.call_type
                         })
@@ -608,7 +608,7 @@ class HBProtocol(DatagramProtocol):
                             'dst_id': int.from_bytes(stream.dst_id, 'big'),
                             'duration': round(duration, 2),
                             'packets': stream.packet_count,
-                            'reason': 'timeout',
+                            'end_reason': 'timeout',
                             'hang_time': hang_time,
                             'call_type': stream.call_type
                         })
@@ -758,14 +758,44 @@ class HBProtocol(DatagramProtocol):
                     return False
             else:
                 # Active stream - different stream_id means contention
-                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
-                              f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
-                              f'dst={int.from_bytes(current_stream.dst_id, "big")}) '
-                              f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
-                              f'dst={int.from_bytes(dst_id, "big")})')
+                # But check if old stream is stale (>200ms since last packet)
+                # This provides fast terminator detection when operators key up quickly
+                time_since_last_packet = current_time - current_stream.last_seen
                 
-                # Deny the new stream - first come, first served
-                return False
+                if time_since_last_packet > 0.2:  # 200ms threshold
+                    # Old stream appears terminated - force end it and allow new stream
+                    duration = current_time - current_stream.start_time
+                    LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot} '
+                               f'ended via inactivity ({time_since_last_packet*1000:.0f}ms since last packet): '
+                               f'src={int.from_bytes(current_stream.rf_src, "big")}, '
+                               f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
+                               f'duration={duration:.2f}s, packets={current_stream.packet_count}')
+                    
+                    # Emit stream_end event
+                    self._events.emit('stream_end', {
+                        'repeater_id': int.from_bytes(repeater.radio_id, 'big'),
+                        'slot': slot,
+                        'src_id': int.from_bytes(current_stream.rf_src, 'big'),
+                        'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
+                        'duration': round(duration, 2),
+                        'packets': current_stream.packet_count,
+                        'talker_alias': current_stream.talker_alias,
+                        'call_type': current_stream.call_type,
+                        'end_reason': 'fast_terminator'
+                    })
+                    
+                    # Allow new stream by falling through to create it
+                else:
+                    # Real contention - stream still active
+                    LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                                  f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
+                                  f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
+                                  f'active {time_since_last_packet*1000:.0f}ms ago) '
+                                  f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
+                                  f'dst={int.from_bytes(dst_id, "big")})')
+                    
+                    # Deny the new stream - first come, first served
+                    return False
         
         # Check if talkgroup is allowed for this repeater
         if not self._is_talkgroup_allowed(repeater, dst_id):
@@ -1011,41 +1041,25 @@ class HBProtocol(DatagramProtocol):
         """
         Check if a DMR packet is a stream terminator.
         
-        DMR terminators have:
-        - Frame type = Voice Sync (0x01) or Data Sync (0x02)
-        - Specific sync pattern in the payload indicating terminator vs header
+        TODO: Terminator detection via sync pattern matching not yet working.
         
-        The terminator uses a different embedded signaling pattern than the header.
-        Voice terminator with LC has sync pattern: 0xD5DD7DF75D55
-        Voice header with LC has sync pattern: 0x755FD7DF75F7
+        Real-world testing shows that sync patterns extracted from Homebrew packets
+        (e.g., '037105f00fac', 'b9e881526173', '031e05240f1c') do not match the
+        documented ETSI patterns (0xD5DD7DF75D55, etc.).
         
-        Returns True if this is a terminator frame, False otherwise.
+        Possible reasons:
+        - FEC encoding not yet decoded
+        - Homebrew protocol uses different encoding
+        - Repeater firmware scrambles the patterns
+        - Reading from wrong offset in packet
+        
+        Current workaround: Fast terminator detection (200ms inactivity threshold)
+        provides ~200ms turnaround instead of ETSI's ~60ms, which is acceptable.
+        
+        Returns False (terminator detection not yet implemented).
         """
-        # Voice Sync and Data Sync frames can be headers or terminators
-        # Need to check the sync pattern in the payload to distinguish
-        if frame_type not in [0x01, 0x02]:
-            return False
-        
-        if len(data) < 26:  # Need at least enough bytes to check sync pattern
-            return False
-        
-        # Extract the sync pattern from the payload (bytes 20-25, 6 bytes total)
-        sync_pattern = data[20:26]
-        
-        # Check for terminator sync patterns
-        # Voice Terminator with LC (VOICE_TERM_LC) - most common
-        VOICE_TERM_SYNC = bytes.fromhex('D5DD7DF75D55')
-        
-        # Data Terminator with LC (DATA_TERM_LC) - used for voice + data calls
-        DATA_TERM_SYNC = bytes.fromhex('7DFFD5F55D5F')
-        
-        # Voice Header with LC for comparison (should NOT match)
-        # VOICE_HEADER_SYNC = bytes.fromhex('755FD7DF75F7')
-        # DATA_HEADER_SYNC = bytes.fromhex('DFF57D75DF5D')
-        
-        if sync_pattern == VOICE_TERM_SYNC or sync_pattern == DATA_TERM_SYNC:
-            return True
-        
+        # TODO: Investigate proper sync pattern decoding for Homebrew protocol
+        # May need FEC decoding or different approach
         return False
     
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
@@ -1071,25 +1085,23 @@ class HBProtocol(DatagramProtocol):
         _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
         
         # Check if this is a stream terminator (immediate end detection)
+        # Note: Currently always returns False due to Homebrew protocol limitations
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
         
-        if _frame_type in [0x01, 0x02]:  # Log all sync frames for debugging
-            LOGGER.debug(f'Sync frame: repeater={int.from_bytes(radio_id, "big")}, '
-                        f'slot={_slot}, frame_type={_frame_type}, '
-                        f'sync_pattern={data[20:26].hex()}, '
-                        f'is_terminator={_is_terminator}')
-        
         # Extract LC from voice sync frames (header/terminator)
+        # TODO: LC extraction from sync frames needs FEC decoding
+        # The sync patterns appear to be encoded/scrambled in Homebrew protocol
+        # Need to investigate proper decoding method before enabling this
         _lc = None
-        if _frame_type in [1, 2]:  # Voice sync or data sync
-            _lc = extract_voice_lc(data)
-            if _lc and _lc.is_valid:
-                LOGGER.debug(f'Extracted LC from sync frame: '
-                           f'FLCO={_lc.flco}, '
-                           f'src={_lc.src_id}, '
-                           f'dst={_lc.dst_id}, '
-                           f'group={_lc.is_group_call}, '
-                           f'emergency={_lc.is_emergency}')
+        # if _frame_type in [1, 2]:  # Voice sync or data sync - NOT YET IMPLEMENTED
+        #     _lc = extract_voice_lc(data)
+        #     if _lc and _lc.is_valid:
+        #         LOGGER.debug(f'Extracted LC from sync frame: '
+        #                    f'FLCO={_lc.flco}, '
+        #                    f'src={_lc.src_id}, '
+        #                    f'dst={_lc.dst_id}, '
+        #                    f'group={_lc.is_group_call}, '
+        #                    f'emergency={_lc.is_emergency}')
         
         # Handle stream tracking
         stream_valid = self._handle_stream_packet(repeater, _rf_src, _dst_id, _slot, _stream_id, _call_type)

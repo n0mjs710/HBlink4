@@ -74,30 +74,35 @@ Add to the `global` section of your configuration file:
   - Longer values improve conversation flow but reduce slot availability
   - Shorter values risk conversation interruption
 
-### Two-Tier Detection System
+### Stream End Detection Methods
 
-**Tier 1: DMR Terminator Frame (Primary)**
-- DMR protocol includes explicit terminator frames
-- Detected in frame_type bits and sync pattern
-- Provides immediate stream end notification (~60ms after PTT release)
-- No delay in slot cleanup
+**Primary: Fast Terminator Detection (200ms inactivity)**
+- When a new stream attempts to start on an occupied slot
+- Check if current stream hasn't received packets for >200ms
+- If so, end old stream immediately and allow new stream
+- Provides ~200ms turnaround (vs ETSI's ~60ms goal)
+- Works reliably without needing sync pattern decoding
 
-**Tier 2: Timeout Fallback (Safety)**
-- Used only when terminator frame is lost due to packet loss
-- Triggers after `stream_timeout` (2.0s default)
-- Ensures slots don't stay occupied indefinitely
-- Rare occurrence under normal network conditions
+**Fallback: Timeout Detection (2.0s inactivity)**
+- Triggers after `stream_timeout` (2.0s default) with no packets
+- Used when no new transmission attempts to take the slot
+- Ensures streams eventually clean up even if operators don't key up again
+- Checked every 1 second by background task
+
+**Future Goal: ETSI Sync Pattern Detection (⏳ TODO)**
+- Direct terminator frame detection from sync patterns
+- Would provide ~60ms turnaround (fastest possible)
+- Not yet working - sync patterns don't match ETSI standards in Homebrew protocol
+- May require FEC decoding or protocol investigation
 
 ### DMR Packet Timing
 
-Understanding DMR timing clarifies why we need both detection methods:
+Understanding DMR timing clarifies the detection behavior:
 
 - **Voice Packet Rate**: ~60ms per packet (16.67 packets/second)
 - **Typical Transmission**: 10-60 packets (0.6-3.6 seconds)
-- **Terminator Frame**: Last packet in transmission with special sync pattern
-- **Fast Turnaround**: Operators can re-key in 0.1-0.5 seconds
-- **Packet Loss**: Occasional packets may be lost (including terminator)
-- **stream_timeout**: Fallback cleanup if terminator is lost
+- **Fast Detection**: New stream can start ~200ms after last packet (fast terminator)
+- **Slow Detection**: 2.0s timeout if no one else tries to transmit (fallback)
 - **hang_time**: Slot reservation to protect the conversation
 
 ## How It Works

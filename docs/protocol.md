@@ -148,19 +148,32 @@ A server will, at a minimum, need to track a repeater in the following states:
 
    **DMR Stream Terminator Detection:**
    
-   DMR transmissions end with an explicit terminator frame:
+   ⚠️ **NOT YET IMPLEMENTED**: Sync pattern-based terminator detection not working yet.
+   
+   Real-world testing shows that sync patterns extracted from Homebrew packets 
+   (e.g., `037105f00fac`, `b9e881526173`) do not match the documented ETSI standard 
+   patterns shown below. This may be due to FEC encoding, protocol differences, or 
+   other factors that need investigation.
+   
+   **Current Implementation: Fast Terminator Detection (200ms threshold)**
+   - When a new stream attempts to start on an occupied slot
+   - Check if current stream hasn't received packets for >200ms
+   - If so, consider old stream terminated and allow new stream
+   - Provides ~200ms turnaround vs ETSI's ~60ms (acceptable tradeoff)
+   - Falls back to 2.0s timeout if no new transmission attempts
+   
+   **Future Goal: ETSI Sync Pattern Detection**
+   
+   DMR transmissions should end with an explicit terminator frame:
    - Frame Type = Voice Sync (0x01) or Data Sync (0x02)
    - Payload contains specific sync pattern indicating terminator vs header
-   - When detected, stream ends immediately (~60ms after PTT release)
-   - Enables fast slot turnaround for new transmissions
+   - Would enable ~60ms detection after PTT release
    
-   **Sync Patterns** (in payload bytes 20-25):
+   **ETSI Sync Patterns** (in payload bytes 20-25) - not yet detectable:
    - Voice Header: `0x755FD7DF75F7`
-   - Voice Terminator: `0xD5DD7DF75D55` ✅ **IMPLEMENTED**
+   - Voice Terminator: `0xD5DD7DF75D55` ⏳ **TODO**
    - Data Header: `0xDFF57D75DF5D`
-   - Data Terminator: `0x7DFFD5F55D5F` ✅ **IMPLEMENTED**
-   
-   HBlink4 detects both voice and data terminators and ends streams immediately. Falls back to 2.0s timeout when terminator not received (packet loss).
+   - Data Terminator: `0x7DFFD5F55D5F` ⏳ **TODO**
 
 ## Connection Flow
 

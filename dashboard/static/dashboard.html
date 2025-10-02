@@ -563,8 +563,9 @@
                 case 'stream_update':
                     return `Stream update: ${data.packets} packets, ${data.duration}s`;
                 case 'stream_end':
+                    const endReason = data.end_reason || data.reason || 'unknown';
                     const hangTime = data.hang_time ? `, entering hang time (${data.hang_time}s)` : '';
-                    return `Stream ended (${data.reason}): ${data.packets} packets, ${data.duration}s${hangTime}`;
+                    return `Stream ended (${endReason}): ${data.packets} packets, ${data.duration}s${hangTime}`;
                 case 'hang_time_expired':
                     return `Hang time expired: Repeater ${data.repeater_id} slot ${data.slot}`;
                 default:
