@@ -579,6 +579,11 @@ class HBProtocol(DatagramProtocol):
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
                         LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 1')
+                        # Emit hang_time_expired event so dashboard clears the slot
+                        self._events.emit('hang_time_expired', {
+                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'slot': 1
+                        })
                         repeater.slot1_stream = None
             
             # Check slot 2
@@ -610,6 +615,11 @@ class HBProtocol(DatagramProtocol):
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
                         LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 2')
+                        # Emit hang_time_expired event so dashboard clears the slot
+                        self._events.emit('hang_time_expired', {
+                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'slot': 2
+                        })
                         repeater.slot2_stream = None
 
     def datagramReceived(self, data: bytes, addr: tuple):
@@ -717,7 +727,7 @@ class HBProtocol(DatagramProtocol):
             return False
     
     def _handle_stream_start(self, repeater: RepeaterState, rf_src: bytes, dst_id: bytes, 
-                             slot: int, stream_id: bytes) -> bool:
+                             slot: int, stream_id: bytes, call_type_bit: int = 1) -> bool:
         """
         Handle the start of a new stream on a repeater slot.
         Returns True if the stream can proceed, False if there's a contention.
@@ -772,7 +782,8 @@ class HBProtocol(DatagramProtocol):
             start_time=current_time,
             last_seen=current_time,
             stream_id=stream_id,
-            packet_count=1
+            packet_count=1,
+            call_type="group" if call_type_bit == 1 else "private"  # Set from packet header bit
         )
         
         repeater.set_slot_stream(slot, new_stream)
@@ -795,7 +806,7 @@ class HBProtocol(DatagramProtocol):
         return True
     
     def _handle_stream_packet(self, repeater: RepeaterState, rf_src: bytes, dst_id: bytes,
-                              slot: int, stream_id: bytes) -> bool:
+                              slot: int, stream_id: bytes, call_type_bit: int = 1) -> bool:
         """
         Handle a packet for an ongoing stream.
         Returns True if the packet is valid for the current stream, False otherwise.
@@ -804,7 +815,7 @@ class HBProtocol(DatagramProtocol):
         
         if not current_stream:
             # No active stream - this is a new stream
-            return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id)
+            return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id, call_type_bit)
         
         # Check if this packet belongs to the current stream
         if current_stream.stream_id != stream_id:
@@ -954,7 +965,6 @@ class HBProtocol(DatagramProtocol):
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
                 'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
                 'address': f'{repeater.ip}:{repeater.port}',
-                'color_code': int.from_bytes(repeater.colorcode, 'big') if repeater.colorcode else 0,
                 'talkgroups': talkgroups
             })
             
@@ -1075,7 +1085,7 @@ class HBProtocol(DatagramProtocol):
                            f'emergency={_lc.is_emergency}')
         
         # Handle stream tracking
-        stream_valid = self._handle_stream_packet(repeater, _rf_src, _dst_id, _slot, _stream_id)
+        stream_valid = self._handle_stream_packet(repeater, _rf_src, _dst_id, _slot, _stream_id, _call_type)
         
         if not stream_valid:
             # Stream contention or not allowed - drop packet silently

@@ -59,7 +59,7 @@ A server will, at a minimum, need to track a repeater in the following states:
    | RX Frequency  | 16     | 9      | Receive frequency |
    | TX Frequency  | 25     | 9      | Transmit frequency |
    | TX Power      | 34     | 2      | Transmit power |
-   | Color Code    | 36     | 2      | DMR color code |
+   | Color Code    | 36     | 2      | DMR color code (RF air interface only, not used by server) |
    | Latitude      | 38     | 8      | Station latitude |
    | Longitude     | 46     | 9      | Station longitude |
    | Height        | 55     | 3      | Antenna height |

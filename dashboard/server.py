@@ -158,20 +158,19 @@ class EventReceiver:
                 state.streams[key]['duration'] = data['duration']
                 state.streams[key]['end_reason'] = data['reason']
                 state.streams[key]['hang_time'] = data.get('hang_time', 0)
-                # Remove after hang time expires (keep for display)
-                hang_delay = data.get('hang_time', 5)
-                asyncio.create_task(self.remove_stream_delayed(key, hang_delay))
+        
+        elif event_type == 'hang_time_expired':
+            # Hang time has expired, clear the slot
+            key = f"{data['repeater_id']}.{data['slot']}"
+            if key in state.streams:
+                del state.streams[key]
+                logger.debug(f"Hang time expired for {key}")
         
         # Add to event log
         state.events.append(event)
         
         # Broadcast to all WebSocket clients
         await self.broadcast(event)
-    
-    async def remove_stream_delayed(self, key: str, delay: int):
-        """Remove ended stream after delay"""
-        await asyncio.sleep(delay)
-        state.streams.pop(key, None)
     
     async def broadcast(self, event: dict):
         """Send event to all connected WebSocket clients"""
