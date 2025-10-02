@@ -41,6 +41,14 @@
             border-radius: 6px;
             font-size: 14px;
             font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+        
+        .connection-status:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
         
         .connection-status.connected { background: #10b981; color: white; }
@@ -400,6 +408,7 @@
             const el = document.getElementById('connectionStatus');
             el.textContent = connected ? 'Connected' : 'Disconnected';
             el.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+            el.title = connected ? 'Click to reload page' : 'Click to reconnect';
         }
         
         function updateStats(stats, repeaters, streams) {
@@ -641,6 +650,11 @@
                 ws.send('ping');
             }
         }, 30000);
+        
+        // Add click handler to connection status badge
+        document.getElementById('connectionStatus').addEventListener('click', () => {
+            location.reload();
+        });
         
         // Initialize dashboard
         loadConfig();
