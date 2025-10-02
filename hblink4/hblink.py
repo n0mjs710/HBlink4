@@ -1070,28 +1070,34 @@ class HBProtocol(DatagramProtocol):
 
     def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
         """
-        Check if a DMR packet is a stream terminator.
+        Determine if a DMR packet is a stream terminator by checking the frame type.
         
-        TODO: Terminator detection via sync pattern matching not yet working.
+        In the Homebrew protocol, terminators are indicated in byte 15 of the packet:
+        - Bits 4-5 (_frame_type): Must be 0x2 (HBPF_DATA_SYNC - data sync frame)
+        - Bits 0-3 (_dtype_vseq): Must be 0x2 (HBPF_SLT_VTERM - voice terminator)
         
-        Real-world testing shows that sync patterns extracted from Homebrew packets
-        (e.g., '037105f00fac', 'b9e881526173', '031e05240f1c') do not match the
-        documented ETSI patterns (0xD5DD7DF75D55, etc.).
+        This is much simpler than ETSI sync pattern extraction, as the Homebrew
+        protocol explicitly flags terminator frames in the packet header.
         
-        Possible reasons:
-        - FEC encoding not yet decoded
-        - Homebrew protocol uses different encoding
-        - Repeater firmware scrambles the patterns
-        - Reading from wrong offset in packet
+        Args:
+            data: The full DMRD packet (including 20-byte Homebrew header + 33-byte DMR data)
+            frame_type: The frame type extracted from byte 15, bits 4-5
+                       (0 = voice, 1 = voice sync, 2 = data sync)
         
-        Current workaround: Fast terminator detection (200ms inactivity threshold)
-        provides ~200ms turnaround instead of ETSI's ~60ms, which is acceptable.
+        Returns:
+            bool: True if this is a terminator frame, False otherwise
         
-        Returns False (terminator detection not yet implemented).
+        Note:
+            This enables immediate terminator detection (~60ms latency) instead of
+            timeout-based detection (~200ms). HBlink3 uses this same method.
         """
-        # TODO: Investigate proper sync pattern decoding for Homebrew protocol
-        # May need FEC decoding or different approach
-        return False
+        # Extract the data type / voice sequence from bits 0-3 of byte 15
+        _bits = data[15]
+        _dtype_vseq = _bits & 0xF
+        
+        # Terminator: frame_type == 2 (DATA_SYNC) and dtype_vseq == 2 (SLT_VTERM)
+        # Constants: HBPF_DATA_SYNC = 0x2, HBPF_SLT_VTERM = 0x2
+        return frame_type == 0x2 and _dtype_vseq == 0x2
     
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""

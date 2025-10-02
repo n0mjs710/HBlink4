@@ -513,7 +513,20 @@
             const source = stream?.src_id || '—';
             const destination = stream?.dst_id || '—';
             const callType = stream ? (callTypeMap[stream.call_type] || stream.call_type || 'Unknown') : '—';
-            const duration = stream?.duration ? stream.duration.toFixed(1) + 's' : '—';
+            
+            // Calculate real-time duration for active streams
+            let duration = '—';
+            if (stream) {
+                if (stream.status === 'active' && stream.start_time) {
+                    // For active streams, calculate elapsed time from start_time
+                    const elapsed = Date.now() / 1000 - stream.start_time;
+                    duration = elapsed.toFixed(1) + 's';
+                } else if (stream.duration !== undefined) {
+                    // For ended/hang_time streams, use the final duration
+                    duration = stream.duration.toFixed(1) + 's';
+                }
+            }
+            
             const packets = stream?.packets || 0;
             const talkerAlias = stream?.talker_alias ? `"${stream.talker_alias}"` : '';
             
@@ -655,6 +668,16 @@
                 document.getElementById('statTotalDuration').textContent = formatDuration(data.stats.total_duration_today || 0);
             });
         }
+        
+        // Update active stream durations every second
+        setInterval(() => {
+            // Check if there are any active streams
+            const hasActiveStreams = state.streams.some(s => s.status === 'active');
+            if (hasActiveStreams && state.repeaters) {
+                // Update the display to show live duration counters
+                updateRepeaters(state.repeaters);
+            }
+        }, 1000);
         
         // Keep connection alive
         setInterval(() => {
