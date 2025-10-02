@@ -156,7 +156,7 @@ class EventReceiver:
                 state.streams[key]['status'] = 'hang_time'
                 state.streams[key]['packets'] = data['packets']
                 state.streams[key]['duration'] = data['duration']
-                state.streams[key]['end_reason'] = data['reason']
+                state.streams[key]['end_reason'] = data.get('end_reason', 'unknown')
                 state.streams[key]['hang_time'] = data.get('hang_time', 0)
         
         elif event_type == 'hang_time_expired':
