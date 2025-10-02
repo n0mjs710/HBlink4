@@ -1092,10 +1092,6 @@ class HBProtocol(DatagramProtocol):
         _frame_type = (_bits & 0x30) >> 4  # 0 = voice, 1 = voice sync, 2 = data sync, 3 = unused
         _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
         
-        # Debug: Log the bits and call type for troubleshooting
-        LOGGER.debug(f'DMR packet bits: _bits=0x{_bits:02x}, _call_type={_call_type}, '
-                    f'will be: {"private" if _call_type else "group"}')
-        
         # Check if this is a stream terminator (immediate end detection)
         # Note: Currently always returns False due to Homebrew protocol limitations
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
