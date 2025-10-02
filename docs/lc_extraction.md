@@ -4,6 +4,8 @@
 
 HBlink4 extracts DMR Link Control (LC) information from voice frames to provide detailed metadata about transmissions. This information is available in addition to the basic packet headers.
 
+**Implementation:** HBlink4 uses the mature and proven **dmr_utils3** library for all LC decoding. This provides reliable FEC (Forward Error Correction), BPTC decoding, and proper handling of the complex DMR encoding schemes.
+
 ## What is Link Control?
 
 Link Control is metadata embedded in DMR voice frames that describes the call parameters:

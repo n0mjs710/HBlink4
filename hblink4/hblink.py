@@ -30,6 +30,9 @@ LOGGER = logging.getLogger(__name__)
 import os
 import sys
 
+# DMR protocol utilities from mature dmr_utils3 library
+from dmr_utils3 import decode, bptc
+
 # Try package-relative imports first, fall back to direct imports
 try:
     from .constants import (
@@ -132,18 +135,16 @@ class DMRLC:
 
 def decode_lc(lc_bytes: bytes) -> DMRLC:
     """
-    Decode DMR Link Control from 9 bytes (72 bits)
+    Decode DMR Link Control from 9 bytes.
     
-    LC Structure (9 bytes = 72 bits):
-    - FLCO (6 bits): Full Link Control Opcode
-    - FID (8 bits): Feature ID  
-    - Service Options (8 bits)
-    - Destination ID (24 bits)
-    - Source ID (24 bits)
-    - CRC (16 bits) - not checked here
+    Uses dmr_utils3's proven decoding when available, otherwise falls back to simple byte extraction.
+    The LC bytes from dmr_utils3.bptc.decode_emblc() are already decoded and byte-aligned:
+    - Bytes 0-2: LC Options (always 0x00 0x00 0x20 for group voice)
+    - Bytes 3-5: Destination ID (24-bit big-endian)
+    - Bytes 6-8: Source ID (24-bit big-endian)
     
     Args:
-        lc_bytes: 9 bytes of LC data
+        lc_bytes: 9 bytes of LC data (from decode_emblc or voice_head_term)
         
     Returns:
         DMRLC object with decoded information
@@ -154,22 +155,24 @@ def decode_lc(lc_bytes: bytes) -> DMRLC:
         return lc
     
     try:
-        # FLCO (6 bits) + FID (2 bits MSB)
-        lc.flco = (lc_bytes[0] >> 2) & 0x3F
-        lc.fid = ((lc_bytes[0] & 0x03) << 6) | ((lc_bytes[1] >> 2) & 0x3F)
+        # LC bytes from dmr_utils3 are already decoded and byte-aligned
+        # Bytes 0-2: LC_OPT (service options)
+        lc.service_options = lc_bytes[0]  # First byte has the options
         
-        # Service Options (8 bits)
-        lc.service_options = ((lc_bytes[1] & 0x03) << 6) | ((lc_bytes[2] >> 2) & 0x3F)
+        # Bytes 3-5: Destination ID (24-bit big-endian integer)
+        lc.dst_id = int.from_bytes(lc_bytes[3:6], 'big')
         
-        # Destination ID (24 bits)
-        lc.dst_id = ((lc_bytes[2] & 0x03) << 22) | (lc_bytes[3] << 14) | (lc_bytes[4] << 6) | ((lc_bytes[5] >> 2) & 0x3F)
+        # Bytes 6-8: Source ID (24-bit big-endian integer)  
+        lc.src_id = int.from_bytes(lc_bytes[6:9], 'big')
         
-        # Source ID (24 bits)
-        lc.src_id = ((lc_bytes[5] & 0x03) << 22) | (lc_bytes[6] << 14) | (lc_bytes[7] << 6) | ((lc_bytes[8] >> 2) & 0x3F)
+        # Determine FLCO from service options
+        # Group call: 0x00, Private call: 0x03
+        lc.flco = 0 if lc.service_options == 0 else 3
         
         lc.is_valid = True
         
-    except (IndexError, ValueError):
+    except (IndexError, ValueError) as e:
+        LOGGER.debug(f'Error decoding LC: {e}')
         lc.is_valid = False
     
     return lc
@@ -177,11 +180,10 @@ def decode_lc(lc_bytes: bytes) -> DMRLC:
 
 def extract_voice_lc(data: bytes) -> Optional[DMRLC]:
     """
-    Extract Link Control from Voice Header/Terminator frame
+    Extract Link Control from Voice Header/Terminator frame using dmr_utils3.
     
-    Voice sync frames contain full LC in the payload after the sync pattern.
-    Sync pattern is at bytes 13-17 (18-22 in full DMRD packet starting at byte 20)
-    LC follows the sync pattern.
+    Voice sync frames contain BPTC-encoded full LC. The dmr_utils3 library 
+    handles the complex BPTC(196,96) decoding with FEC.
     
     Args:
         data: Full DMRD packet (53+ bytes)
@@ -192,17 +194,22 @@ def extract_voice_lc(data: bytes) -> Optional[DMRLC]:
     if len(data) < 53:
         return None
     
-    # DMR payload starts at byte 20
-    # Sync is at bytes 13-17 of payload (bytes 33-37 of packet)
-    # LC data follows sync at byte 18 of payload (byte 38 of packet)
-    # We need 9 bytes of LC
-    
     try:
-        lc_start = 20 + 18  # packet start + payload offset
-        lc_bytes = data[lc_start:lc_start+9]
-        return decode_lc(lc_bytes)
-    except IndexError:
-        return None
+        # Extract the 33-byte DMR payload
+        dmr_payload = data[20:53]
+        
+        # Use dmr_utils3's proven voice_head_term decoder
+        # This handles BPTC decoding, deinterleaving, and FEC
+        decoded = decode.voice_head_term(dmr_payload)
+        
+        if decoded and 'LC' in decoded:
+            # voice_head_term returns LC as bytes in format: [Options:3][Dst:3][Src:3]
+            return decode_lc(decoded['LC'])
+            
+    except Exception as e:
+        LOGGER.debug(f'Error extracting voice LC with dmr_utils3: {e}')
+        
+    return None
 
 
 def extract_embedded_lc(data: bytes, frame_num: int) -> Optional[bytes]:
@@ -274,23 +281,39 @@ def extract_embedded_lc(data: bytes, frame_num: int) -> Optional[bytes]:
 
 def decode_embedded_lc(lc_bits: bytearray) -> Optional[DMRLC]:
     """
-    Decode full LC from accumulated embedded LC bits.
+    Decode full LC from accumulated embedded LC bits using dmr_utils3.
     
-    Once we have all 4 frames worth of embedded LC (8 bytes total),
-    we can reconstruct the LC information.
+    Embedded LC fragments from bursts B-E are collected (4 x 32 bits = 128 bits).
+    The dmr_utils3.bptc.decode_emblc() function handles Hamming decoding and 
+    checksum validation to reconstruct the 9-byte LC.
     
     Args:
-        lc_bits: Accumulated LC bits from 4 frames (should be 8 bytes)
+        lc_bits: Accumulated LC bits from 4 frames (should be 128 bits / 16 bytes)
         
     Returns:
         DMRLC object if successfully decoded, None otherwise
     """
-    if len(lc_bits) < 8:
+    if len(lc_bits) < 16:  # Need 128 bits = 16 bytes
         return None
     
-    # Embedded LC has the same structure as full LC, just reassembled
-    # from fragments across multiple frames
-    return decode_lc(bytes(lc_bits[:9]))  # Use first 9 bytes for LC
+    try:
+        # Convert to bitarray for dmr_utils3
+        from bitarray import bitarray
+        bits = bitarray(endian='big')
+        bits.frombytes(bytes(lc_bits[:16]))
+        
+        # Use dmr_utils3's proven embedded LC decoder
+        # This handles Hamming FEC, checksum validation, and deinterleaving
+        lc_bytes = bptc.decode_emblc(bits)
+        
+        if lc_bytes and len(lc_bytes) >= 9:
+            # decode_emblc returns 9 bytes: [Options:3][Dst:3][Src:3]
+            return decode_lc(lc_bytes)
+            
+    except Exception as e:
+        LOGGER.debug(f'Error decoding embedded LC with dmr_utils3: {e}')
+        
+    return None
 
 
 def extract_talker_alias(lc: DMRLC, data: bytes) -> Optional[tuple[int, int, bytes]]:
