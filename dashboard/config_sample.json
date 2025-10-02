@@ -1,0 +1,7 @@
+{
+    "server_name": "My HBlink4 Server",
+    "server_description": "Amateur Radio DMR Network",
+    "dashboard_title": "HBlink4 Dashboard",
+    "refresh_interval": 1000,
+    "max_events": 50
+}

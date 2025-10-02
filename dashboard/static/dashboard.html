@@ -23,6 +23,17 @@
             align-items: center;
         }
         
+        .header-branding {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .logo {
+            height: 60px;
+            width: auto;
+        }
+        
         h1 { color: #38bdf8; font-size: 32px; }
         
         .connection-status {
@@ -52,18 +63,12 @@
         .stat-label { color: #94a3b8; font-size: 12px; margin-bottom: 5px; }
         .stat-value { color: #e2e8f0; font-size: 24px; font-weight: 600; }
         
-        .grid { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); 
-            gap: 20px; 
-            margin-bottom: 20px;
-        }
-        
         .card { 
             background: #1e293b; 
             border-radius: 8px; 
             padding: 20px; 
             box-shadow: 0 4px 6px rgba(0,0,0,0.3); 
+            margin-bottom: 20px;
         }
         
         .card h2 { 
@@ -74,22 +79,160 @@
             letter-spacing: 0.5px;
         }
         
-        table { width: 100%; border-collapse: collapse; }
-        
-        th, td { 
-            text-align: left; 
-            padding: 12px 10px; 
-            border-bottom: 1px solid #334155; 
+        /* Repeater Card Layout */
+        .repeater-card {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: stretch;
         }
         
-        th { 
-            color: #64748b; 
-            font-weight: 500; 
-            font-size: 12px; 
+        .repeater-info {
+            flex: 1;
+            padding-right: 20px;
+        }
+        
+        .repeater-header {
+            font-size: 18px;
+            font-weight: 600;
+            color: #38bdf8;
+            margin-bottom: 8px;
+        }
+        
+        .repeater-location {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+        
+        .repeater-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: #64748b;
+        }
+        
+        .repeater-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .repeater-meta-label {
+            color: #94a3b8;
+            font-weight: 500;
+        }
+        
+        /* Slot Display */
+        .slots-container {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 500px;
+        }
+        
+        .slot {
+            background: #0f172a;
+            border-radius: 4px;
+            padding: 8px 12px;
+            border-left: 3px solid #334155;
+            display: grid;
+            grid-template-columns: 70px 90px 90px 120px 100px 1fr;
+            gap: 12px;
+            align-items: center;
+            font-size: 13px;
+        }
+        
+        .slot.idle {
+            border-left-color: #334155;
+        }
+        
+        .slot.receiving {
+            border-left-color: #10b981;
+            background: linear-gradient(90deg, rgba(16,185,129,0.1) 0%, rgba(15,23,42,1) 100%);
+        }
+        
+        .slot.transmitting {
+            border-left-color: #f59e0b;
+            background: linear-gradient(90deg, rgba(245,158,11,0.1) 0%, rgba(15,23,42,1) 100%);
+        }
+        
+        .slot.hang_time {
+            border-left-color: #6366f1;
+            background: linear-gradient(90deg, rgba(99,102,241,0.1) 0%, rgba(15,23,42,1) 100%);
+        }
+        
+        .slot-col {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        
+        .slot-col-label {
+            color: #64748b;
+            font-size: 10px;
+            font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
-        td { font-size: 14px; }
+        .slot-col-value {
+            color: #e2e8f0;
+            font-weight: 500;
+        }
+        
+        .slot-col-value.empty {
+            color: #475569;
+            font-style: italic;
+        }
+        
+        .slot-col-value.highlight {
+            color: #38bdf8;
+            font-weight: 600;
+        }
+        
+        .slot-status-badge {
+            padding: 3px 8px;
+            border-radius: 8px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            text-align: center;
+        }
+        
+        .slot-status-badge.idle {
+            background: #334155;
+            color: #94a3b8;
+        }
+        
+        .slot-status-badge.receiving {
+            background: #10b981;
+            color: white;
+        }
+        
+        .slot-status-badge.transmitting {
+            background: #f59e0b;
+            color: white;
+        }
+        
+        .slot-status-badge.hang_time {
+            background: #6366f1;
+            color: white;
+        }
+        
+        .slot-talker {
+            color: #94a3b8;
+            font-size: 11px;
+            font-style: italic;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         
         .status { 
             display: inline-block; 
@@ -103,8 +246,6 @@
         .status.active { background: #10b981; color: white; }
         .status.hang { background: #f59e0b; color: white; }
         .status.connected { background: #3b82f6; color: white; }
-        .status.ended_terminator { background: #6366f1; color: white; }
-        .status.ended_timeout { background: #ef4444; color: white; }
         
         .event { 
             padding: 12px; 
@@ -148,7 +289,13 @@
 <body>
     <div class="container">
         <header>
-            <h1>📡 HBlink4 Dashboard</h1>
+            <div class="header-branding">
+                <img src="/static/HBlink.png" alt="HBlink" class="logo">
+                <div>
+                    <h1 id="dashboardTitle">HBlink4 Dashboard</h1>
+                    <div style="color: #64748b; font-size: 14px; margin-top: 4px;" id="serverName"></div>
+                </div>
+            </div>
             <div class="connection-status" id="connectionStatus">Connecting...</div>
         </header>
         
@@ -171,42 +318,8 @@
             </div>
         </div>
         
-        <div class="grid">
-            <div class="card">
-                <h2>Connected Repeaters</h2>
-                <table id="repeatersTable">
-                    <thead>
-                        <tr>
-                            <th>Radio ID</th>
-                            <th>Callsign</th>
-                            <th>Status</th>
-                            <th>Talkgroups</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-            
-            <div class="card">
-                <h2>Active Streams</h2>
-                <div id="streamsContainer">
-                    <table id="streamsTable">
-                        <thead>
-                            <tr>
-                                <th>Repeater</th>
-                                <th>Slot</th>
-                                <th>Source → Dest</th>
-                                <th>Duration</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
-        <div class="card">
+        <!-- Repeaters with Inline Slot Status -->
+        <div id="repeatersContainer"></div>        <div class="card">
             <h2>Recent Events</h2>
             <div id="eventsLog"></div>
         </div>
@@ -215,6 +328,32 @@
     <script>
         let ws = null;
         let reconnectTimeout = null;
+        let state = {
+            repeaters: [],
+            streams: [],
+            events: [],
+            stats: {
+                total_streams_today: 0,
+                total_packets_today: 0
+            },
+            config: {}
+        };
+        
+        // Load configuration
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                state.config = config;
+                
+                // Update page title and server name
+                document.title = config.dashboard_title || 'HBlink4 Dashboard';
+                document.getElementById('dashboardTitle').textContent = config.dashboard_title || 'HBlink4 Dashboard';
+                document.getElementById('serverName').textContent = config.server_name || '';
+            } catch (error) {
+                console.error('Failed to load config:', error);
+            }
+        }
         
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -240,10 +379,15 @@
                 const data = JSON.parse(event.data);
                 
                 if (data.type === 'initial_state') {
-                    updateRepeaters(data.data.repeaters);
-                    updateStreams(data.data.streams);
-                    updateEvents(data.data.events);
-                    updateStats(data.data.stats, data.data.repeaters, data.data.streams);
+                    state.repeaters = data.data.repeaters;
+                    state.streams = data.data.streams;
+                    state.events = data.data.events;
+                    state.stats = data.data.stats;
+                    
+                    updateRepeaters(state.repeaters);
+                    updateStreams(state.streams);
+                    updateEvents(state.events);
+                    updateStats(state.stats, state.repeaters, state.streams);
                 } else {
                     handleEvent(data);
                 }
@@ -258,9 +402,11 @@
         
         function updateStats(stats, repeaters, streams) {
             document.getElementById('statRepeaters').textContent = 
-                repeaters.filter(r => r.status === 'connected').length;
+                Array.isArray(repeaters) ? repeaters.filter(r => r.status === 'connected').length : 
+                (repeaters ? Object.keys(repeaters).length : 0);
             document.getElementById('statStreams').textContent = 
-                streams.filter(s => s.status === 'active').length;
+                Array.isArray(streams) ? streams.filter(s => s.status === 'active').length :
+                (streams ? Object.keys(streams).length : 0);
             document.getElementById('statTotalStreams').textContent = 
                 stats.total_streams_today.toLocaleString();
             document.getElementById('statTotalPackets').textContent = 
@@ -268,46 +414,122 @@
         }
         
         function updateRepeaters(repeaters) {
-            const tbody = document.querySelector('#repeatersTable tbody');
+            const container = document.getElementById('repeatersContainer');
             
             if (repeaters.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No repeaters connected</td></tr>';
+                container.innerHTML = '<div class="card"><p style="color: #64748b; text-align: center; padding: 20px;">No repeaters connected</p></div>';
                 return;
             }
             
-            tbody.innerHTML = repeaters
+            // Get streams data to show on slots
+            const streams = state.streams || [];
+            
+            container.innerHTML = repeaters
                 .filter(r => r.status === 'connected')
-                .map(r => `
-                    <tr>
-                        <td><strong>${r.radio_id}</strong></td>
-                        <td>${r.callsign || 'UNKNOWN'}</td>
-                        <td><span class="status connected">Connected</span></td>
-                        <td class="tg-list">TG ${r.talkgroups.join(', ')}</td>
-                    </tr>
-                `).join('');
+                .map(r => {
+                    // Find active streams for this repeater
+                    const slot1Stream = streams.find(s => s.repeater_id == r.radio_id && s.slot == 1 && s.status !== 'ended');
+                    const slot2Stream = streams.find(s => s.repeater_id == r.radio_id && s.slot == 2 && s.status !== 'ended');
+                    
+                    return `
+                        <div class="repeater-card">
+                            <div class="repeater-info">
+                                <div class="repeater-header">
+                                    📡 ${r.callsign || 'Unknown'} (${r.radio_id})
+                                </div>
+                                <div class="repeater-location">
+                                    ${r.location || 'Location unknown'}
+                                </div>
+                                <div class="repeater-meta">
+                                    <div class="repeater-meta-item">
+                                        <span class="repeater-meta-label">Color Code:</span>
+                                        <span>${r.color_code || 'N/A'}</span>
+                                    </div>
+                                    ${r.talkgroups && r.talkgroups.length > 0 ? `
+                                    <div class="repeater-meta-item">
+                                        <span class="repeater-meta-label">TGs:</span>
+                                        <span>${r.talkgroups.join(', ')}</span>
+                                    </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                            
+                            <div class="slots-container">
+                                ${renderSlot(1, slot1Stream)}
+                                ${renderSlot(2, slot2Stream)}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+        }
+        
+        function renderSlot(slotNum, stream) {
+            // Determine status and direction
+            let status = 'idle';
+            let statusLabel = 'IDLE';
+            
+            if (stream) {
+                status = 'receiving';  // Default for now, will change when we add TX
+                statusLabel = '⬇️ RX';
+                
+                if (stream.status === 'hang_time') {
+                    status = 'hang_time';
+                    statusLabel = 'HANG';
+                }
+            }
+            
+            // Format call type
+            const callTypeMap = {
+                'group': 'Group Voice',
+                'private': 'Private Voice',
+                'data': 'Data',
+                'unknown': 'Unknown'
+            };
+            
+            // Prepare field values
+            const source = stream?.src_id || '—';
+            const destination = stream?.dst_id || '—';
+            const callType = stream ? (callTypeMap[stream.call_type] || stream.call_type || 'Unknown') : '—';
+            const duration = stream?.duration ? stream.duration.toFixed(1) + 's' : '—';
+            const packets = stream?.packets || 0;
+            const talkerAlias = stream?.talker_alias ? `"${stream.talker_alias}"` : '';
+            
+            return `
+                <div class="slot ${status}">
+                    <div class="slot-col">
+                        <div class="slot-col-label">Slot ${slotNum}</div>
+                        <div class="slot-status-badge ${status}">${statusLabel}</div>
+                    </div>
+                    <div class="slot-col">
+                        <div class="slot-col-label">Source</div>
+                        <div class="slot-col-value ${stream ? 'highlight' : 'empty'}">${source}</div>
+                    </div>
+                    <div class="slot-col">
+                        <div class="slot-col-label">Destination</div>
+                        <div class="slot-col-value ${stream ? 'highlight' : 'empty'}">${destination}</div>
+                    </div>
+                    <div class="slot-col">
+                        <div class="slot-col-label">Type</div>
+                        <div class="slot-col-value ${stream ? '' : 'empty'}">${callType}</div>
+                    </div>
+                    <div class="slot-col">
+                        <div class="slot-col-label">Duration</div>
+                        <div class="slot-col-value ${stream ? '' : 'empty'}">${duration}${packets ? ' (' + packets + ')' : ''}</div>
+                    </div>
+                    <div class="slot-col">
+                        <div class="slot-col-label">Talker</div>
+                        <div class="slot-talker ${stream && talkerAlias ? '' : 'empty'}">${talkerAlias || '—'}</div>
+                    </div>
+                </div>
+            `;
         }
         
         function updateStreams(streams) {
-            const tbody = document.querySelector('#streamsTable tbody');
-            
-            if (streams.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No active streams</td></tr>';
-                return;
+            // Streams are now displayed inline with repeaters
+            // Just trigger a repeater update to refresh the display
+            if (state.repeaters) {
+                updateRepeaters(state.repeaters);
             }
-            
-            tbody.innerHTML = streams.map(s => {
-                const statusClass = s.status.replace('_', '');
-                const talkerAlias = s.talker_alias ? ` (${s.talker_alias})` : '';
-                return `
-                    <tr>
-                        <td>${s.repeater_id}</td>
-                        <td>Slot ${s.slot}</td>
-                        <td>${s.src_id}${talkerAlias} → TG ${s.dst_id}</td>
-                        <td>${s.duration.toFixed(1)}s (${s.packets} pkts)</td>
-                        <td><span class="status ${statusClass}">${s.status.replace('_', ' ')}</span></td>
-                    </tr>
-                `;
-            }).join('');
         }
         
         function updateEvents(events) {
@@ -349,11 +571,21 @@
         }
         
         function handleEvent(event) {
-            // Re-fetch state (could be optimized with incremental updates)
-            fetch('/api/repeaters').then(r => r.json()).then(data => updateRepeaters(data.repeaters));
-            fetch('/api/streams').then(r => r.json()).then(data => updateStreams(data.streams));
-            fetch('/api/events?limit=20').then(r => r.json()).then(data => updateEvents(data.events));
+            // Re-fetch state and update local state object
+            fetch('/api/repeaters').then(r => r.json()).then(data => {
+                state.repeaters = data.repeaters;
+                updateRepeaters(data.repeaters);
+            });
+            fetch('/api/streams').then(r => r.json()).then(data => {
+                state.streams = data.streams;
+                updateStreams(data.streams);
+            });
+            fetch('/api/events?limit=20').then(r => r.json()).then(data => {
+                state.events = data.events;
+                updateEvents(data.events);
+            });
             fetch('/api/stats').then(r => r.json()).then(data => {
+                state.stats = data.stats;
                 document.getElementById('statRepeaters').textContent = data.repeaters_connected;
                 document.getElementById('statStreams').textContent = data.active_streams;
                 document.getElementById('statTotalStreams').textContent = data.stats.total_streams_today.toLocaleString();
@@ -368,7 +600,8 @@
             }
         }, 30000);
         
-        // Start connection
+        // Initialize dashboard
+        loadConfig();
         connectWebSocket();
     </script>
 </body>

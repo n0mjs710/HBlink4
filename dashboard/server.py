@@ -21,6 +21,39 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="HBlink4 Dashboard", version="1.0.0")
 
+# Load dashboard configuration
+def load_config() -> dict:
+    """Load dashboard configuration from config.json"""
+    config_path = Path(__file__).parent / "config.json"
+    default_config = {
+        "server_name": "HBlink4 Server",
+        "server_description": "Amateur Radio DMR Network",
+        "dashboard_title": "HBlink4 Dashboard",
+        "refresh_interval": 1000,
+        "max_events": 50
+    }
+    
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+                # Merge with defaults (in case new keys are added)
+                return {**default_config, **config}
+        except Exception as e:
+            logger.warning(f"Failed to load config.json: {e}, using defaults")
+            return default_config
+    else:
+        # Create default config file
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(default_config, f, indent=4)
+            logger.info(f"Created default config at {config_path}")
+        except Exception as e:
+            logger.warning(f"Failed to create config.json: {e}")
+        return default_config
+
+dashboard_config = load_config()
+
 # In-memory state (could be Redis/database for persistence)
 class DashboardState:
     """Global dashboard state"""
@@ -159,6 +192,12 @@ class EventReceiver:
 
 
 # REST API endpoints
+@app.get("/api/config")
+async def get_config():
+    """Get dashboard configuration"""
+    return dashboard_config
+
+
 @app.get("/api/repeaters")
 async def get_repeaters():
     """Get all connected repeaters"""

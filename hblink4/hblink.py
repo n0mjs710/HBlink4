@@ -75,6 +75,7 @@ class StreamState:
     talker_alias_format: int = 0  # Talker alias format (0=7-bit, 1=ISO-8859-1, 2=UTF-8, 3=UTF-16)
     talker_alias_length: int = 0  # Expected length of talker alias
     talker_alias_blocks: Dict[int, bytes] = field(default_factory=dict)  # Collected alias blocks
+    call_type: str = "unknown"  # Call type: "group", "private", "data", or "unknown"
     
     def is_active(self, timeout: float = 2.0) -> bool:
         """Check if stream is still active (within timeout period)"""
@@ -572,7 +573,8 @@ class HBProtocol(DatagramProtocol):
                             'duration': round(duration, 2),
                             'packets': stream.packet_count,
                             'reason': 'timeout',
-                            'hang_time': hang_time
+                            'hang_time': hang_time,
+                            'call_type': stream.call_type
                         })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
@@ -602,7 +604,8 @@ class HBProtocol(DatagramProtocol):
                             'duration': round(duration, 2),
                             'packets': stream.packet_count,
                             'reason': 'timeout',
-                            'hang_time': hang_time
+                            'hang_time': hang_time,
+                            'call_type': stream.call_type
                         })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
@@ -785,7 +788,8 @@ class HBProtocol(DatagramProtocol):
             'src_id': int.from_bytes(rf_src, 'big'),
             'dst_id': int.from_bytes(dst_id, 'big'),
             'stream_id': stream_id.hex(),
-            'talker_alias': new_stream.talker_alias
+            'talker_alias': new_stream.talker_alias,
+            'call_type': new_stream.call_type
         })
         
         return True
@@ -948,6 +952,7 @@ class HBProtocol(DatagramProtocol):
             self._events.emit('repeater_connected', {
                 'radio_id': int.from_bytes(radio_id, 'big'),
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
+                'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
                 'address': f'{repeater.ip}:{repeater.port}',
                 'color_code': int.from_bytes(repeater.colorcode, 'big') if repeater.colorcode else 0,
                 'talkgroups': talkgroups
@@ -1087,6 +1092,13 @@ class HBProtocol(DatagramProtocol):
             if current_stream.lc is None:
                 current_stream.lc = _lc
                 current_stream.missed_header = False  # We got the header with full LC
+                # Update call type based on LC
+                if _lc.is_group_call:
+                    current_stream.call_type = "group"
+                elif _lc.is_private_call:
+                    current_stream.call_type = "private"
+                else:
+                    current_stream.call_type = "data"
                 LOGGER.info(f'Stream LC info: repeater={int.from_bytes(radio_id, "big")} '
                           f'slot={_slot}, '
                           f'src={_lc.src_id}, '
@@ -1181,7 +1193,8 @@ class HBProtocol(DatagramProtocol):
                 'duration': round(duration, 2),
                 'packets': current_stream.packet_count,
                 'reason': 'terminator',
-                'hang_time': hang_time
+                'hang_time': hang_time,
+                'call_type': current_stream.call_type
             })
         
         # Emit stream_update every 60 packets (10 superframes = 1 second)
@@ -1193,7 +1206,8 @@ class HBProtocol(DatagramProtocol):
                 'dst_id': int.from_bytes(_dst_id, 'big'),
                 'duration': round(time() - current_stream.start_time, 2),
                 'packets': current_stream.packet_count,
-                'talker_alias': current_stream.talker_alias
+                'talker_alias': current_stream.talker_alias,
+                'call_type': current_stream.call_type
             })
         
         # Architecture note:
