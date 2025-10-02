@@ -783,7 +783,7 @@ class HBProtocol(DatagramProtocol):
             last_seen=current_time,
             stream_id=stream_id,
             packet_count=1,
-            call_type="group" if call_type_bit else "private"  # Set from packet header bit (0=private, 1=group)
+            call_type="private" if call_type_bit else "group"  # Set from packet header bit (1=private, 0=group)
         )
         
         repeater.set_slot_stream(slot, new_stream)
@@ -1088,9 +1088,13 @@ class HBProtocol(DatagramProtocol):
         _dst_id = data[8:11]
         _bits = data[15]
         _slot = 2 if (_bits & 0x80) else 1
-        _call_type = (_bits & 0x40) >> 6  # 0 = private, 1 = group
+        _call_type = (_bits & 0x40) >> 6  # Bit 6: 1 = private/unit, 0 = group
         _frame_type = (_bits & 0x30) >> 4  # 0 = voice, 1 = voice sync, 2 = data sync, 3 = unused
         _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
+        
+        # Debug: Log the bits and call type for troubleshooting
+        LOGGER.debug(f'DMR packet bits: _bits=0x{_bits:02x}, _call_type={_call_type}, '
+                    f'will be: {"private" if _call_type else "group"}')
         
         # Check if this is a stream terminator (immediate end detection)
         # Note: Currently always returns False due to Homebrew protocol limitations
