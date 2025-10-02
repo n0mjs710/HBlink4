@@ -65,7 +65,7 @@ class DashboardState:
         self.websocket_clients: Set[WebSocket] = set()
         self.stats = {
             'total_streams_today': 0,
-            'total_packets_today': 0,
+            'total_duration_today': 0.0,  # Total duration in seconds
             'start_time': datetime.now().isoformat()
         }
 
@@ -147,7 +147,6 @@ class EventReceiver:
             if key in state.streams:
                 state.streams[key]['packets'] = data['packets']
                 state.streams[key]['duration'] = data['duration']
-                state.stats['total_packets_today'] += data['packets']
         
         elif event_type == 'stream_end':
             key = f"{data['repeater_id']}.{data['slot']}"
@@ -158,6 +157,8 @@ class EventReceiver:
                 state.streams[key]['duration'] = data['duration']
                 state.streams[key]['end_reason'] = data.get('end_reason', 'unknown')
                 state.streams[key]['hang_time'] = data.get('hang_time', 0)
+                # Accumulate total duration when stream ends
+                state.stats['total_duration_today'] += data['duration']
         
         elif event_type == 'hang_time_expired':
             # Hang time has expired, clear the slot

@@ -321,8 +321,8 @@
                 <div class="stat-value" id="statTotalStreams">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Total Packets Today</div>
-                <div class="stat-value" id="statTotalPackets">0</div>
+                <div class="stat-label">Total Traffic Today</div>
+                <div class="stat-value" id="statTotalDuration">0:00:00</div>
             </div>
         </div>
         
@@ -342,7 +342,7 @@
             events: [],
             stats: {
                 total_streams_today: 0,
-                total_packets_today: 0
+                total_duration_today: 0
             },
             config: {}
         };
@@ -404,6 +404,13 @@
             };
         }
         
+        function formatDuration(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+        
         function updateConnectionStatus(connected) {
             const el = document.getElementById('connectionStatus');
             el.textContent = connected ? 'Connected' : 'Disconnected';
@@ -420,8 +427,8 @@
                 (streams ? Object.keys(streams).length : 0);
             document.getElementById('statTotalStreams').textContent = 
                 stats.total_streams_today.toLocaleString();
-            document.getElementById('statTotalPackets').textContent = 
-                stats.total_packets_today.toLocaleString();
+            document.getElementById('statTotalDuration').textContent = 
+                formatDuration(stats.total_duration_today || 0);
         }
         
         function updateRepeaters(repeaters) {
@@ -640,7 +647,7 @@
                 document.getElementById('statRepeaters').textContent = data.repeaters_connected;
                 document.getElementById('statStreams').textContent = data.active_streams;
                 document.getElementById('statTotalStreams').textContent = data.stats.total_streams_today.toLocaleString();
-                document.getElementById('statTotalPackets').textContent = data.stats.total_packets_today.toLocaleString();
+                document.getElementById('statTotalDuration').textContent = formatDuration(data.stats.total_duration_today || 0);
             });
         }
         
