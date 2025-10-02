@@ -1050,7 +1050,7 @@ class HBProtocol(DatagramProtocol):
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
         if len(data) < 55:
-            LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]}')
+            LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]} - length {len(data)} < 55')
             return
             
         radio_id = data[11:15]
@@ -1071,6 +1071,12 @@ class HBProtocol(DatagramProtocol):
         
         # Check if this is a stream terminator (immediate end detection)
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
+        
+        if _frame_type in [0x01, 0x02]:  # Log all sync frames for debugging
+            LOGGER.debug(f'Sync frame: repeater={int.from_bytes(radio_id, "big")}, '
+                        f'slot={_slot}, frame_type={_frame_type}, '
+                        f'sync_pattern={data[20:26].hex()}, '
+                        f'is_terminator={_is_terminator}')
         
         # Extract LC from voice sync frames (header/terminator)
         _lc = None
