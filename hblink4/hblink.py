@@ -758,44 +758,14 @@ class HBProtocol(DatagramProtocol):
                     return False
             else:
                 # Active stream - different stream_id means contention
-                # But check if old stream is stale (>200ms since last packet)
-                # This provides fast terminator detection when operators key up quickly
-                time_since_last_packet = current_time - current_stream.last_seen
+                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                              f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
+                              f'dst={int.from_bytes(current_stream.dst_id, "big")}) '
+                              f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
+                              f'dst={int.from_bytes(dst_id, "big")})')
                 
-                if time_since_last_packet > 0.2:  # 200ms threshold
-                    # Old stream appears terminated - force end it and allow new stream
-                    duration = current_time - current_stream.start_time
-                    LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot} '
-                               f'ended via inactivity ({time_since_last_packet*1000:.0f}ms since last packet): '
-                               f'src={int.from_bytes(current_stream.rf_src, "big")}, '
-                               f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
-                               f'duration={duration:.2f}s, packets={current_stream.packet_count}')
-                    
-                    # Emit stream_end event
-                    self._events.emit('stream_end', {
-                        'repeater_id': int.from_bytes(repeater.radio_id, 'big'),
-                        'slot': slot,
-                        'src_id': int.from_bytes(current_stream.rf_src, 'big'),
-                        'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
-                        'duration': round(duration, 2),
-                        'packets': current_stream.packet_count,
-                        'talker_alias': current_stream.talker_alias,
-                        'call_type': current_stream.call_type,
-                        'end_reason': 'fast_terminator'
-                    })
-                    
-                    # Allow new stream by falling through to create it
-                else:
-                    # Real contention - stream still active
-                    LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
-                                  f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
-                                  f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
-                                  f'active {time_since_last_packet*1000:.0f}ms ago) '
-                                  f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
-                                  f'dst={int.from_bytes(dst_id, "big")})')
-                    
-                    # Deny the new stream - first come, first served
-                    return False
+                # Deny the new stream - first come, first served
+                return False
         
         # Check if talkgroup is allowed for this repeater
         if not self._is_talkgroup_allowed(repeater, dst_id):
@@ -849,8 +819,46 @@ class HBProtocol(DatagramProtocol):
         
         # Check if this packet belongs to the current stream
         if current_stream.stream_id != stream_id:
-            # Different stream - contention
-            return False
+            # Different stream - potential contention
+            # But check if old stream is stale (>200ms since last packet)
+            # This provides fast terminator detection when operators key up quickly
+            current_time = time()
+            time_since_last_packet = current_time - current_stream.last_seen
+            
+            if time_since_last_packet > 0.2:  # 200ms threshold
+                # Old stream appears terminated - force end it and allow new stream
+                duration = current_time - current_stream.start_time
+                LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot} '
+                           f'ended via inactivity ({time_since_last_packet*1000:.0f}ms since last packet): '
+                           f'src={int.from_bytes(current_stream.rf_src, "big")}, '
+                           f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
+                           f'duration={duration:.2f}s, packets={current_stream.packet_count}')
+                
+                # Emit stream_end event
+                self._events.emit('stream_end', {
+                    'repeater_id': int.from_bytes(repeater.radio_id, 'big'),
+                    'slot': slot,
+                    'src_id': int.from_bytes(current_stream.rf_src, 'big'),
+                    'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
+                    'duration': round(duration, 2),
+                    'packets': current_stream.packet_count,
+                    'talker_alias': current_stream.talker_alias,
+                    'call_type': current_stream.call_type,
+                    'end_reason': 'fast_terminator'
+                })
+                
+                # Clear the old stream and start new one
+                repeater.set_slot_stream(slot, None)
+                return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id, call_type_bit)
+            else:
+                # Real contention - stream still active
+                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                              f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
+                              f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
+                              f'active {time_since_last_packet*1000:.0f}ms ago) '
+                              f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
+                              f'dst={int.from_bytes(dst_id, "big")})')
+                return False
         
         # Update stream state
         current_stream.last_seen = time()
