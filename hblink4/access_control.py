@@ -4,7 +4,7 @@ Access control and configuration matching module for HBlink4
 
 import re
 from typing import Optional, Dict, Any, List, Tuple, Union, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 MatchType = Literal['specific_id', 'id_range', 'callsign']
 PatternValue = Union[List[int], List[Tuple[int, int]], List[str]]
@@ -57,9 +57,11 @@ class RepeaterConfig:
     """Configuration settings for a matched repeater"""
     enabled: bool
     timeout: int
-    talkgroups: List[int]
     passphrase: str
     description: str
+    slot1_talkgroups: List[int] = field(default_factory=list)
+    slot2_talkgroups: List[int] = field(default_factory=list)
+    talkgroups: List[int] = field(default_factory=list)  # Deprecated: backward compatibility only
 
 MatchType = Literal['specific_id', 'id_range', 'callsign']
 
