@@ -519,6 +519,10 @@ class HBProtocol(DatagramProtocol):
             'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
         
+        # Track denied streams to avoid repeated logging
+        # Key: (repeater_id, slot, stream_id), Value: timestamp of first denial
+        self._denied_streams: Dict[tuple, float] = {}
+        
         # Initialize user cache if enabled
         user_cache_config = CONFIG.get('global', {}).get('user_cache', {})
         if user_cache_config.get('enabled', True):
@@ -702,6 +706,10 @@ class HBProtocol(DatagramProtocol):
                             'slot': 2
                         })
                         repeater.slot2_stream = None
+        
+        # Cleanup old denied stream entries (older than 10 seconds)
+        denied_cutoff = current_time - 10.0
+        self._denied_streams = {k: v for k, v in self._denied_streams.items() if v > denied_cutoff}
     
     def _cleanup_user_cache(self):
         """Periodic cleanup of expired user cache entries"""
@@ -1006,12 +1014,22 @@ class HBProtocol(DatagramProtocol):
         # Check if this repeater is allowed to send traffic on this TS/TGID (inbound routing)
         tgid = int.from_bytes(dst_id, 'big')
         if not self._check_inbound_routing(repeater.repeater_id, slot, tgid):
-            # Get repeater config to show allowed list in log
-            repeater_id_int = int.from_bytes(repeater.repeater_id, 'big')
-            config = self._matcher.get_repeater_config(repeater_id_int)
-            allowed_tgids = config.slot1_talkgroups if slot == 1 else config.slot2_talkgroups
-            LOGGER.warning(f'Inbound routing denied: repeater={repeater_id_int} '
-                          f'TS{slot}/TG{tgid} not in allowed list {allowed_tgids}')
+            # Track denied streams to avoid logging every packet
+            denial_key = (repeater.repeater_id, slot, stream_id)
+            current_time = time()
+            
+            # Only log if this is the first packet of this denied stream
+            if denial_key not in self._denied_streams:
+                # Get repeater config to show allowed list in log
+                repeater_id_int = int.from_bytes(repeater.repeater_id, 'big')
+                config = self._matcher.get_repeater_config(repeater_id_int)
+                allowed_tgids = config.slot1_talkgroups if slot == 1 else config.slot2_talkgroups
+                LOGGER.warning(f'Inbound routing denied: repeater={repeater_id_int} '
+                              f'TS{slot}/TG{tgid} not in allowed list {allowed_tgids}')
+                
+                # Add to denied cache
+                self._denied_streams[denial_key] = current_time
+            
             return False
         
         # No active stream, start a new one
