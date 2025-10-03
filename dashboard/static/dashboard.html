@@ -543,12 +543,12 @@
                 .map(r => {
                     // Find active streams for this repeater (only active or hang_time, not ended)
                     const slot1Stream = streams.find(s => 
-                        s.repeater_id == r.radio_id && 
+                        s.repeater_id == r.repeater_id && 
                         s.slot == 1 && 
                         (s.status === 'active' || s.status === 'hang_time')
                     );
                     const slot2Stream = streams.find(s => 
-                        s.repeater_id == r.radio_id && 
+                        s.repeater_id == r.repeater_id && 
                         s.slot == 2 && 
                         (s.status === 'active' || s.status === 'hang_time')
                     );
@@ -562,7 +562,7 @@
                         <div class="repeater-card">
                             <div class="repeater-info">
                                 <div class="${headerClass}">
-                                    📡 ${r.callsign || 'Unknown'} (${r.radio_id})
+                                    📡 ${r.callsign || 'Unknown'} (${r.repeater_id})
                                 </div>
                                 <div class="repeater-location">
                                     ${r.location || 'Location unknown'}
