@@ -226,13 +226,13 @@ class EventReceiver:
             # Update last heard users and enrich with callsign data
             users = data.get('users', [])
             
-            # Enrich each user with callsign from user database
+            # Enrich each user with callsign from user database (silent failure on miss)
             for user in users:
                 radio_id = user.get('radio_id')
                 if radio_id and radio_id in user_database:
                     user['callsign'] = user_database[radio_id]
                 elif not user.get('callsign'):
-                    # No callsign in cache and not in database
+                    # No callsign found - dashboard will display as "-"
                     user['callsign'] = ''
             
             state.last_heard = users
