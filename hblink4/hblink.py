@@ -76,7 +76,6 @@ class StreamState:
     packet_count: int = 0    # Number of packets in this stream
     ended: bool = False      # True when stream has timed out but in hang time
     end_time: Optional[float] = None  # When stream ended (for hang time calculation)
-    alias: str = ""          # Callsign/alias (populated from lookup file)
     call_type: str = "unknown"  # Call type: "group", "private", "data", or "unknown"
     is_assumed: bool = False  # True if this is an assumed stream (forwarded to target, not received from it)
     
@@ -732,7 +731,6 @@ class HBProtocol(DatagramProtocol):
             'src_id': int.from_bytes(rf_src, 'big'),
             'dst_id': int.from_bytes(dst_id, 'big'),
             'stream_id': stream_id.hex(),
-            'alias': new_stream.alias,  # Will be populated from callsign lookup
             'call_type': new_stream.call_type
         })
         
@@ -741,11 +739,10 @@ class HBProtocol(DatagramProtocol):
             src_id = int.from_bytes(rf_src, 'big')
             repeater_id = int.from_bytes(repeater.repeater_id, 'big')
             dst = int.from_bytes(dst_id, 'big')
-            # TODO: Add callsign lookup from file to populate alias field
             self._user_cache.update(
-                radio_id=src_id,  # User's radio ID (subscriber)
+                radio_id=src_id,
                 repeater_id=repeater_id,
-                callsign='',  # Will be populated from callsign lookup file
+                callsign='',  # Callsign lookup handled by dashboard
                 slot=slot,
                 talkgroup=dst
             )
@@ -789,7 +786,6 @@ class HBProtocol(DatagramProtocol):
                     'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
                     'duration': round(duration, 2),
                     'packets': current_stream.packet_count,
-                    'alias': current_stream.alias,  # Will be populated from callsign lookup
                     'call_type': current_stream.call_type,
                     'end_reason': 'fast_terminator'
                 })
@@ -1064,9 +1060,6 @@ class HBProtocol(DatagramProtocol):
                         f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
                         f'reason=stream contention or talkgroup not allowed')
             return
-        
-        # TODO: Add callsign lookup here to populate stream.alias field
-        # This will be done from a lookup file: radio_id -> callsign
         
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'DMR data from {int.from_bytes(repeater_id, "big")} slot {_slot}: '
