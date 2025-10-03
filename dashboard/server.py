@@ -1,18 +1,12 @@
 """
 HBlink4 Dashboard - Separate Process
-FastAPI + Uvicorn + WebSockets for re        self.stats['total_streams_today'] = 0
-        self.stats['total_duration_today'] = 0
-        self.stats['total_calls_today'] = 0ime monitoring
+FastAPI + Uvicorn + WebSockets for real-time monitoring
 
 Updates every 10 superframes (60 packets = 1 second) for smooth real-time feel
 """
 import asyncio
 import json
-from d        # Send to all WebSocket clients
-        await self.send_to_clients(event)
-    
-    async def send_to_clients(self, event: dict):
-        """Send event to all connected WebSocket clients"""me import datetime, date
+from datetime import datetime, date
 from collections import deque
 from typing import Dict, List, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -74,8 +68,8 @@ class DashboardState:
         self.stats = {
             'total_streams_today': 0,
             'total_duration_today': 0.0,  # Total duration in seconds
-            'packets_forwarded': 0,  # Total packets forwarded
-            'packets_received': 0,  # Total packets received
+            'active_calls': 0,  # Currently active forwarded calls
+            'total_calls_today': 0,  # Total calls forwarded today
             'start_time': datetime.now().isoformat(),
             'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
@@ -84,8 +78,7 @@ class DashboardState:
         """Reset daily statistics at midnight"""
         self.stats['total_streams_today'] = 0
         self.stats['total_duration_today'] = 0.0
-        self.stats['packets_forwarded'] = 0
-        self.stats['packets_received'] = 0
+        self.stats['total_calls_today'] = 0
         self.stats['last_reset_date'] = date.today().isoformat()
         logger.info(f"📊 Daily stats reset at midnight (server time)")
 

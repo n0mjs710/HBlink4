@@ -710,11 +710,11 @@ class HBProtocol(DatagramProtocol):
                 'stats': stats
             })
     
-    def _broadcast_forwarding_stats(self):
-        """Broadcast forwarding statistics to dashboard"""
+    def _send_forwarding_stats(self):
+        """Send forwarding statistics to dashboard"""
         self._events.emit('forwarding_stats', {
-            'packets_forwarded': self._forwarding_stats['packets_forwarded'],
-            'packets_received': self._forwarding_stats['packets_received'],
+            'active_calls': self._forwarding_stats['active_calls'],
+            'total_calls_today': self._forwarding_stats['total_calls_today'],
             'uptime_seconds': time() - self._forwarding_stats['start_time']
         })
     
