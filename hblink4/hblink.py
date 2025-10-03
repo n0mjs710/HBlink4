@@ -15,6 +15,7 @@ import logging.handlers
 import pathlib
 from typing import Dict, Any, Optional, Tuple, Union, List
 from time import time
+from datetime import date
 from random import randint
 from hashlib import sha256
 
@@ -512,7 +513,8 @@ class HBProtocol(DatagramProtocol):
         self._forwarding_stats = {
             'active_calls': 0,        # Currently active forwarded calls
             'total_calls_today': 0,   # Total calls forwarded today
-            'start_time': time()
+            'start_time': time(),
+            'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
         
         # Initialize user cache if enabled
@@ -573,6 +575,11 @@ class HBProtocol(DatagramProtocol):
         self._forwarding_stats_send_task = LoopingCall(self._send_forwarding_stats)
         self._forwarding_stats_send_task.start(5.0)
         LOGGER.info('Forwarding stats send task started (every 5s)')
+        
+        # Check for daily stats reset every minute
+        self._daily_reset_task = LoopingCall(self._reset_daily_stats)
+        self._daily_reset_task.start(60.0)
+        LOGGER.info('Daily stats reset task started (checks every 60s)')
 
     def stopProtocol(self):
         """Called when transport is disconnected"""
@@ -586,6 +593,8 @@ class HBProtocol(DatagramProtocol):
             self._user_cache_send_task.stop()
         if self._forwarding_stats_send_task and self._forwarding_stats_send_task.running:
             self._forwarding_stats_send_task.stop()
+        if self._daily_reset_task and self._daily_reset_task.running:
+            self._daily_reset_task.stop()
             
     def _check_repeater_timeouts(self):
         """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
@@ -717,6 +726,14 @@ class HBProtocol(DatagramProtocol):
             'total_calls_today': self._forwarding_stats['total_calls_today'],
             'uptime_seconds': time() - self._forwarding_stats['start_time']
         })
+    
+    def _reset_daily_stats(self):
+        """Reset daily statistics at midnight"""
+        current_date = date.today().isoformat()
+        if current_date != self._forwarding_stats.get('last_reset_date'):
+            self._forwarding_stats['total_calls_today'] = 0
+            self._forwarding_stats['last_reset_date'] = current_date
+            LOGGER.info(f'📊 Daily forwarding stats reset at midnight (server time)')
     
     def get_user_cache_data(self, limit: int = 50) -> List[dict]:
         """
