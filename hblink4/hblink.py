@@ -767,7 +767,13 @@ class HBProtocol(DatagramProtocol):
             return True
         
         # Check if TGID is in the allowed list for this slot
-        return tgid in allowed_tgids
+        is_allowed = tgid in allowed_tgids
+        
+        if not is_allowed:
+            LOGGER.warning(f'Inbound routing denied: repeater={repeater_id_int} '
+                          f'TS{slot}/TG{tgid} not in allowed list {allowed_tgids}')
+        
+        return is_allowed
     
     def _check_outbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
         """
@@ -1006,8 +1012,7 @@ class HBProtocol(DatagramProtocol):
         # Check if this repeater is allowed to send traffic on this TS/TGID (inbound routing)
         tgid = int.from_bytes(dst_id, 'big')
         if not self._check_inbound_routing(repeater.repeater_id, slot, tgid):
-            LOGGER.warning(f'Inbound routing blocked: repeater {int.from_bytes(repeater.repeater_id, "big")} '
-                          f'not allowed to send on TS{slot}/TG{tgid}')
+            # Logging already done in _check_inbound_routing()
             return False
         
         # No active stream, start a new one
