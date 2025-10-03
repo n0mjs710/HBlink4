@@ -1091,7 +1091,6 @@ class HBProtocol(DatagramProtocol):
                 'dst_id': int.from_bytes(_dst_id, 'big'),
                 'duration': round(time() - current_stream.start_time, 2),
                 'packets': current_stream.packet_count,
-                'talker_alias': current_stream.talker_alias,
                 'call_type': current_stream.call_type
             })
         
