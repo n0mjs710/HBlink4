@@ -1539,6 +1539,7 @@ class HBProtocol(DatagramProtocol):
         if _is_terminator and current_stream and not current_stream.ended:
             # DMR terminator detected - end stream immediately and start hang time
             current_stream.ended = True
+            current_stream.end_time = time()  # Critical: set end_time for hang calculation!
             hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
             duration = time() - current_stream.start_time
             LOGGER.info(f'RX stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
@@ -1700,7 +1701,7 @@ class HBProtocol(DatagramProtocol):
             LOGGER.info(f'TX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                        f'from repeater {source_repeater_id}, '
                        f'src={int.from_bytes(rf_src, "big")}, '
-                       f'tgid={int.from_bytes(dst_id, "big")}')
+                       f'dst={int.from_bytes(dst_id, "big")}')
             
             # Emit stream_start event for dashboard
             self._events.emit('stream_start', {
@@ -1725,14 +1726,16 @@ class HBProtocol(DatagramProtocol):
             duration = current_time - current_stream.start_time
             current_stream.end_time = current_time
             current_stream.ended = True
+            hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
             
             # Log at INFO level with consistent format
             LOGGER.info(f'TX stream ended on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                        f'src={int.from_bytes(rf_src, "big")}, '
-                       f'tgid={int.from_bytes(dst_id, "big")}, '
+                       f'dst={int.from_bytes(dst_id, "big")}, '
                        f'duration={duration:.2f}s, '
                        f'packets={current_stream.packet_count}, '
-                       f'reason=terminator')
+                       f'reason=terminator - '
+                       f'entering hang time ({hang_time}s)')
             
             # Emit stream_end event for dashboard
             self._events.emit('stream_end', {
