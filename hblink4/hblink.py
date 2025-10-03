@@ -64,7 +64,6 @@ def bhex(data: bytes) -> bytes:
 from dataclasses import dataclass, field
 
 @dataclass
-@dataclass
 class StreamState:
     """Tracks an active DMR transmission stream"""
     repeater_id: bytes          # Repeater this stream is on
@@ -78,15 +77,15 @@ class StreamState:
     ended: bool = False      # True when stream has timed out but in hang time
     end_time: Optional[float] = None  # When stream ended (for hang time calculation)
     lc: Optional['DMRLC'] = None  # Link Control information if extracted
-    # LC recovery - disabled until fixed
-    #missed_header: bool = True    # True if we missed the voice header (need embedded LC)
-    #embedded_lc_bits: bytearray = field(default_factory=bytearray)  # Accumulated embedded LC bits
     talker_alias: str = ""   # Talker alias if extracted
     talker_alias_format: int = 0  # Talker alias format (0=7-bit, 1=ISO-8859-1, 2=UTF-8, 3=UTF-16)
     talker_alias_length: int = 0  # Expected length of talker alias
     talker_alias_blocks: Dict[int, bytes] = field(default_factory=dict)  # Collected alias blocks
     call_type: str = "unknown"  # Call type: "group", "private", "data", or "unknown"
     is_assumed: bool = False  # True if this is an assumed stream (forwarded to target, not received from it)
+    # LC recovery - disabled until fixed
+    #missed_header: bool = True    # True if we missed the voice header (need embedded LC)
+    #embedded_lc_bits: bytearray = field(default_factory=bytearray)  # Accumulated embedded LC bits
     
     def is_active(self, timeout: float = 2.0) -> bool:
         """Check if stream is still active (within timeout period)"""
