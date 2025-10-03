@@ -127,7 +127,7 @@ class EventReceiver:
         
         # Update internal state based on event type
         if event_type == 'repeater_connected':
-            state.repeaters[data['radio_id']] = {
+            state.repeaters[data['repeater_id']] = {
                 **data,
                 'connected_at': event['timestamp'],
                 'last_activity': event['timestamp'],
@@ -135,18 +135,18 @@ class EventReceiver:
                 'missed_pings': data.get('missed_pings', 0),
                 'status': 'connected'
             }
-            logger.info(f"Repeater connected: {data['radio_id']} ({data.get('callsign', 'UNKNOWN')})")
+            logger.info(f"Repeater connected: {data['repeater_id']} ({data.get('callsign', 'UNKNOWN')})")
         
         elif event_type == 'repeater_keepalive':
-            if data['radio_id'] in state.repeaters:
-                state.repeaters[data['radio_id']]['last_ping'] = data.get('last_ping', event['timestamp'])
-                state.repeaters[data['radio_id']]['missed_pings'] = data.get('missed_pings', 0)
-                state.repeaters[data['radio_id']]['last_activity'] = event['timestamp']
+            if data['repeater_id'] in state.repeaters:
+                state.repeaters[data['repeater_id']]['last_ping'] = data.get('last_ping', event['timestamp'])
+                state.repeaters[data['repeater_id']]['missed_pings'] = data.get('missed_pings', 0)
+                state.repeaters[data['repeater_id']]['last_activity'] = event['timestamp']
         
         elif event_type == 'repeater_disconnected':
-            if data['radio_id'] in state.repeaters:
-                state.repeaters[data['radio_id']]['status'] = 'disconnected'
-                logger.info(f"Repeater disconnected: {data['radio_id']}")
+            if data['repeater_id'] in state.repeaters:
+                state.repeaters[data['repeater_id']]['status'] = 'disconnected'
+                logger.info(f"Repeater disconnected: {data['repeater_id']}")
         
         elif event_type == 'stream_start':
             key = f"{data['repeater_id']}.{data['slot']}"
