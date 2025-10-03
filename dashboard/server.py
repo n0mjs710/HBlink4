@@ -6,6 +6,7 @@ Updates every 10 superframes (60 packets = 1 second) for smooth real-time feel
 """
 import asyncio
 import json
+import csv
 from datetime import datetime, date
 from collections import deque
 from typing import Dict, List, Set, Optional
@@ -20,6 +21,39 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="HBlink4 Dashboard", version="1.0.0")
+
+# Load user database from CSV
+def load_user_database() -> Dict[int, str]:
+    """
+    Load user.csv file for callsign lookups.
+    Returns dict mapping radio_id -> callsign (memory efficient).
+    """
+    user_db = {}
+    user_csv_path = Path(__file__).parent.parent / "user.csv"
+    
+    if not user_csv_path.exists():
+        logger.warning(f"user.csv not found at {user_csv_path}, callsign lookups disabled")
+        return user_db
+    
+    try:
+        with open(user_csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    radio_id = int(row['RADIO_ID'])
+                    callsign = row['CALLSIGN'].strip()
+                    if callsign:  # Only store non-empty callsigns
+                        user_db[radio_id] = callsign
+                except (ValueError, KeyError):
+                    continue  # Skip malformed rows
+        
+        logger.info(f"Loaded {len(user_db)} users from user.csv (~{len(user_db) * 14 // 1024} KB)")
+        return user_db
+    except Exception as e:
+        logger.error(f"Failed to load user.csv: {e}")
+        return user_db
+
+user_database = load_user_database()
 
 # Load dashboard configuration
 def load_config() -> dict:
@@ -189,8 +223,19 @@ class EventReceiver:
                 logger.debug(f"Hang time expired for {key}")
         
         elif event_type == 'last_heard_update':
-            # Update last heard users (don't add to events log - not an on-air event)
-            state.last_heard = data.get('users', [])
+            # Update last heard users and enrich with callsign data
+            users = data.get('users', [])
+            
+            # Enrich each user with callsign from user database
+            for user in users:
+                radio_id = user.get('radio_id')
+                if radio_id and radio_id in user_database:
+                    user['callsign'] = user_database[radio_id]
+                elif not user.get('callsign'):
+                    # No callsign in cache and not in database
+                    user['callsign'] = ''
+            
+            state.last_heard = users
             state.last_heard_stats = data.get('stats', {})
             logger.debug(f"Last heard updated: {len(state.last_heard)} users")
             # Send to WebSocket clients but skip adding to events log
