@@ -76,16 +76,9 @@ class StreamState:
     packet_count: int = 0    # Number of packets in this stream
     ended: bool = False      # True when stream has timed out but in hang time
     end_time: Optional[float] = None  # When stream ended (for hang time calculation)
-    lc: Optional['DMRLC'] = None  # Link Control information if extracted
-    talker_alias: str = ""   # Talker alias if extracted
-    talker_alias_format: int = 0  # Talker alias format (0=7-bit, 1=ISO-8859-1, 2=UTF-8, 3=UTF-16)
-    talker_alias_length: int = 0  # Expected length of talker alias
-    talker_alias_blocks: Dict[int, bytes] = field(default_factory=dict)  # Collected alias blocks
+    alias: str = ""          # Callsign/alias (populated from lookup file)
     call_type: str = "unknown"  # Call type: "group", "private", "data", or "unknown"
     is_assumed: bool = False  # True if this is an assumed stream (forwarded to target, not received from it)
-    # LC recovery - disabled until fixed
-    #missed_header: bool = True    # True if we missed the voice header (need embedded LC)
-    #embedded_lc_bits: bytearray = field(default_factory=bytearray)  # Accumulated embedded LC bits
     
     def is_active(self, timeout: float = 2.0) -> bool:
         """Check if stream is still active (within timeout period)"""
@@ -97,347 +90,6 @@ class StreamState:
             return False
         time_since_end = time() - self.end_time
         return time_since_end < hang_time
-
-
-@dataclass
-class DMRLC:
-    """DMR Link Control information extracted from frames"""
-    flco: int = 0            # Full Link Control Opcode
-    fid: int = 0             # Feature ID
-    service_options: int = 0 # Service options byte
-    dst_id: int = 0          # Destination ID (24-bit)
-    src_id: int = 0          # Source ID (24-bit)
-    is_valid: bool = False   # Whether LC was successfully decoded
-    
-    @property
-    def is_group_call(self) -> bool:
-        """Check if this is a group call (FLCO=0)"""
-        return self.flco == 0
-    
-    @property
-    def is_private_call(self) -> bool:
-        """Check if this is a private call (FLCO=3)"""
-        return self.flco == 3
-    
-    @property
-    def is_talker_alias_header(self) -> bool:
-        """Check if this is a talker alias header (FLCO=4)"""
-        return self.flco == 4
-    
-    @property
-    def is_talker_alias_block(self) -> bool:
-        """Check if this is a talker alias block (FLCO=5,6,7)"""
-        return self.flco in [5, 6, 7]
-    
-    @property
-    def is_emergency(self) -> bool:
-        """Check if emergency bit is set in service options"""
-        return bool(self.service_options & 0x80)
-    
-    @property
-    def privacy_enabled(self) -> bool:
-        """Check if privacy is enabled"""
-        return bool(self.service_options & 0x40)
-
-
-def decode_lc(lc_bytes: bytes) -> DMRLC:
-    """
-    Decode DMR Link Control from 9 bytes.
-    
-    Uses dmr_utils3's proven decoding when available, otherwise falls back to simple byte extraction.
-    The LC bytes from dmr_utils3.bptc.decode_emblc() are already decoded and byte-aligned:
-    - Bytes 0-2: LC Options (always 0x00 0x00 0x20 for group voice)
-    - Bytes 3-5: Destination ID (24-bit big-endian)
-    - Bytes 6-8: Source ID (24-bit big-endian)
-    
-    Args:
-        lc_bytes: 9 bytes of LC data (from decode_emblc or voice_head_term)
-        
-    Returns:
-        DMRLC object with decoded information
-    """
-    lc = DMRLC()
-    
-    if len(lc_bytes) < 9:
-        return lc
-    
-    try:
-        # LC bytes from dmr_utils3 are already decoded and byte-aligned
-        # Bytes 0-2: LC_OPT (service options)
-        lc.service_options = lc_bytes[0]  # First byte has the options
-        
-        # Bytes 3-5: Destination ID (24-bit big-endian integer)
-        lc.dst_id = int.from_bytes(lc_bytes[3:6], 'big')
-        
-        # Bytes 6-8: Source ID (24-bit big-endian integer)  
-        lc.src_id = int.from_bytes(lc_bytes[6:9], 'big')
-        
-        # Determine FLCO from service options
-        # Group call: 0x00, Private call: 0x03
-        lc.flco = 0 if lc.service_options == 0 else 3
-        
-        lc.is_valid = True
-        
-    except (IndexError, ValueError) as e:
-        LOGGER.debug(f'Error decoding LC: {e}')
-        lc.is_valid = False
-    
-    return lc
-
-
-def extract_voice_lc(data: bytes) -> Optional[DMRLC]:
-    """
-    Extract Link Control from Voice Header/Terminator frame using dmr_utils3.
-    
-    Voice sync frames contain BPTC-encoded full LC. The dmr_utils3 library 
-    handles the complex BPTC(196,96) decoding with FEC.
-    
-    Args:
-        data: Full DMRD packet (53+ bytes)
-        
-    Returns:
-        DMRLC object if successfully decoded, None otherwise
-    """
-    if len(data) < 53:
-        return None
-    
-    try:
-        # Extract the 33-byte DMR payload
-        dmr_payload = data[20:53]
-        
-        # Use dmr_utils3's proven voice_head_term decoder
-        # This handles BPTC decoding, deinterleaving, and FEC
-        decoded = decode.voice_head_term(dmr_payload)
-        
-        if decoded and 'LC' in decoded:
-            # voice_head_term returns LC as bytes in format: [Options:3][Dst:3][Src:3]
-            return decode_lc(decoded['LC'])
-            
-    except Exception as e:
-        LOGGER.debug(f'Error extracting voice LC with dmr_utils3: {e}')
-        
-    return None
-
-# LC recovery - disabled until fixed
-#def extract_embedded_lc(data: bytes, frame_num: int) -> Optional[bytes]:
-#    """
-#    Extract embedded LC fragment from a DMR voice burst frame.
-#    
-#    DMR voice burst frames contain embedded signaling spread across frames B-E
-#    (frames 1-4 of each superframe). Each voice burst contains 2 bytes (16 bits) 
-#    of embedded LC data at specific bit positions within the 33-byte payload.
-#    
-#    The embedded signaling is interleaved throughout the voice burst frame:
-#    - 5 bits in SYNC section (bits 0-4)
-#    - 5 bits in EMB section (bits 5-9)
-#    - 6 bits scattered in burst sections
-#    
-#    This function extracts the 16 embedded LC bits from their positions in the
-#    voice burst frame and returns them as 2 bytes.
-#    
-#    This should only be called when we've missed the voice header frame.
-#    
-#    Args:
-#        data: Full DMRD packet (53+ bytes), payload starts at byte 20
-#        frame_num: Voice frame number (1-4 for frames B-E with embedded LC)
-#        
-#    Returns:
-#        2 bytes of embedded LC fragment, or None if extraction fails
-#    """
-#    if len(data) < 53 or frame_num < 1 or frame_num > 4:
-#        return None
-#    
-#    try:
-#        # DMR voice burst payload starts at byte 20 of DMRD packet
-#        # The payload is 33 bytes total
-#        payload = data[20:53]
-#        
-#        # Embedded signaling LC bits are located at specific bit positions
-#        # within the 264-bit (33-byte) voice burst frame structure
-#        # 
-#        # According to ETSI TS 102 361-1, the embedded signaling is spread across:
-#        # - EMB (Embedded Signaling) at the beginning
-#        # - Scattered bits within the burst
-#        #
-#        # For simplicity, we extract from known byte positions where embedded LC
-#        # fragments typically appear in frames B-E:
-#        #
-#        # Frame B (1): LC bits 0-15
-#        # Frame C (2): LC bits 16-31
-#        # Frame D (3): LC bits 32-47
-#        # Frame E (4): LC bits 48-63
-#        #
-#        # The embedded LC is typically found at bytes 13-14 of the payload
-#        # after deinterleaving (simplified extraction)
-#        
-#        # For now, use a simplified extraction from known positions
-#        # This extracts 16 bits from the middle section of each voice burst
-#        # where embedded signaling typically resides
-#        
-#        # Extract 2 bytes (16 bits) from the embedded signaling positions
-#        # Bytes 13-14 of payload typically contain embedded LC fragments
-#        lc_fragment = payload[13:15]
-#        
-#        if len(lc_fragment) == 2:
-#            return lc_fragment
-#        
-#        return None
-#    except IndexError:
-#        return None
-#
-#
-#def decode_embedded_lc(lc_bits: bytearray) -> Optional[DMRLC]:
-#    """
-#    Decode full LC from accumulated embedded LC bits using dmr_utils3.
-#    
-#    Embedded LC fragments from bursts B-E are collected (4 x 32 bits = 128 bits).
-#    The dmr_utils3.bptc.decode_emblc() function handles Hamming decoding and 
-#    checksum validation to reconstruct the 9-byte LC.
-#    
-#    Args:
-#        lc_bits: Accumulated LC bits from 4 frames (should be 128 bits / 16 bytes)
-#        
-#    Returns:
-#        DMRLC object if successfully decoded, None otherwise
-#    """
-#    if len(lc_bits) < 16:  # Need 128 bits = 16 bytes
-#        return None
-#    
-#    try:
-#        # Convert to bitarray for dmr_utils3
-#        from bitarray import bitarray
-#        bits = bitarray(endian='big')
-#        bits.frombytes(bytes(lc_bits[:16]))
-#        
-#        # Use dmr_utils3's proven embedded LC decoder
-#        # This handles Hamming FEC, checksum validation, and deinterleaving
-#        lc_bytes = bptc.decode_emblc(bits)
-#        
-#        if lc_bytes and len(lc_bytes) >= 9:
-#            # decode_emblc returns 9 bytes: [Options:3][Dst:3][Src:3]
-#            return decode_lc(lc_bytes)
-#            
-#    except Exception as e:
-#        LOGGER.debug(f'Error decoding embedded LC with dmr_utils3: {e}')
-#        
-#    return None
-
-
-def extract_talker_alias(lc: DMRLC, data: bytes) -> Optional[tuple[int, int, bytes]]:
-    """
-    Extract talker alias data from LC.
-    
-    Talker alias is transmitted across multiple LC frames:
-    - FLCO=4: Header with format (bits 0-1 of service_options) and length (bits 2-7 of service_options)
-    - FLCO=5,6,7: Three blocks of alias data (7 bytes each in dst_id + src_id fields)
-    
-    Args:
-        lc: DMRLC object with talker alias FLCO
-        data: Full DMRD packet with talker alias data
-        
-    Returns:
-        Tuple of (format, length, data_bytes) for header, or (block_num, 0, data_bytes) for blocks
-        None if extraction fails
-    """
-    if not (lc.is_talker_alias_header or lc.is_talker_alias_block):
-        return None
-    
-    try:
-        if lc.is_talker_alias_header:
-            # Header (FLCO=4)
-            # Format: bits 0-1 of service_options
-            #   0 = 7-bit ASCII
-            #   1 = ISO 8859-1
-            #   2 = UTF-8
-            #   3 = UTF-16BE
-            # Length: bits 2-7 of service_options (actual length in bytes)
-            format_type = lc.service_options & 0x03
-            length = (lc.service_options >> 2) & 0x3F
-            
-            # The header also contains the first 7 bytes of alias data
-            # packed into dst_id (3 bytes) + src_id (3 bytes) + FID (1 byte)
-            alias_data = bytearray()
-            # dst_id: 3 bytes
-            alias_data.extend(lc.dst_id.to_bytes(3, 'big'))
-            # src_id: 3 bytes  
-            alias_data.extend(lc.src_id.to_bytes(3, 'big'))
-            # FID: 1 byte
-            alias_data.append(lc.fid)
-            
-            return (format_type, length, bytes(alias_data[:7]))
-        
-        elif lc.is_talker_alias_block:
-            # Blocks (FLCO=5,6,7)
-            # Block number is FLCO - 4 (so 1, 2, 3)
-            block_num = lc.flco - 4
-            
-            # Each block contains 7 bytes of alias data
-            # packed into dst_id (3 bytes) + src_id (3 bytes) + FID (1 byte)
-            alias_data = bytearray()
-            alias_data.extend(lc.dst_id.to_bytes(3, 'big'))
-            alias_data.extend(lc.src_id.to_bytes(3, 'big'))
-            alias_data.append(lc.fid)
-            
-            return (block_num, 0, bytes(alias_data[:7]))
-        
-        return None
-    except (IndexError, ValueError) as e:
-        LOGGER.debug(f'Error extracting talker alias: {e}')
-        return None
-
-
-def decode_talker_alias(format_type: int, length: int, blocks: Dict[int, bytes]) -> Optional[str]:
-    """
-    Decode talker alias from collected blocks.
-    
-    Args:
-        format_type: Encoding format (0=7-bit, 1=ISO-8859-1, 2=UTF-8, 3=UTF-16BE)
-        length: Expected length in bytes
-        blocks: Dictionary of block_num -> data_bytes (blocks 0-3, where 0 is from header)
-        
-    Returns:
-        Decoded alias string, or None if decoding fails
-    """
-    if not blocks:
-        return None
-    
-    try:
-        # Concatenate all blocks in order (0=header, 1-3=blocks)
-        full_data = bytearray()
-        for i in range(4):
-            if i in blocks:
-                full_data.extend(blocks[i])
-        
-        # Trim to specified length
-        if length > 0 and length <= len(full_data):
-            full_data = full_data[:length]
-        
-        # Decode based on format
-        if format_type == 0:
-            # 7-bit ASCII - each byte contains a 7-bit character
-            # Strip high bit and decode
-            decoded = ''.join(chr(b & 0x7F) for b in full_data if b & 0x7F >= 0x20)
-            return decoded.rstrip('\x00 ')
-        
-        elif format_type == 1:
-            # ISO 8859-1 (Latin-1)
-            return full_data.decode('iso-8859-1', errors='ignore').rstrip('\x00 ')
-        
-        elif format_type == 2:
-            # UTF-8
-            return full_data.decode('utf-8', errors='ignore').rstrip('\x00 ')
-        
-        elif format_type == 3:
-            # UTF-16BE (Big Endian)
-            return full_data.decode('utf-16-be', errors='ignore').rstrip('\x00 ')
-        
-        else:
-            LOGGER.warning(f'Unknown talker alias format: {format_type}')
-            return None
-            
-    except Exception as e:
-        LOGGER.debug(f'Error decoding talker alias: {e}')
-        return None
 
 
 @dataclass
@@ -1080,7 +732,7 @@ class HBProtocol(DatagramProtocol):
             'src_id': int.from_bytes(rf_src, 'big'),
             'dst_id': int.from_bytes(dst_id, 'big'),
             'stream_id': stream_id.hex(),
-            'talker_alias': new_stream.talker_alias,
+            'alias': new_stream.alias,  # Will be populated from callsign lookup
             'call_type': new_stream.call_type
         })
         
@@ -1089,15 +741,13 @@ class HBProtocol(DatagramProtocol):
             src_id = int.from_bytes(rf_src, 'big')
             repeater_id = int.from_bytes(repeater.repeater_id, 'big')
             dst = int.from_bytes(dst_id, 'big')
-            # Don't populate callsign field yet - wait for talker alias or user lookup
-            # Callsign field will be empty string until we get talker alias
+            # TODO: Add callsign lookup from file to populate alias field
             self._user_cache.update(
                 radio_id=src_id,  # User's radio ID (subscriber)
                 repeater_id=repeater_id,
-                callsign='',  # Will be updated when talker alias is decoded
+                callsign='',  # Will be populated from callsign lookup file
                 slot=slot,
-                talkgroup=dst,
-                talker_alias=new_stream.talker_alias
+                talkgroup=dst
             )
         
         return True
@@ -1139,7 +789,7 @@ class HBProtocol(DatagramProtocol):
                     'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
                     'duration': round(duration, 2),
                     'packets': current_stream.packet_count,
-                    'talker_alias': current_stream.talker_alias,
+                    'alias': current_stream.alias,  # Will be populated from callsign lookup
                     'call_type': current_stream.call_type,
                     'end_reason': 'fast_terminator'
                 })
@@ -1405,21 +1055,6 @@ class HBProtocol(DatagramProtocol):
         # Note: _is_dmr_terminator() checks packet header flags for immediate detection
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
         
-        # Extract LC from voice sync frames (header/terminator)
-        # Note: LC from sync frames is a lower priority feature (see docs/TODO.md #4)
-        # Currently not needed - we get LC from DMRD header and embedded LC from voice frames
-        # Will be needed for stream forwarding with LC modification (requires FEC encoding)
-        _lc = None
-        # if _frame_type in [1, 2]:  # Voice sync or data sync - NOT YET IMPLEMENTED
-        #     _lc = extract_voice_lc(data)
-        #     if _lc and _lc.is_valid:
-        #         LOGGER.debug(f'Extracted LC from sync frame: '
-        #                    f'FLCO={_lc.flco}, '
-        #                    f'src={_lc.src_id}, '
-        #                    f'dst={_lc.dst_id}, '
-        #                    f'group={_lc.is_group_call}, '
-        #                    f'emergency={_lc.is_emergency}')
-        
         # Handle stream tracking
         stream_valid = self._handle_stream_packet(repeater, _rf_src, _dst_id, _slot, _stream_id, _call_type)
         
@@ -1430,100 +1065,8 @@ class HBProtocol(DatagramProtocol):
                         f'reason=stream contention or talkgroup not allowed')
             return
         
-        # Log packet details at debug level
-        current_stream = repeater.get_slot_stream(_slot)
-        
-        # Store LC information in stream if we extracted it from sync frame
-        if _lc and _lc.is_valid and current_stream:
-            if current_stream.lc is None:
-                current_stream.lc = _lc
-                current_stream.missed_header = False  # We got the header with full LC
-                # Update call type based on LC
-                if _lc.is_group_call:
-                    current_stream.call_type = "group"
-                elif _lc.is_private_call:
-                    current_stream.call_type = "private"
-                else:
-                    current_stream.call_type = "data"
-                LOGGER.info(f'Stream LC info: repeater={int.from_bytes(repeater_id, "big")} '
-                          f'slot={_slot}, '
-                          f'src={_lc.src_id}, '
-                          f'dst={_lc.dst_id}, '
-                          f'call_type={"GROUP" if _lc.is_group_call else "PRIVATE"}, '
-                          f'emergency={_lc.is_emergency}, '
-                          f'privacy={_lc.privacy_enabled}')
-            
-            # Handle talker alias collection
-            if _lc.is_talker_alias_header or _lc.is_talker_alias_block:
-                alias_data = extract_talker_alias(_lc, data)
-                if alias_data:
-                    if _lc.is_talker_alias_header:
-                        # Header: (format, length, first_7_bytes)
-                        format_type, length, data_bytes = alias_data
-                        current_stream.talker_alias_format = format_type
-                        current_stream.talker_alias_length = length
-                        current_stream.talker_alias_blocks[0] = data_bytes
-                        LOGGER.debug(f'Talker alias header: format={format_type}, length={length}')
-                    else:
-                        # Block: (block_num, 0, 7_bytes)
-                        block_num, _, data_bytes = alias_data
-                        current_stream.talker_alias_blocks[block_num] = data_bytes
-                        LOGGER.debug(f'Talker alias block {block_num} received')
-                    
-                    # Try to decode if we have enough blocks
-                    # We need at least the header (block 0) to know format and length
-                    if 0 in current_stream.talker_alias_blocks and len(current_stream.talker_alias_blocks) > 1:
-                        decoded_alias = decode_talker_alias(
-                            current_stream.talker_alias_format,
-                            current_stream.talker_alias_length,
-                            current_stream.talker_alias_blocks
-                        )
-                        if decoded_alias and decoded_alias != current_stream.talker_alias:
-                            current_stream.talker_alias = decoded_alias
-                            LOGGER.info(f'Talker alias: "{decoded_alias}" '
-                                      f'(format={current_stream.talker_alias_format}, '
-                                      f'blocks={list(current_stream.talker_alias_blocks.keys())})')
-                            
-                            # Update user cache with talker alias (which often contains callsign)
-                            if self._user_cache:
-                                src_id = int.from_bytes(_rf_src, 'big')
-                                repeater_id = int.from_bytes(repeater_id, 'big')
-                                dst = int.from_bytes(_dst_id, 'big')
-                                self._user_cache.update(
-                                    radio_id=src_id,  # User's radio ID (subscriber)
-                                    repeater_id=repeater_id,
-                                    callsign=decoded_alias,  # Talker alias often contains callsign
-                                    slot=_slot,
-                                    talkgroup=dst,
-                                    talker_alias=decoded_alias
-                                )
-        
-        # LC recovery - disabled until fixed
-        ## If we missed the header, try to extract embedded LC from voice frames
-        ## Only do this if we don't already have LC (optimization to avoid overhead)
-        #elif _frame_type == 0 and current_stream and current_stream.missed_header and current_stream.lc is None:
-        #    # Voice frame - check for embedded LC
-        #    # Embedded LC is in frames 1-4 of each superframe (voice frames B-E)
-        #    frame_within_superframe = _seq % 6  # 0-5, where 1-4 contain embedded LC
-        #    
-        #    if 1 <= frame_within_superframe <= 4:
-        #        embedded_fragment = extract_embedded_lc(data, frame_within_superframe)
-        #        if embedded_fragment:
-        #            current_stream.embedded_lc_bits.extend(embedded_fragment)
-        #            
-        #            # After collecting 4 frames, try to decode
-        #            if len(current_stream.embedded_lc_bits) >= 8:
-        #                embedded_lc = decode_embedded_lc(current_stream.embedded_lc_bits)
-        #                if embedded_lc and embedded_lc.is_valid:
-        #                    current_stream.lc = embedded_lc
-        #                    current_stream.missed_header = False  # We recovered the LC
-        #                    LOGGER.info(f'Recovered LC from embedded data: '
-        #                              f'repeater={int.from_bytes(repeater_id, "big")} '
-        #                              f'slot={_slot}, '
-        #                              f'src={embedded_lc.src_id}, '
-        #                              f'dst={embedded_lc.dst_id}')
-        #                    # Clear accumulated bits
-        #                    current_stream.embedded_lc_bits = bytearray()
+        # TODO: Add callsign lookup here to populate stream.alias field
+        # This will be done from a lookup file: radio_id -> callsign
         
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'DMR data from {int.from_bytes(repeater_id, "big")} slot {_slot}: '
