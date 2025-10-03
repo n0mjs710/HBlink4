@@ -337,10 +337,72 @@
             </div>
         </div>
         
+        <!-- Last Heard Users (Top 10) -->
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h2 style="margin: 0;">Last Heard</h2>
+                <button onclick="showFullCache()" style="background-color: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                    View Full Cache
+                </button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                    <thead>
+                        <tr style="background-color: #374151; color: white;">
+                            <th style="padding: 8px; text-align: left;">Radio ID</th>
+                            <th style="padding: 8px; text-align: left;">Callsign/Alias</th>
+                            <th style="padding: 8px; text-align: left;">Repeater</th>
+                            <th style="padding: 8px; text-align: center;">Slot</th>
+                            <th style="padding: 8px; text-align: left;">Talkgroup</th>
+                            <th style="padding: 8px; text-align: left;">Last Heard</th>
+                        </tr>
+                    </thead>
+                    <tbody id="lastHeardTable">
+                        <tr>
+                            <td colspan="6" style="padding: 20px; text-align: center; color: #9ca3af;">
+                                No users heard yet
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
         <!-- Repeaters with Inline Slot Status -->
-        <div id="repeatersContainer"></div>        <div class="card">
+        <div id="repeatersContainer"></div>
+        
+        <div class="card">
             <h2>Recent Events</h2>
             <div id="eventsLog"></div>
+        </div>
+        
+        <!-- Full Cache Modal -->
+        <div id="cacheModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.7); z-index: 1000; overflow: auto;">
+            <div style="background-color: #1f2937; margin: 50px auto; padding: 20px; border-radius: 8px; max-width: 1200px; position: relative;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0; color: white;">Full User Cache</h2>
+                    <button onclick="hideFullCache()" style="background-color: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 1em;">
+                        Close
+                    </button>
+                </div>
+                <div id="cacheStats" style="color: #9ca3af; margin-bottom: 15px; font-size: 0.9em;"></div>
+                <div style="overflow-x: auto; max-height: 70vh; overflow-y: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                        <thead style="position: sticky; top: 0; background-color: #374151; z-index: 10;">
+                            <tr style="color: white;">
+                                <th style="padding: 8px; text-align: left;">Radio ID</th>
+                                <th style="padding: 8px; text-align: left;">Callsign/Alias</th>
+                                <th style="padding: 8px; text-align: left;">Repeater</th>
+                                <th style="padding: 8px; text-align: center;">Slot</th>
+                                <th style="padding: 8px; text-align: left;">Talkgroup</th>
+                                <th style="padding: 8px; text-align: left;">Last Heard</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fullCacheTable" style="color: white;">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -351,6 +413,8 @@
             repeaters: [],
             streams: [],
             events: [],
+            last_heard: [],
+            last_heard_stats: {},
             stats: {
                 total_streams_today: 0,
                 total_duration_today: 0
@@ -402,11 +466,13 @@
                     state.streams = data.data.streams;
                     state.events = data.data.events;
                     state.stats = data.data.stats;
+                    state.last_heard = data.data.last_heard || [];
                     
                     updateRepeaters(state.repeaters);
                     updateStreams(state.streams);
                     updateEvents(state.events);
                     updateStats(state.stats, state.repeaters, state.streams);
+                    updateLastHeard(state.last_heard);
                 } else if (data.type === 'stats_reset') {
                     // Midnight reset - update stats immediately
                     state.stats = data.data;
@@ -622,6 +688,121 @@
             }).join('');
         }
         
+        function updateLastHeard(users) {
+            const tbody = document.getElementById('lastHeardTable');
+            
+            if (!users || users.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="padding: 20px; text-align: center; color: #9ca3af;">
+                            No users heard yet
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            // Show only top 10 most recent
+            const topUsers = users.slice(0, 10);
+            
+            tbody.innerHTML = topUsers.map(user => {
+                const lastHeardDate = new Date(user.last_heard * 1000);
+                const now = Date.now();
+                const elapsed = Math.floor((now - lastHeardDate) / 1000);
+                
+                let timeAgo;
+                if (elapsed < 60) {
+                    timeAgo = `${elapsed}s ago`;
+                } else if (elapsed < 3600) {
+                    timeAgo = `${Math.floor(elapsed / 60)}m ago`;
+                } else {
+                    timeAgo = lastHeardDate.toLocaleTimeString();
+                }
+                
+                // Only show talker alias if available, otherwise dash
+                const callsign = user.talker_alias || '-';
+                
+                return `
+                    <tr style="border-bottom: 1px solid #374151;">
+                        <td style="padding: 8px;">${user.radio_id}</td>
+                        <td style="padding: 8px; font-weight: 500; color: ${user.talker_alias ? 'white' : '#6b7280'};">${callsign}</td>
+                        <td style="padding: 8px;">${user.repeater_id}</td>
+                        <td style="padding: 8px; text-align: center;">${user.slot}</td>
+                        <td style="padding: 8px;">${user.talkgroup}</td>
+                        <td style="padding: 8px; color: #9ca3af;">${timeAgo}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        function showFullCache() {
+            const modal = document.getElementById('cacheModal');
+            const fullTable = document.getElementById('fullCacheTable');
+            const statsDiv = document.getElementById('cacheStats');
+            
+            // Update stats
+            const totalUsers = state.last_heard ? state.last_heard.length : 0;
+            const cacheStats = state.last_heard_stats || {};
+            statsDiv.innerHTML = `
+                Total cached users: ${totalUsers} | 
+                Cache timeout: ${Math.floor((cacheStats.timeout_seconds || 600) / 60)} minutes
+            `;
+            
+            // Populate full table
+            if (!state.last_heard || state.last_heard.length === 0) {
+                fullTable.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="padding: 20px; text-align: center; color: #9ca3af;">
+                            No users in cache
+                        </td>
+                    </tr>
+                `;
+            } else {
+                fullTable.innerHTML = state.last_heard.map(user => {
+                    const lastHeardDate = new Date(user.last_heard * 1000);
+                    const now = Date.now();
+                    const elapsed = Math.floor((now - lastHeardDate) / 1000);
+                    
+                    let timeAgo;
+                    if (elapsed < 60) {
+                        timeAgo = `${elapsed}s ago`;
+                    } else if (elapsed < 3600) {
+                        timeAgo = `${Math.floor(elapsed / 60)}m ago`;
+                    } else {
+                        timeAgo = lastHeardDate.toLocaleTimeString();
+                    }
+                    
+                    // Only show talker alias if available, otherwise dash
+                    const callsign = user.talker_alias || '-';
+                    
+                    return `
+                        <tr style="border-bottom: 1px solid #374151;">
+                            <td style="padding: 8px;">${user.radio_id}</td>
+                            <td style="padding: 8px; font-weight: 500; color: ${user.talker_alias ? 'white' : '#6b7280'};">${callsign}</td>
+                            <td style="padding: 8px;">${user.repeater_id}</td>
+                            <td style="padding: 8px; text-align: center;">${user.slot}</td>
+                            <td style="padding: 8px;">${user.talkgroup}</td>
+                            <td style="padding: 8px; color: #9ca3af;">${timeAgo}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+            
+            modal.style.display = 'block';
+        }
+        
+        function hideFullCache() {
+            document.getElementById('cacheModal').style.display = 'none';
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('cacheModal');
+            if (event.target === modal) {
+                hideFullCache();
+            }
+        }
+        
         function processEventUpdate(event) {
             // Update local state immediately based on event type
             const eventType = event.type;
@@ -676,6 +857,13 @@
                     if (state.repeaters) {
                         updateRepeaters(state.repeaters);
                     }
+                    break;
+                    
+                case 'last_heard_update':
+                    // Update last heard list
+                    state.last_heard = data.users || [];
+                    state.last_heard_stats = data.stats || {};
+                    updateLastHeard(state.last_heard);
                     break;
             }
         }

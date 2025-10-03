@@ -15,7 +15,12 @@
         "stats_interval": 60,
         "report_stats": true,
         "stream_timeout": 2.0,
-        "stream_hang_time": 10.0
+        "stream_hang_time": 10.0,
+        "user_cache": {
+            "enabled": true,
+            "timeout": 600,
+            "cleanup_interval": 60
+        }
     },
     "global_alternate_example": {
         "comment": "Alternative configuration showing longer hang time for slower operators",

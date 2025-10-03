@@ -62,6 +62,8 @@ class DashboardState:
         self.repeaters: Dict[int, dict] = {}
         self.streams: Dict[str, dict] = {}  # key: f"{repeater_id}.{slot}"
         self.events: deque = deque(maxlen=500)  # Ring buffer of recent events
+        self.last_heard: List[dict] = []  # Last heard users
+        self.last_heard_stats: dict = {}  # User cache statistics
         self.websocket_clients: Set[WebSocket] = set()
         self.stats = {
             'total_streams_today': 0,
@@ -183,6 +185,12 @@ class EventReceiver:
                 del state.streams[key]
                 logger.debug(f"Hang time expired for {key}")
         
+        elif event_type == 'last_heard_update':
+            # Update last heard users
+            state.last_heard = data.get('users', [])
+            state.last_heard_stats = data.get('stats', {})
+            logger.debug(f"Last heard updated: {len(state.last_heard)} users")
+        
         # Add to event log
         state.events.append(event)
         
@@ -248,7 +256,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket connection for real-time updates"""
     await websocket.accept()
     state.websocket_clients.add(websocket)
-    logger.info(f"WebSocket client connected (total: {len(state.websocket_clients)})")
+    logger.debug(f"WebSocket client connected (total: {len(state.websocket_clients)})")
     
     # Send initial state
     await websocket.send_json({
@@ -257,7 +265,8 @@ async def websocket_endpoint(websocket: WebSocket):
             'repeaters': list(state.repeaters.values()),
             'streams': list(state.streams.values()),
             'events': list(state.events)[-50:],
-            'stats': state.stats
+            'stats': state.stats,
+            'last_heard': state.last_heard
         }
     })
     
@@ -269,7 +278,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_text('pong')
     except WebSocketDisconnect:
         state.websocket_clients.discard(websocket)
-        logger.info(f"WebSocket client disconnected (remaining: {len(state.websocket_clients)})")
+        logger.debug(f"WebSocket client disconnected (remaining: {len(state.websocket_clients)})")
 
 
 # Serve frontend
@@ -341,5 +350,6 @@ if __name__ == "__main__":
         "dashboard.server:app",
         host="0.0.0.0",
         port=8080,
-        log_level="info"
+        log_level="info",
+        access_log=False  # Disable access logging (reduces log clutter)
     )

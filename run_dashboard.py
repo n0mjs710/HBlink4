@@ -27,5 +27,5 @@ if __name__ == '__main__':
         host=host,
         port=port,
         log_level="info",
-        access_log=True
+        access_log=False  # Disable access logging to reduce log clutter
     )

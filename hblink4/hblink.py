@@ -13,7 +13,7 @@ import json
 import logging
 import logging.handlers
 import pathlib
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, Optional, Tuple, Union, List
 from time import time
 from random import randint
 from hashlib import sha256
@@ -41,6 +41,7 @@ try:
     )
     from .access_control import RepeaterMatcher
     from .events import EventEmitter
+    from .user_cache import UserCache
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
@@ -48,6 +49,8 @@ except ImportError:
         DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
     )
     from access_control import RepeaterMatcher
+    from events import EventEmitter
+    from user_cache import UserCache
     from events import EventEmitter
 
 # Type definitions
@@ -498,8 +501,20 @@ class HBProtocol(DatagramProtocol):
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
         self._stream_timeout_task = None
+        self._user_cache_cleanup_task = None
+        self._user_cache_broadcast_task = None
         self._port = None  # Store the port instance instead of transport
         self._events = EventEmitter()  # Dashboard event emitter
+        
+        # Initialize user cache if enabled
+        user_cache_config = CONFIG.get('global', {}).get('user_cache', {})
+        if user_cache_config.get('enabled', True):
+            cache_timeout = user_cache_config.get('timeout', 600)
+            self._user_cache = UserCache(timeout_seconds=cache_timeout)
+            LOGGER.info(f'User cache enabled with {cache_timeout}s timeout')
+        else:
+            self._user_cache = None
+            LOGGER.info('User cache disabled')
         
     def cleanup(self) -> None:
         """Send disconnect messages to all repeaters and cleanup resources."""
@@ -532,6 +547,18 @@ class HBProtocol(DatagramProtocol):
         # Start stream timeout checker (check more frequently than repeater timeout)
         self._stream_timeout_task = LoopingCall(self._check_stream_timeouts)
         self._stream_timeout_task.start(1.0)  # Check every second
+        
+        # Start user cache cleanup if enabled
+        if self._user_cache:
+            cleanup_interval = CONFIG.get('global', {}).get('user_cache', {}).get('cleanup_interval', 60)
+            self._user_cache_cleanup_task = LoopingCall(self._cleanup_user_cache)
+            self._user_cache_cleanup_task.start(cleanup_interval)
+            LOGGER.info(f'User cache cleanup task started (every {cleanup_interval}s)')
+            
+            # Broadcast user cache to dashboard every 10 seconds
+            self._user_cache_broadcast_task = LoopingCall(self._broadcast_user_cache)
+            self._user_cache_broadcast_task.start(10.0)
+            LOGGER.info('User cache broadcast task started (every 10s)')
 
     def stopProtocol(self):
         """Called when transport is disconnected"""
@@ -539,6 +566,10 @@ class HBProtocol(DatagramProtocol):
             self._timeout_task.stop()
         if self._stream_timeout_task and self._stream_timeout_task.running:
             self._stream_timeout_task.stop()
+        if self._user_cache_cleanup_task and self._user_cache_cleanup_task.running:
+            self._user_cache_cleanup_task.stop()
+        if self._user_cache_broadcast_task and self._user_cache_broadcast_task.running:
+            self._user_cache_broadcast_task.stop()
             
     def _check_repeater_timeouts(self):
         """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
@@ -644,6 +675,38 @@ class HBProtocol(DatagramProtocol):
                             'slot': 2
                         })
                         repeater.slot2_stream = None
+    
+    def _cleanup_user_cache(self):
+        """Periodic cleanup of expired user cache entries"""
+        if self._user_cache:
+            removed = self._user_cache.cleanup()
+            if removed > 0:
+                LOGGER.debug(f'User cache cleanup: removed {removed} expired entries')
+    
+    def _broadcast_user_cache(self):
+        """Broadcast user cache data to dashboard"""
+        if self._user_cache:
+            last_heard = self._user_cache.get_last_heard(limit=50)  # Limit to 50 for efficiency
+            stats = self._user_cache.get_stats()
+            
+            self._events.emit('last_heard_update', {
+                'users': last_heard,
+                'stats': stats
+            })
+    
+    def get_user_cache_data(self, limit: int = 50) -> List[dict]:
+        """
+        Get last heard users from cache.
+        
+        Args:
+            limit: Maximum number of entries to return
+            
+        Returns:
+            List of user entries sorted by most recent first
+        """
+        if self._user_cache:
+            return self._user_cache.get_last_heard(limit)
+        return []
 
     def datagramReceived(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
@@ -719,12 +782,14 @@ class HBProtocol(DatagramProtocol):
     def _validate_repeater(self, radio_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
         if radio_id not in self._repeaters:
-            LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} not found in _repeaters dict')
+            # Per-packet logging - only enable for heavy troubleshooting
+            #LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} not found in _repeaters dict')
             self._send_nak(radio_id, addr, reason="Repeater not registered")
             return None
             
         repeater = self._repeaters[radio_id]
-        LOGGER.debug(f'Validating repeater {int.from_bytes(radio_id, "big")}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
+        # Per-packet logging - only enable for heavy troubleshooting
+        #LOGGER.debug(f'Validating repeater {int.from_bytes(radio_id, "big")}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
         if repeater.sockaddr != addr:
             LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(radio_id, "big")}')
@@ -828,6 +893,22 @@ class HBProtocol(DatagramProtocol):
             'talker_alias': new_stream.talker_alias,
             'call_type': new_stream.call_type
         })
+        
+        # Update user cache (for "last heard" and private call routing)
+        if self._user_cache:
+            src_id = int.from_bytes(rf_src, 'big')
+            repeater_id = int.from_bytes(repeater.radio_id, 'big')
+            dst = int.from_bytes(dst_id, 'big')
+            # Don't populate callsign field yet - wait for talker alias or user lookup
+            # Callsign field will be empty string until we get talker alias
+            self._user_cache.update(
+                radio_id=src_id,
+                repeater_id=repeater_id,
+                callsign='',  # Will be updated when talker alias is decoded
+                slot=slot,
+                talkgroup=dst,
+                talker_alias=new_stream.talker_alias
+            )
         
         return True
     
@@ -1208,6 +1289,20 @@ class HBProtocol(DatagramProtocol):
                             LOGGER.info(f'Talker alias: "{decoded_alias}" '
                                       f'(format={current_stream.talker_alias_format}, '
                                       f'blocks={list(current_stream.talker_alias_blocks.keys())})')
+                            
+                            # Update user cache with talker alias (which often contains callsign)
+                            if self._user_cache:
+                                src_id = int.from_bytes(_rf_src, 'big')
+                                repeater_id = int.from_bytes(radio_id, 'big')
+                                dst = int.from_bytes(_dst_id, 'big')
+                                self._user_cache.update(
+                                    radio_id=src_id,
+                                    repeater_id=repeater_id,
+                                    callsign=decoded_alias,  # Talker alias often contains callsign
+                                    slot=_slot,
+                                    talkgroup=dst,
+                                    talker_alias=decoded_alias
+                                )
         
         # If we missed the header, try to extract embedded LC from voice frames
         # Only do this if we don't already have LC (optimization to avoid overhead)
