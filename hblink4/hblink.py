@@ -662,6 +662,10 @@ class HBProtocol(DatagramProtocol):
                             'hang_time': hang_time,
                             'call_type': stream.call_type
                         })
+                        
+                        # Decrement forwarding stats if this was an assumed stream
+                        if stream.is_assumed:
+                            self._forwarding_stats['active_calls'] -= 1
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
                         LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(repeater_id, "big")} slot 1')
@@ -699,6 +703,10 @@ class HBProtocol(DatagramProtocol):
                             'hang_time': hang_time,
                             'call_type': stream.call_type
                         })
+                        
+                        # Decrement forwarding stats if this was an assumed stream
+                        if stream.is_assumed:
+                            self._forwarding_stats['active_calls'] -= 1
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
                         LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(repeater_id, "big")} slot 2')
@@ -1616,16 +1624,16 @@ class HBProtocol(DatagramProtocol):
             self._send_packet(data, target_repeater.sockaddr)
             forwarded_count += 1
             
-            # Track assumed stream state on target repeater
-            self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, stream_id, is_terminator)
+            # Track assumed stream state on target repeater (logs new streams at INFO)
+            self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, stream_id, is_terminator, 
+                                       int.from_bytes(source_repeater_id, 'big'))
         
-        # Log forwarding activity
+        # Log forwarding summary at INFO level
         if forwarded_count > 0:
-            LOGGER.debug(f'Forwarded stream packet: '
+            LOGGER.debug(f'Forwarded packet: '
                         f'src_repeater={int.from_bytes(source_repeater_id, "big")} '
                         f'slot={slot} subscriber={int.from_bytes(rf_src, "big")} '
-                        f'tgid={tgid} '
-                        f'stream={stream_id.hex()[:8]} -> {forwarded_count} target(s)')
+                        f'tgid={tgid} -> {forwarded_count} target(s)')
             
             # Emit forwarding event for dashboard
             self._events.emit('stream_forwarded', {
@@ -1639,7 +1647,8 @@ class HBProtocol(DatagramProtocol):
             })
     
     def _update_assumed_stream(self, repeater: RepeaterState, slot: int, rf_src: bytes, 
-                              dst_id: bytes, stream_id: bytes, is_terminator: bool) -> None:
+                              dst_id: bytes, stream_id: bytes, is_terminator: bool,
+                              source_repeater_id: int) -> None:
         """
         Update or create assumed stream state on a target repeater.
         
@@ -1653,6 +1662,7 @@ class HBProtocol(DatagramProtocol):
             dst_id: Destination TGID
             stream_id: Stream identifier
             is_terminator: Whether this packet is a terminator
+            source_repeater_id: ID of source repeater (for logging)
         """
         current_stream = repeater.get_slot_stream(slot)
         current_time = time()
@@ -1672,8 +1682,26 @@ class HBProtocol(DatagramProtocol):
                 is_assumed=True  # Mark as assumed stream
             )
             repeater.set_slot_stream(slot, new_stream)
-            LOGGER.debug(f'Assumed stream started on target repeater {int.from_bytes(repeater.repeater_id, "big")} '
-                        f'TS{slot}: src={int.from_bytes(rf_src, "big")}, tgid={int.from_bytes(dst_id, "big")}')
+            
+            # Log at INFO level - will appear once per target repeater
+            LOGGER.info(f'Forwarding stream to repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                       f'from repeater {source_repeater_id}, '
+                       f'src={int.from_bytes(rf_src, "big")}, '
+                       f'tgid={int.from_bytes(dst_id, "big")}')
+            
+            # Emit stream_start event for dashboard
+            self._events.emit('stream_start', {
+                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
+                'slot': slot,
+                'src_id': int.from_bytes(rf_src, 'big'),
+                'dst_id': int.from_bytes(dst_id, 'big'),
+                'call_type': 'group',
+                'is_assumed': True
+            })
+            
+            # Update forwarding stats
+            self._forwarding_stats['active_calls'] += 1
+            self._forwarding_stats['total_calls_today'] += 1
         else:
             # Update existing assumed stream
             current_stream.last_seen = current_time
@@ -1684,9 +1712,29 @@ class HBProtocol(DatagramProtocol):
             duration = current_time - current_stream.start_time
             current_stream.end_time = current_time
             current_stream.ended = True
-            LOGGER.info(f'Assumed stream terminated on target repeater {int.from_bytes(repeater.repeater_id, "big")} '
-                       f'TS{slot}: src={int.from_bytes(rf_src, "big")}, tgid={int.from_bytes(dst_id, "big")}, '
-                       f'duration={duration:.2f}s')
+            
+            # Log at INFO level
+            LOGGER.info(f'Forwarding ended to repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(rf_src, "big")}, '
+                       f'tgid={int.from_bytes(dst_id, "big")}, '
+                       f'duration={duration:.2f}s, '
+                       f'packets={current_stream.packet_count}')
+            
+            # Emit stream_end event for dashboard
+            self._events.emit('stream_end', {
+                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
+                'slot': slot,
+                'src_id': int.from_bytes(rf_src, 'big'),
+                'dst_id': int.from_bytes(dst_id, 'big'),
+                'duration': round(duration, 2),
+                'packets': current_stream.packet_count,
+                'end_reason': 'terminator',
+                'hang_time': CONFIG.get('global', {}).get('stream_hang_time', 3.0),
+                'call_type': 'group'
+            })
+            
+            # Update forwarding stats
+            self._forwarding_stats['active_calls'] -= 1
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
