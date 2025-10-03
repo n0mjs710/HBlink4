@@ -97,6 +97,41 @@ The log rotation system:
    - Regularly review logs for security events
    - Archive security-relevant logs
 
+## Debug Code Comment Phrases
+
+Certain sections of code have been commented out with specific marker phrases to make them easy to find and re-enable when needed. Use these phrases when searching the codebase:
+
+### Per-packet logging - only enable for heavy troubleshooting
+
+**Purpose**: High-frequency debug logging that generates massive amounts of output  
+**Location**: `hblink4/hblink.py`  
+**When to enable**: Only when troubleshooting specific packet-level issues  
+**Search command**: `grep -n "Per-packet logging" hblink4/hblink.py`
+
+**Commented sections**:
+1. Command bytes logging (line ~719)
+2. Packet received logging (line ~740)
+3. Repeater validation state logging (line ~785)
+4. Repeater not found validation (line ~791)
+5. DMR data per-packet details (line ~1333)
+
+**Warning**: Enabling these logs will generate hundreds of log entries per second during active transmission. Use only for targeted debugging and disable immediately after.
+
+### LC recovery - disabled until fixed
+
+**Purpose**: Embedded Link Control extraction from voice frames  
+**Location**: `hblink4/hblink.py`  
+**Status**: Not currently working correctly, disabled pending fix  
+**Search command**: `grep -n "LC recovery" hblink4/hblink.py`
+
+**Commented sections**:
+1. StreamInfo fields: `missed_header`, `embedded_lc_bits` (line ~78-79)
+2. Function: `extract_embedded_lc()` (line ~218)
+3. Function: `decode_embedded_lc()` (line ~285)
+4. Embedded LC extraction in datagram handler (line ~1307)
+
+**Note**: This feature was intended to recover Link Control information when the voice header frame is missed. The LC is still obtained from the DMRD packet header, so this is a backup/recovery mechanism only.
+
 ## Implementation Details
 
 The logging system uses Python's built-in `TimedRotatingFileHandler` with these settings:

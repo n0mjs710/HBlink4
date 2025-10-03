@@ -75,8 +75,9 @@ class StreamState:
     packet_count: int = 0    # Number of packets in this stream
     ended: bool = False      # True when stream has timed out but in hang time
     lc: Optional['DMRLC'] = None  # Link Control information if extracted
-    missed_header: bool = True    # True if we missed the voice header (need embedded LC)
-    embedded_lc_bits: bytearray = field(default_factory=bytearray)  # Accumulated embedded LC bits
+    # LC recovery - disabled until fixed
+    #missed_header: bool = True    # True if we missed the voice header (need embedded LC)
+    #embedded_lc_bits: bytearray = field(default_factory=bytearray)  # Accumulated embedded LC bits
     talker_alias: str = ""   # Talker alias if extracted
     talker_alias_format: int = 0  # Talker alias format (0=7-bit, 1=ISO-8859-1, 2=UTF-8, 3=UTF-16)
     talker_alias_length: int = 0  # Expected length of talker alias
@@ -214,109 +215,109 @@ def extract_voice_lc(data: bytes) -> Optional[DMRLC]:
         
     return None
 
-
-def extract_embedded_lc(data: bytes, frame_num: int) -> Optional[bytes]:
-    """
-    Extract embedded LC fragment from a DMR voice burst frame.
-    
-    DMR voice burst frames contain embedded signaling spread across frames B-E
-    (frames 1-4 of each superframe). Each voice burst contains 2 bytes (16 bits) 
-    of embedded LC data at specific bit positions within the 33-byte payload.
-    
-    The embedded signaling is interleaved throughout the voice burst frame:
-    - 5 bits in SYNC section (bits 0-4)
-    - 5 bits in EMB section (bits 5-9)
-    - 6 bits scattered in burst sections
-    
-    This function extracts the 16 embedded LC bits from their positions in the
-    voice burst frame and returns them as 2 bytes.
-    
-    This should only be called when we've missed the voice header frame.
-    
-    Args:
-        data: Full DMRD packet (53+ bytes), payload starts at byte 20
-        frame_num: Voice frame number (1-4 for frames B-E with embedded LC)
-        
-    Returns:
-        2 bytes of embedded LC fragment, or None if extraction fails
-    """
-    if len(data) < 53 or frame_num < 1 or frame_num > 4:
-        return None
-    
-    try:
-        # DMR voice burst payload starts at byte 20 of DMRD packet
-        # The payload is 33 bytes total
-        payload = data[20:53]
-        
-        # Embedded signaling LC bits are located at specific bit positions
-        # within the 264-bit (33-byte) voice burst frame structure
-        # 
-        # According to ETSI TS 102 361-1, the embedded signaling is spread across:
-        # - EMB (Embedded Signaling) at the beginning
-        # - Scattered bits within the burst
-        #
-        # For simplicity, we extract from known byte positions where embedded LC
-        # fragments typically appear in frames B-E:
-        #
-        # Frame B (1): LC bits 0-15
-        # Frame C (2): LC bits 16-31
-        # Frame D (3): LC bits 32-47
-        # Frame E (4): LC bits 48-63
-        #
-        # The embedded LC is typically found at bytes 13-14 of the payload
-        # after deinterleaving (simplified extraction)
-        
-        # For now, use a simplified extraction from known positions
-        # This extracts 16 bits from the middle section of each voice burst
-        # where embedded signaling typically resides
-        
-        # Extract 2 bytes (16 bits) from the embedded signaling positions
-        # Bytes 13-14 of payload typically contain embedded LC fragments
-        lc_fragment = payload[13:15]
-        
-        if len(lc_fragment) == 2:
-            return lc_fragment
-        
-        return None
-    except IndexError:
-        return None
-
-
-def decode_embedded_lc(lc_bits: bytearray) -> Optional[DMRLC]:
-    """
-    Decode full LC from accumulated embedded LC bits using dmr_utils3.
-    
-    Embedded LC fragments from bursts B-E are collected (4 x 32 bits = 128 bits).
-    The dmr_utils3.bptc.decode_emblc() function handles Hamming decoding and 
-    checksum validation to reconstruct the 9-byte LC.
-    
-    Args:
-        lc_bits: Accumulated LC bits from 4 frames (should be 128 bits / 16 bytes)
-        
-    Returns:
-        DMRLC object if successfully decoded, None otherwise
-    """
-    if len(lc_bits) < 16:  # Need 128 bits = 16 bytes
-        return None
-    
-    try:
-        # Convert to bitarray for dmr_utils3
-        from bitarray import bitarray
-        bits = bitarray(endian='big')
-        bits.frombytes(bytes(lc_bits[:16]))
-        
-        # Use dmr_utils3's proven embedded LC decoder
-        # This handles Hamming FEC, checksum validation, and deinterleaving
-        lc_bytes = bptc.decode_emblc(bits)
-        
-        if lc_bytes and len(lc_bytes) >= 9:
-            # decode_emblc returns 9 bytes: [Options:3][Dst:3][Src:3]
-            return decode_lc(lc_bytes)
-            
-    except Exception as e:
-        LOGGER.debug(f'Error decoding embedded LC with dmr_utils3: {e}')
-        
-    return None
+# LC recovery - disabled until fixed
+#def extract_embedded_lc(data: bytes, frame_num: int) -> Optional[bytes]:
+#    """
+#    Extract embedded LC fragment from a DMR voice burst frame.
+#    
+#    DMR voice burst frames contain embedded signaling spread across frames B-E
+#    (frames 1-4 of each superframe). Each voice burst contains 2 bytes (16 bits) 
+#    of embedded LC data at specific bit positions within the 33-byte payload.
+#    
+#    The embedded signaling is interleaved throughout the voice burst frame:
+#    - 5 bits in SYNC section (bits 0-4)
+#    - 5 bits in EMB section (bits 5-9)
+#    - 6 bits scattered in burst sections
+#    
+#    This function extracts the 16 embedded LC bits from their positions in the
+#    voice burst frame and returns them as 2 bytes.
+#    
+#    This should only be called when we've missed the voice header frame.
+#    
+#    Args:
+#        data: Full DMRD packet (53+ bytes), payload starts at byte 20
+#        frame_num: Voice frame number (1-4 for frames B-E with embedded LC)
+#        
+#    Returns:
+#        2 bytes of embedded LC fragment, or None if extraction fails
+#    """
+#    if len(data) < 53 or frame_num < 1 or frame_num > 4:
+#        return None
+#    
+#    try:
+#        # DMR voice burst payload starts at byte 20 of DMRD packet
+#        # The payload is 33 bytes total
+#        payload = data[20:53]
+#        
+#        # Embedded signaling LC bits are located at specific bit positions
+#        # within the 264-bit (33-byte) voice burst frame structure
+#        # 
+#        # According to ETSI TS 102 361-1, the embedded signaling is spread across:
+#        # - EMB (Embedded Signaling) at the beginning
+#        # - Scattered bits within the burst
+#        #
+#        # For simplicity, we extract from known byte positions where embedded LC
+#        # fragments typically appear in frames B-E:
+#        #
+#        # Frame B (1): LC bits 0-15
+#        # Frame C (2): LC bits 16-31
+#        # Frame D (3): LC bits 32-47
+#        # Frame E (4): LC bits 48-63
+#        #
+#        # The embedded LC is typically found at bytes 13-14 of the payload
+#        # after deinterleaving (simplified extraction)
+#        
+#        # For now, use a simplified extraction from known positions
+#        # This extracts 16 bits from the middle section of each voice burst
+#        # where embedded signaling typically resides
+#        
+#        # Extract 2 bytes (16 bits) from the embedded signaling positions
+#        # Bytes 13-14 of payload typically contain embedded LC fragments
+#        lc_fragment = payload[13:15]
+#        
+#        if len(lc_fragment) == 2:
+#            return lc_fragment
+#        
+#        return None
+#    except IndexError:
+#        return None
+#
+#
+#def decode_embedded_lc(lc_bits: bytearray) -> Optional[DMRLC]:
+#    """
+#    Decode full LC from accumulated embedded LC bits using dmr_utils3.
+#    
+#    Embedded LC fragments from bursts B-E are collected (4 x 32 bits = 128 bits).
+#    The dmr_utils3.bptc.decode_emblc() function handles Hamming decoding and 
+#    checksum validation to reconstruct the 9-byte LC.
+#    
+#    Args:
+#        lc_bits: Accumulated LC bits from 4 frames (should be 128 bits / 16 bytes)
+#        
+#    Returns:
+#        DMRLC object if successfully decoded, None otherwise
+#    """
+#    if len(lc_bits) < 16:  # Need 128 bits = 16 bytes
+#        return None
+#    
+#    try:
+#        # Convert to bitarray for dmr_utils3
+#        from bitarray import bitarray
+#        bits = bitarray(endian='big')
+#        bits.frombytes(bytes(lc_bits[:16]))
+#        
+#        # Use dmr_utils3's proven embedded LC decoder
+#        # This handles Hamming FEC, checksum validation, and deinterleaving
+#        lc_bytes = bptc.decode_emblc(bits)
+#        
+#        if lc_bytes and len(lc_bytes) >= 9:
+#            # decode_emblc returns 9 bytes: [Options:3][Dst:3][Src:3]
+#            return decode_lc(lc_bytes)
+#            
+#    except Exception as e:
+#        LOGGER.debug(f'Error decoding embedded LC with dmr_utils3: {e}')
+#        
+#    return None
 
 
 def extract_talker_alias(lc: DMRLC, data: bytes) -> Optional[tuple[int, int, bytes]]:
@@ -1304,31 +1305,32 @@ class HBProtocol(DatagramProtocol):
                                     talker_alias=decoded_alias
                                 )
         
-        # If we missed the header, try to extract embedded LC from voice frames
-        # Only do this if we don't already have LC (optimization to avoid overhead)
-        elif _frame_type == 0 and current_stream and current_stream.missed_header and current_stream.lc is None:
-            # Voice frame - check for embedded LC
-            # Embedded LC is in frames 1-4 of each superframe (voice frames B-E)
-            frame_within_superframe = _seq % 6  # 0-5, where 1-4 contain embedded LC
-            
-            if 1 <= frame_within_superframe <= 4:
-                embedded_fragment = extract_embedded_lc(data, frame_within_superframe)
-                if embedded_fragment:
-                    current_stream.embedded_lc_bits.extend(embedded_fragment)
-                    
-                    # After collecting 4 frames, try to decode
-                    if len(current_stream.embedded_lc_bits) >= 8:
-                        embedded_lc = decode_embedded_lc(current_stream.embedded_lc_bits)
-                        if embedded_lc and embedded_lc.is_valid:
-                            current_stream.lc = embedded_lc
-                            current_stream.missed_header = False  # We recovered the LC
-                            LOGGER.info(f'Recovered LC from embedded data: '
-                                      f'repeater={int.from_bytes(radio_id, "big")} '
-                                      f'slot={_slot}, '
-                                      f'src={embedded_lc.src_id}, '
-                                      f'dst={embedded_lc.dst_id}')
-                            # Clear accumulated bits
-                            current_stream.embedded_lc_bits = bytearray()
+        # LC recovery - disabled until fixed
+        ## If we missed the header, try to extract embedded LC from voice frames
+        ## Only do this if we don't already have LC (optimization to avoid overhead)
+        #elif _frame_type == 0 and current_stream and current_stream.missed_header and current_stream.lc is None:
+        #    # Voice frame - check for embedded LC
+        #    # Embedded LC is in frames 1-4 of each superframe (voice frames B-E)
+        #    frame_within_superframe = _seq % 6  # 0-5, where 1-4 contain embedded LC
+        #    
+        #    if 1 <= frame_within_superframe <= 4:
+        #        embedded_fragment = extract_embedded_lc(data, frame_within_superframe)
+        #        if embedded_fragment:
+        #            current_stream.embedded_lc_bits.extend(embedded_fragment)
+        #            
+        #            # After collecting 4 frames, try to decode
+        #            if len(current_stream.embedded_lc_bits) >= 8:
+        #                embedded_lc = decode_embedded_lc(current_stream.embedded_lc_bits)
+        #                if embedded_lc and embedded_lc.is_valid:
+        #                    current_stream.lc = embedded_lc
+        #                    current_stream.missed_header = False  # We recovered the LC
+        #                    LOGGER.info(f'Recovered LC from embedded data: '
+        #                              f'repeater={int.from_bytes(radio_id, "big")} '
+        #                              f'slot={_slot}, '
+        #                              f'src={embedded_lc.src_id}, '
+        #                              f'dst={embedded_lc.dst_id}')
+        #                    # Clear accumulated bits
+        #                    current_stream.embedded_lc_bits = bytearray()
         
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")} slot {_slot}: '
