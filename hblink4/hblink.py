@@ -669,7 +669,12 @@ class HBProtocol(DatagramProtocol):
                             self._forwarding_stats['active_calls'] -= 1
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
-                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(repeater_id, "big")} slot 1')
+                        hang_duration = current_time - stream.end_time if stream.end_time else 0
+                        stream_type = "TX" if stream.is_assumed else "RX"
+                        LOGGER.info(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
+                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
+                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                                   f'hang_duration={hang_duration:.2f}s')
                         # Emit hang_time_expired event so dashboard clears the slot
                         self._events.emit('hang_time_expired', {
                             'repeater_id': int.from_bytes(repeater_id, 'big'),
@@ -711,7 +716,12 @@ class HBProtocol(DatagramProtocol):
                             self._forwarding_stats['active_calls'] -= 1
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
-                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(repeater_id, "big")} slot 2')
+                        hang_duration = current_time - stream.end_time if stream.end_time else 0
+                        stream_type = "TX" if stream.is_assumed else "RX"
+                        LOGGER.info(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
+                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
+                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                                   f'hang_duration={hang_duration:.2f}s')
                         # Emit hang_time_expired event so dashboard clears the slot
                         self._events.emit('hang_time_expired', {
                             'repeater_id': int.from_bytes(repeater_id, 'big'),
@@ -1059,7 +1069,7 @@ class HBProtocol(DatagramProtocol):
         
         repeater.set_slot_stream(slot, new_stream)
         
-        LOGGER.info(f'Stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+        LOGGER.info(f'RX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                    f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
                    f'stream_id={stream_id.hex()}')
         
@@ -1687,7 +1697,7 @@ class HBProtocol(DatagramProtocol):
             repeater.set_slot_stream(slot, new_stream)
             
             # Log at INFO level - will appear once per target repeater
-            LOGGER.info(f'Forwarding stream to repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+            LOGGER.info(f'TX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                        f'from repeater {source_repeater_id}, '
                        f'src={int.from_bytes(rf_src, "big")}, '
                        f'tgid={int.from_bytes(dst_id, "big")}')
