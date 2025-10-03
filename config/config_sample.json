@@ -81,7 +81,8 @@
                     "enabled": true,
                     "timeout": 30,
                     "passphrase": "ks-dmr-network-key",
-                    "talkgroups": [3120, 3121, 3122],
+                    "slot1_talkgroups": [8, 9],
+                    "slot2_talkgroups": [3120, 3121, 3122],
                     "description": "KS-DMR Network Repeater"
                 }
             },
@@ -95,7 +96,8 @@
                     "enabled": true,
                     "timeout": 30,
                     "passphrase": "wa0eda-network-key",
-                    "talkgroups": [31201, 31202],
+                    "slot1_talkgroups": [8],
+                    "slot2_talkgroups": [31201, 31202],
                     "description": "WA0EDA Club Repeater"
                 }
             },
@@ -109,7 +111,8 @@
                     "enabled": true,
                     "timeout": 30,
                     "passphrase": "club-network-key",
-                    "talkgroups": [3100, 3101, 3102],
+                    "slot1_talkgroups": [8],
+                    "slot2_talkgroups": [3100, 3101, 3102],
                     "description": "Club Network Repeater"
                 }
             }
@@ -118,7 +121,8 @@
             "enabled": true,
             "timeout": 30,
             "passphrase": "passw0rd",
-            "talkgroups": [8],
+            "slot1_talkgroups": [8],
+            "slot2_talkgroups": [9],
             "description": "Default Repeater Configuration"
         }
     },

@@ -64,6 +64,7 @@ def bhex(data: bytes) -> bytes:
 from dataclasses import dataclass, field
 
 @dataclass
+@dataclass
 class StreamState:
     """Tracks an active DMR transmission stream"""
     repeater_id: bytes          # Repeater this stream is on
@@ -75,6 +76,7 @@ class StreamState:
     stream_id: bytes         # Unique stream identifier
     packet_count: int = 0    # Number of packets in this stream
     ended: bool = False      # True when stream has timed out but in hang time
+    end_time: Optional[float] = None  # When stream ended (for hang time calculation)
     lc: Optional['DMRLC'] = None  # Link Control information if extracted
     # LC recovery - disabled until fixed
     #missed_header: bool = True    # True if we missed the voice header (need embedded LC)
@@ -84,6 +86,7 @@ class StreamState:
     talker_alias_length: int = 0  # Expected length of talker alias
     talker_alias_blocks: Dict[int, bytes] = field(default_factory=dict)  # Collected alias blocks
     call_type: str = "unknown"  # Call type: "group", "private", "data", or "unknown"
+    is_assumed: bool = False  # True if this is an assumed stream (forwarded to target, not received from it)
     
     def is_active(self, timeout: float = 2.0) -> bool:
         """Check if stream is still active (within timeout period)"""
@@ -735,6 +738,112 @@ class HBProtocol(DatagramProtocol):
             self._forwarding_stats['last_reset_date'] = current_date
             LOGGER.info(f'📊 Daily forwarding stats reset at midnight (server time)')
     
+    def _check_inbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
+        """
+        Check if a repeater is allowed to send traffic on this TS/TGID.
+        
+        Uses slot1_talkgroups and slot2_talkgroups lists from config.
+        If not configured, all traffic is allowed (backward compatibility).
+        
+        Args:
+            repeater_id: Repeater ID to check
+            slot: Timeslot (1 or 2)
+            tgid: Talkgroup ID
+            
+        Returns:
+            True if traffic is allowed, False otherwise
+        """
+        # Get repeater configuration
+        repeater_id_int = int.from_bytes(repeater_id, 'big')
+        config = self._matcher.match_repeater(repeater_id_int)
+        
+        if not config:
+            # No config means use default behavior (allow all inbound)
+            return True
+        
+        # Get slot-specific talkgroup list
+        slot_key = f'slot{slot}_talkgroups'
+        allowed_tgids = config.get(slot_key, [])
+        
+        # Empty list means accept all (backward compatibility)
+        if not allowed_tgids:
+            return True
+        
+        # Check if TGID is in the allowed list for this slot
+        return tgid in allowed_tgids
+    
+    def _check_outbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
+        """
+        Check if traffic should be forwarded to this repeater on this TS/TGID.
+        
+        Uses slot1_talkgroups and slot2_talkgroups lists from config.
+        Same list is used for both inbound and outbound (simplicity).
+        
+        Args:
+            repeater_id: Repeater ID to check
+            slot: Timeslot (1 or 2)  
+            tgid: Talkgroup ID
+            
+        Returns:
+            True if traffic should be forwarded, False otherwise
+        """
+        # Get repeater configuration
+        repeater_id_int = int.from_bytes(repeater_id, 'big')
+        config = self._matcher.match_repeater(repeater_id_int)
+        
+        if not config:
+            # No config means use default behavior (don't forward by default)
+            return False
+        
+        # Get slot-specific talkgroup list
+        slot_key = f'slot{slot}_talkgroups'
+        allowed_tgids = config.get(slot_key, [])
+        
+        # Empty list means send nothing (safe default)
+        if not allowed_tgids:
+            return False
+        
+        # Check if TGID is in the allowed list for this slot
+        return tgid in allowed_tgids
+    
+    def _is_slot_busy(self, repeater_id: bytes, slot: int, stream_id: bytes) -> bool:
+        """
+        Check if a slot is busy with a different stream (contention check).
+        
+        Args:
+            repeater_id: Repeater ID to check
+            slot: Timeslot to check
+            stream_id: Current stream ID (to allow same stream through)
+            
+        Returns:
+            True if slot is busy with different stream, False if available
+        """
+        repeater = self._repeaters.get(repeater_id)
+        if not repeater:
+            return False
+        
+        # Get the slot's current stream
+        current_stream = repeater.get_slot_stream(slot)
+        if not current_stream:
+            return False  # No stream, slot is free
+        
+        # Check if it's the same stream
+        if current_stream.stream_id == stream_id:
+            return False  # Same stream, not busy
+        
+        # Check if stream has ended and is outside hang time
+        current_time = time()
+        hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+        
+        if current_stream.end_time:
+            # Stream has ended, check hang time
+            time_since_end = current_time - current_stream.end_time
+            if time_since_end > hang_time:
+                return False  # Hang time expired, slot is free
+        
+        # Slot is busy with a different active stream or in hang time
+        return True
+    
     def get_user_cache_data(self, limit: int = 50) -> List[dict]:
         """
         Get last heard users from cache.
@@ -899,10 +1008,11 @@ class HBProtocol(DatagramProtocol):
                 # Deny the new stream - first come, first served
                 return False
         
-        # Check if talkgroup is allowed for this repeater
-        if not self._is_talkgroup_allowed(repeater, dst_id):
-            LOGGER.warning(f'Talkgroup {int.from_bytes(dst_id, "big")} not allowed on repeater '
-                          f'{int.from_bytes(repeater.repeater_id, "big")} slot {slot}')
+        # Check if this repeater is allowed to send traffic on this TS/TGID (inbound routing)
+        tgid = int.from_bytes(dst_id, 'big')
+        if not self._check_inbound_routing(repeater.repeater_id, slot, tgid):
+            LOGGER.warning(f'Inbound routing blocked: repeater {int.from_bytes(repeater.repeater_id, "big")} '
+                          f'not allowed to send on TS{slot}/TG{tgid}')
             return False
         
         # No active stream, start a new one
@@ -1441,11 +1551,11 @@ class HBProtocol(DatagramProtocol):
         """
         Forward incoming DMR stream packet to appropriate target repeaters.
         
-        This method provides an extensible framework for routing decisions:
-        - Phase 1: Forward to all connected repeaters (except source)
-        - Phase 2: Add contention and hang time checking
-        - Phase 3: Add configuration-based routing rules (TS/TGID tuples)
-        - Phase 4: Add ACLs and advanced filtering
+        Phase 3 implementation with configuration-based routing:
+        - Check outbound routing rules (TS/TGID tuples)
+        - Check slot contention on target repeaters
+        - Track assumed stream states on target repeaters
+        - Honor hang time after stream completion
         
         Args:
             data: Complete DMRD packet (20-byte HBP header + 33-byte DMR data)
@@ -1456,9 +1566,12 @@ class HBProtocol(DatagramProtocol):
             stream_id: Unique stream identifier (4 bytes)
         """
         forwarded_count = 0
+        tgid = int.from_bytes(dst_id, 'big')
         
-        # TODO: Track active calls instead of packets
-        # This will be implemented when we add call tracking in Phase 2
+        # Check if this is a terminator packet
+        _bits = data[15]
+        _frame_type = (_bits & 0x30) >> 4
+        is_terminator = self._is_dmr_terminator(data, _frame_type)
         
         # Loop through all connected repeaters
         for target_repeater_id, target_repeater in self._repeaters.items():
@@ -1470,25 +1583,29 @@ class HBProtocol(DatagramProtocol):
             if target_repeater.connection_state != 'connected':
                 continue
             
-            # TODO Phase 2: Check contention on target slot
-            # target_stream = target_repeater.get_slot_stream(slot)
-            # if target_stream and self._is_slot_busy(target_stream, rf_src):
-            #     continue
+            # Phase 3: Check outbound routing rules (TS/TGID tuples)
+            if not self._check_outbound_routing(target_repeater_id, slot, tgid):
+                continue
             
-            # TODO Phase 3: Check routing rules (TS/TGID tuples)
-            # if not self._check_routing_rules(target_repeater_id, slot, dst_id):
-            #     continue
+            # Phase 2/3: Check contention on target slot
+            if self._is_slot_busy(target_repeater_id, slot, stream_id):
+                LOGGER.debug(f'Slot busy on target repeater {int.from_bytes(target_repeater_id, "big")} '
+                           f'TS{slot}, skipping forward')
+                continue
             
             # Forward packet to target repeater
             self._send_packet(data, target_repeater.sockaddr)
             forwarded_count += 1
+            
+            # Track assumed stream state on target repeater
+            self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, stream_id, is_terminator)
         
         # Log forwarding activity
         if forwarded_count > 0:
             LOGGER.debug(f'Forwarded stream packet: '
                         f'src_repeater={int.from_bytes(source_repeater_id, "big")} '
                         f'slot={slot} subscriber={int.from_bytes(rf_src, "big")} '
-                        f'tgid={int.from_bytes(dst_id, "big")} '
+                        f'tgid={tgid} '
                         f'stream={stream_id.hex()[:8]} -> {forwarded_count} target(s)')
             
             # Emit forwarding event for dashboard
@@ -1496,11 +1613,61 @@ class HBProtocol(DatagramProtocol):
                 'source_repeater_id': int.from_bytes(source_repeater_id, 'big'),
                 'slot': slot,
                 'src_id': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
+                'dst_id': tgid,
                 'stream_id': stream_id.hex(),
                 'target_count': forwarded_count,
                 'timestamp': time()
             })
+    
+    def _update_assumed_stream(self, repeater: RepeaterState, slot: int, rf_src: bytes, 
+                              dst_id: bytes, stream_id: bytes, is_terminator: bool) -> None:
+        """
+        Update or create assumed stream state on a target repeater.
+        
+        Since we're forwarding to this repeater but not receiving feedback,
+        we must assume the stream state based on what we're sending.
+        
+        Args:
+            repeater: Target repeater state
+            slot: Timeslot
+            rf_src: Source subscriber ID
+            dst_id: Destination TGID
+            stream_id: Stream identifier
+            is_terminator: Whether this packet is a terminator
+        """
+        current_stream = repeater.get_slot_stream(slot)
+        current_time = time()
+        
+        if not current_stream or current_stream.stream_id != stream_id:
+            # New assumed stream starting
+            new_stream = StreamState(
+                repeater_id=repeater.repeater_id,
+                rf_src=rf_src,
+                dst_id=dst_id,
+                slot=slot,
+                start_time=current_time,
+                last_seen=current_time,
+                stream_id=stream_id,
+                packet_count=1,
+                call_type="group",  # Assume group call for forwarded streams
+                is_assumed=True  # Mark as assumed stream
+            )
+            repeater.set_slot_stream(slot, new_stream)
+            LOGGER.debug(f'Assumed stream started on target repeater {int.from_bytes(repeater.repeater_id, "big")} '
+                        f'TS{slot}: src={int.from_bytes(rf_src, "big")}, tgid={int.from_bytes(dst_id, "big")}')
+        else:
+            # Update existing assumed stream
+            current_stream.last_seen = current_time
+            current_stream.packet_count += 1
+        
+        # Handle terminator
+        if is_terminator and current_stream:
+            duration = current_time - current_stream.start_time
+            current_stream.end_time = current_time
+            current_stream.ended = True
+            LOGGER.info(f'Assumed stream terminated on target repeater {int.from_bytes(repeater.repeater_id, "big")} '
+                       f'TS{slot}: src={int.from_bytes(rf_src, "big")}, tgid={int.from_bytes(dst_id, "big")}, '
+                       f'duration={duration:.2f}s')
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
