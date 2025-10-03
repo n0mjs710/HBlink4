@@ -5,30 +5,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## High Priority
 
-### 1. Stream Forwarding/Bridging (Complex) 🔴
-**Status**: Not started  
-**Difficulty**: High  
-**Dependencies**: None  
-**Description**: Forward DMR streams between repeaters based on configuration rules.
-
-**Requirements**:
-- Bridge configuration format
-- Target repeater selection logic
-- Packet forwarding engine
-- Stream tracking per destination
-- Prevent forwarding loops
-
-**Implementation Notes**:
-- Core routing logic needed
-- May need to modify destination IDs
-- Must preserve or rebuild LC if modifying frames
-- Test with multiple repeaters
-
-**Estimated Effort**: 2-3 weeks
-
----
-
-### 2. Enhanced Access Control (Medium) 🟡
+### 1. Enhanced Access Control (Medium) 🟡
 **Status**: Not started  
 **Difficulty**: Medium  
 **Dependencies**: Current access control framework  
@@ -50,7 +27,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 3. Dashboard Enhancements (Medium) 🟡
+### 2. Dashboard Enhancements (Medium) 🟡
 **Status**: In progress  
 **Difficulty**: Medium  
 **Dependencies**: Current dashboard  
@@ -80,7 +57,13 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## Medium Priority
 
-### 4. LC Extraction from Sync Frames (Complex) 🟠
+### 3. Stream Recording (Medium) 🟡
+
+---
+
+## Medium Priority
+
+### 3. LC Extraction from Sync Frames (Complex) 🟠
 **Status**: Not started  
 **Difficulty**: High  
 **Dependencies**: None  
@@ -111,7 +94,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 5. Stream Recording (Medium) 🟡
+### 3. Stream Recording (Medium) 🟡
 **Status**: Not started  
 **Difficulty**: Medium  
 **Dependencies**: Storage backend  
@@ -133,7 +116,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 6. Performance Monitoring (Easy) 🟢
+### 4. Performance Monitoring (Easy) 🟢
 **Status**: Not started  
 **Difficulty**: Low  
 **Dependencies**: None  
@@ -158,7 +141,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## Low Priority
 
-### 7. Advanced Logging (Easy) 🟢
+### 5. Advanced Logging (Easy) 🟢
 **Status**: Partial  
 **Difficulty**: Low  
 **Dependencies**: Current logging  
@@ -179,7 +162,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 8. Multi-Server Clustering (Complex) 🔴
+### 6. Multi-Server Clustering (Complex) 🔴
 **Status**: Not started  
 **Difficulty**: Very High  
 **Dependencies**: Stream forwarding, distributed state  
@@ -200,7 +183,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 9. Web-Based Configuration UI (Medium) 🟡
+### 7. Web-Based Configuration UI (Medium) 🟡
 **Status**: Not started  
 **Difficulty**: Medium  
 **Dependencies**: Dashboard  
@@ -222,7 +205,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 10. Protocol Extensions (Research) 🔵
+### 8. Protocol Extensions (Research) 🔵
 **Status**: Research phase  
 **Difficulty**: Unknown  
 **Dependencies**: Community input  
@@ -243,7 +226,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 11. Mobile App Integration (Medium) 🟡
+### 9. Mobile App Integration (Medium) 🟡
 **Status**: Not started  
 **Difficulty**: Medium  
 **Dependencies**: API endpoints  
@@ -266,6 +249,16 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## Completed Features ✅
 
+### ✅ Stream Forwarding/Bridging
+- Configuration-based call routing with slot-specific talkgroup lists
+- Inbound filtering (which calls to accept from repeaters)
+- Outbound filtering (which repeaters receive forwarded calls)
+- Assumed slot state tracking for target repeaters
+- Contention detection (prevent slot conflicts)
+- Hang time respect on forwarding targets
+- Forwarding statistics tracking
+- Full documentation in `docs/routing.md`
+
 ### ✅ Stream Tracking
 - Per-slot, per-repeater stream management
 - Stream ID-based contention detection
@@ -286,10 +279,8 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 - 1-second refresh rate
 - Seamless transition to final duration on end
 
-### ✅ DMR Link Control Extraction
-- Call type, source, destination from DMRD header
-- Embedded LC from voice frames (backup method)
-- Automatic extraction and storage
+- ✅ Automatic midnight reset for daily statistics
+- ✅ Clickable connection status badges
 
 ### ✅ Access Control Framework
 - Radio ID blacklist/whitelist
@@ -299,8 +290,10 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 ### ✅ Comprehensive Documentation
 - Configuration guide
 - Protocol specification
+- **Stream forwarding/routing guide**
 - Stream tracking diagrams
 - Feature implementation guides
+- Logging documentation
 
 ### ✅ Dashboard with Real-Time Updates
 - WebSocket-based live data
@@ -327,27 +320,6 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-## LC Decoding Clarification
-
-**Previous rationale** for LC extraction was to enable:
-1. ~~Sync pattern detection~~ ✅ **SOLVED** (using packet header flags)
-2. ~~Immediate terminator detection~~ ✅ **SOLVED** (60ms detection working)
-
-**Current rationale** for LC extraction:
-1. **Stream forwarding with ID modification**: When bridging streams between networks, we may need to rewrite source/destination IDs. This requires:
-   - Extracting LC from incoming frames
-   - Modifying the LC fields
-   - Rebuilding LC with correct FEC encoding
-   - Re-embedding LC in voice header/terminator sync frames
-   
-2. **Frame reconstruction**: Building DMR frames from scratch for routing/bridging
-
-3. **Advanced features**: Emergency call handling, privacy management, etc.
-
-**Bottom line**: LC extraction from sync frames is not urgent for current features, but will be needed when implementing stream forwarding/bridging with modified routing.
-
----
-
 ## Contributing
 
 When working on TODO items:
@@ -359,4 +331,4 @@ When working on TODO items:
 
 ---
 
-**Last Updated**: October 2, 2025
+**Last Updated**: October 3, 2025
