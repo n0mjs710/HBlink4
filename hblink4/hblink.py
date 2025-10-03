@@ -31,9 +31,6 @@ LOGGER = logging.getLogger(__name__)
 import os
 import sys
 
-# DMR protocol utilities from mature dmr_utils3 library
-# (LC extraction removed - no dmr_utils3 imports needed)
-
 # Try package-relative imports first, fall back to direct imports
 try:
     from .constants import (
@@ -943,7 +940,6 @@ class HBProtocol(DatagramProtocol):
         """Handle repeater status report (including RSSI)"""
         repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
-            # TODO: Parse and store RSSI and other status info
             LOGGER.debug(f'Status report from repeater {int.from_bytes(repeater_id, "big")}: {data[8:].hex()}')
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
@@ -1031,11 +1027,10 @@ class HBProtocol(DatagramProtocol):
         #            f'packet_count={current_stream.packet_count if current_stream else 0}, '
         #            f'has_lc={current_stream.lc is not None if current_stream else False}')
         
-        # Handle terminator frame (immediate stream end detection)
+        # Handle terminator frame for immediate stream end detection
         if _is_terminator and current_stream and not current_stream.ended:
-            # DMR terminator detected - end stream immediately and start hang time
             current_stream.ended = True
-            current_stream.end_time = time()  # Critical: set end_time for hang calculation!
+            current_stream.end_time = time()  # Set for hang time calculation
             hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
             duration = time() - current_stream.start_time
             LOGGER.info(f'RX stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
@@ -1069,15 +1064,8 @@ class HBProtocol(DatagramProtocol):
                 'call_type': current_stream.call_type
             })
         
-        # Architecture note:
-        # - DMR terminator detection (above) = Primary stream end detection (~60ms after PTT release)
-        # - stream_timeout (in _check_stream_timeouts) = Fallback when terminator packet is lost
-        # - hang_time = Slot reservation period to prevent hijacking during conversations
-        # 
-        # This two-tier system ensures:
-        #   1. Fast slot turnaround when terminator is received (normal case)
-        #   2. Cleanup after timeout when terminator is lost (packet loss case)
-        #   3. Slot protection during multi-transmission conversations (hang time)
+        # Stream end detection: terminator (primary) or timeout (fallback)
+        # Hang time prevents slot hijacking during conversations
         
         # Forward DMR data to other connected repeaters
         self._forward_stream(data, repeater_id, _slot, _rf_src, _dst_id, _stream_id)
@@ -1087,7 +1075,7 @@ class HBProtocol(DatagramProtocol):
         """
         Forward incoming DMR stream packet to appropriate target repeaters.
         
-        Phase 3 implementation with configuration-based routing:
+        Configuration-based routing:
         - Check outbound routing rules (TS/TGID tuples)
         - Check slot contention on target repeaters
         - Track assumed stream states on target repeaters
@@ -1119,11 +1107,11 @@ class HBProtocol(DatagramProtocol):
             if target_repeater.connection_state != 'connected':
                 continue
             
-            # Phase 3: Check outbound routing rules (TS/TGID tuples)
+            # Check outbound routing rules (TS/TGID tuples)
             if not self._check_outbound_routing(target_repeater_id, slot, tgid):
                 continue
             
-            # Phase 2/3: Check contention on target slot
+            # Check contention on target slot
             if self._is_slot_busy(target_repeater_id, slot, stream_id):
                 LOGGER.debug(f'Slot busy on target repeater {int.from_bytes(target_repeater_id, "big")} '
                            f'TS{slot}, skipping forward')

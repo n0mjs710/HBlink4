@@ -180,7 +180,7 @@ See **[docs/TODO.md](TODO.md)** for all items with full descriptions.
 
 **Commit**: 114f2f2
 **Date**: October 1, 2025
-**Summary**: Stream tracking, hang time, LC extraction, comprehensive documentation
+**Summary**: Stream tracking, hang time, routing, comprehensive documentation
 **Stats**: 10 files changed, 1,686 insertions(+)
 
 ## Testing Status

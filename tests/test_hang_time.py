@@ -42,7 +42,7 @@ def test_hang_time():
     
     # Test 3: Mark stream as ended - now it should be in hang time
     stream.ended = True
-    stream.end_time = time()  # Must set end_time for hang time calculation
+    stream.end_time = time()  # For hang time calculation
     assert stream.is_in_hang_time(2.0, 3.0), "Ended stream should be in hang time"
     print("✓ Ended stream is in hang time")
     
@@ -87,7 +87,7 @@ def test_hang_time_edge_cases():
         stream_id=b'\xa1\xb2\xc3\xd4',
         packet_count=10,
         ended=True,
-        end_time=current  # Must set end_time for hang time calculation
+        end_time=current  # For hang time calculation
     )
     
     assert stream.is_in_hang_time(2.0, 3.0), "Should be in hang time at boundary"

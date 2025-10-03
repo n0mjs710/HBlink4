@@ -31,9 +31,9 @@ class EventEmitter:
         
         # Create UDP socket (connectionless = zero overhead)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setblocking(False)  # Critical: never block!
+        self.sock.setblocking(False)  # Never block on send
         
-        # Optional: Set small buffer to drop old events if dashboard is slow
+        # Set small buffer to drop old events if dashboard is slow
         # This prevents memory buildup if dashboard crashes
         try:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)

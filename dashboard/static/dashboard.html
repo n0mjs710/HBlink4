@@ -643,7 +643,6 @@
             }
             
             const packets = stream?.packets || 0;
-            const talkerAlias = stream?.talker_alias ? `"${stream.talker_alias}"` : '';
             
             return `
                 <div class="slot ${status}">
@@ -672,8 +671,8 @@
                              data-final-duration="${stream?.duration || ''}">${duration}</div>
                     </div>
                     <div class="slot-col">
-                        <div class="slot-col-label">Talker</div>
-                        <div class="slot-talker ${stream && talkerAlias ? '' : 'empty'}">${talkerAlias || '—'}</div>
+                        <div class="slot-col-label">Packets</div>
+                        <div class="slot-col-value ${stream ? '' : 'empty'}">${packets || '—'}</div>
                     </div>
                 </div>
             `;
@@ -739,13 +738,12 @@
                     timeAgo = lastHeardDate.toLocaleTimeString();
                 }
                 
-                // Only show talker alias if available, otherwise dash
-                const callsign = user.talker_alias || '-';
+                const callsign = user.callsign || '-';
                 
                 return `
                     <tr style="border-bottom: 1px solid #374151;">
                         <td style="padding: 8px;">${user.radio_id}</td>
-                        <td style="padding: 8px; font-weight: 500; color: ${user.talker_alias ? 'white' : '#6b7280'};">${callsign}</td>
+                        <td style="padding: 8px; font-weight: 500; color: ${user.callsign ? 'white' : '#6b7280'};">${callsign}</td>
                         <td style="padding: 8px;">${user.repeater_id}</td>
                         <td style="padding: 8px; text-align: center;">${user.slot}</td>
                         <td style="padding: 8px;">${user.talkgroup}</td>
@@ -792,13 +790,12 @@
                         timeAgo = lastHeardDate.toLocaleTimeString();
                     }
                     
-                    // Only show talker alias if available, otherwise dash
-                    const callsign = user.talker_alias || '-';
+                    const callsign = user.callsign || '-';
                     
                     return `
                         <tr style="border-bottom: 1px solid #374151;">
                             <td style="padding: 8px;">${user.radio_id}</td>
-                            <td style="padding: 8px; font-weight: 500; color: ${user.talker_alias ? 'white' : '#6b7280'};">${callsign}</td>
+                            <td style="padding: 8px; font-weight: 500; color: ${user.callsign ? 'white' : '#6b7280'};">${callsign}</td>
                             <td style="padding: 8px;">${user.repeater_id}</td>
                             <td style="padding: 8px; text-align: center;">${user.slot}</td>
                             <td style="padding: 8px;">${user.talkgroup}</td>
@@ -900,8 +897,7 @@
                 case 'repeater_connected':
                     return `Repeater ${data.radio_id} (${data.callsign || 'UNKNOWN'}) connected from ${data.address}`;
                 case 'stream_start':
-                    const alias = data.talker_alias ? ` "${data.talker_alias}"` : '';
-                    return `Stream started: ${data.src_id}${alias} → TG ${data.dst_id} on repeater ${data.repeater_id} slot ${data.slot}`;
+                    return `Stream started: ${data.src_id} → TG ${data.dst_id} on repeater ${data.repeater_id} slot ${data.slot}`;
                 case 'stream_update':
                     return `Stream update: ${data.packets} packets, ${data.duration}s`;
                 case 'stream_end':
