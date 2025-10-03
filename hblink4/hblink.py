@@ -653,7 +653,8 @@ class HBProtocol(DatagramProtocol):
         #LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
             
         _command = data[:4]
-        LOGGER.debug(f'Command bytes: {_command}')
+        # Per-packet logging - only enable for heavy troubleshooting
+        #LOGGER.debug(f'Command bytes: {_command}')
         
         try:
             # Extract radio_id based on packet type
@@ -673,7 +674,9 @@ class HBProtocol(DatagramProtocol):
                     radio_id = data[4:8]
                 
             if radio_id:
-                LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
+                # Per-packet logging - only enable for heavy troubleshooting
+                #LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
+                pass
             else:
                 LOGGER.warning(f'Packet received with unknown command: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')   
                 return
@@ -1232,14 +1235,15 @@ class HBProtocol(DatagramProtocol):
                             # Clear accumulated bits
                             current_stream.embedded_lc_bits = bytearray()
         
-        LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")} slot {_slot}: '
-                    f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
-                    f'dst={int.from_bytes(_dst_id, "big")}, '
-                    f'stream_id={_stream_id.hex()}, '
-                    f'frame_type={_frame_type}, '
-                    f'terminator={_is_terminator}, '
-                    f'packet_count={current_stream.packet_count if current_stream else 0}, '
-                    f'has_lc={current_stream.lc is not None if current_stream else False}')
+        # Per-packet logging - only enable for heavy troubleshooting
+        #LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")} slot {_slot}: '
+        #            f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
+        #            f'dst={int.from_bytes(_dst_id, "big")}, '
+        #            f'stream_id={_stream_id.hex()}, '
+        #            f'frame_type={_frame_type}, '
+        #            f'terminator={_is_terminator}, '
+        #            f'packet_count={current_stream.packet_count if current_stream else 0}, '
+        #            f'has_lc={current_stream.lc is not None if current_stream else False}')
         
         # Handle terminator frame (immediate stream end detection)
         if _is_terminator and current_stream and not current_stream.ended:
