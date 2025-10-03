@@ -16,7 +16,7 @@ def test_stream_state():
     
     # Create a stream
     stream = StreamState(
-        radio_id=b'\x00\x04\xc3d',  # 312100
+        repeater_id=b'\x00\x04\xc3d',  # 312100
         rf_src=b'\x31\x21\x34',     # 3121234 (3 bytes)
         dst_id=b'\x00\x0c0',        # 3120 (3 bytes)
         slot=1,
@@ -48,7 +48,7 @@ def test_repeater_state():
     
     # Create a repeater
     repeater = RepeaterState(
-        radio_id=b'\x00\x04\xc3d',  # 312100
+        repeater_id=b'\x00\x04\xc3d',  # 312100
         ip='192.168.1.100',
         port=62031
     )
@@ -60,7 +60,7 @@ def test_repeater_state():
     
     # Create streams
     stream1 = StreamState(
-        radio_id=repeater.radio_id,
+        repeater_id=repeater.repeater_id,
         rf_src=b'\x31\x21\x34',
         dst_id=b'\x00\x0c0',
         slot=1,
@@ -71,7 +71,7 @@ def test_repeater_state():
     )
     
     stream2 = StreamState(
-        radio_id=repeater.radio_id,
+        repeater_id=repeater.repeater_id,
         rf_src=b'\x31\x25\x78',
         dst_id=b'\x00\x0c1',
         slot=2,

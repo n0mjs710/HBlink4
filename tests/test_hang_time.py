@@ -16,7 +16,7 @@ def test_hang_time():
     
     # Create a stream
     stream = StreamState(
-        radio_id=b'\x00\x04\xc3d',  # 312100
+        repeater_id=b'\x00\x04\xc3d',  # 312100
         rf_src=b'\x31\x21\x34',     # 3121234 (3 bytes)
         dst_id=b'\x00\x0c0',        # 3120 (3 bytes)
         slot=1,
@@ -52,7 +52,7 @@ def test_hang_time():
     
     # Test 5: Create new stream to test hang time during active transmission
     stream2 = StreamState(
-        radio_id=b'\x00\x04\xc3d',
+        repeater_id=b'\x00\x04\xc3d',
         rf_src=b'\x31\x25\x78',     # Different source
         dst_id=b'\x00\x0c1',
         slot=1,
@@ -77,7 +77,7 @@ def test_hang_time_edge_cases():
     
     # Test 1: Stream at exactly timeout boundary
     stream = StreamState(
-        radio_id=b'\x00\x04\xc3d',
+        repeater_id=b'\x00\x04\xc3d',
         rf_src=b'\x31\x21\x34',
         dst_id=b'\x00\x0c0',
         slot=1,

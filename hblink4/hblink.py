@@ -65,7 +65,7 @@ from dataclasses import dataclass, field
 @dataclass
 class StreamState:
     """Tracks an active DMR transmission stream"""
-    radio_id: bytes          # Repeater this stream is on
+    repeater_id: bytes          # Repeater this stream is on
     rf_src: bytes            # RF source (3 bytes)
     dst_id: bytes            # Destination talkgroup/ID (3 bytes)
     slot: int                # Timeslot (1 or 2)
@@ -440,7 +440,7 @@ def decode_talker_alias(format_type: int, length: int, blocks: Dict[int, bytes])
 @dataclass
 class RepeaterState:
     """Data class for storing repeater state"""
-    radio_id: bytes
+    repeater_id: bytes
     ip: str
     port: int
     connected: bool = False
@@ -503,9 +503,17 @@ class HBProtocol(DatagramProtocol):
         self._timeout_task = None
         self._stream_timeout_task = None
         self._user_cache_cleanup_task = None
-        self._user_cache_broadcast_task = None
+        self._user_cache_send_task = None
+        self._forwarding_stats_send_task = None
         self._port = None  # Store the port instance instead of transport
         self._events = EventEmitter()  # Dashboard event emitter
+        
+        # Forwarding statistics
+        self._forwarding_stats = {
+            'active_calls': 0,        # Currently active forwarded calls
+            'total_calls_today': 0,   # Total calls forwarded today
+            'start_time': time()
+        }
         
         # Initialize user cache if enabled
         user_cache_config = CONFIG.get('global', {}).get('user_cache', {})
@@ -523,13 +531,13 @@ class HBProtocol(DatagramProtocol):
         
         # Send MSTCL to all connected repeaters
         if self._port:  # Only attempt to send if we have a port
-            for radio_id, repeater in self._repeaters.items():
+            for repeater_id, repeater in self._repeaters.items():
                 if repeater.connection_state == 'yes':
                     try:
-                        LOGGER.info(f"Sending disconnect to repeater {int.from_bytes(radio_id, 'big')}")
+                        LOGGER.info(f"Sending disconnect to repeater {int.from_bytes(repeater_id, 'big')}")
                         self._port.write(MSTCL, repeater.sockaddr)
                     except Exception as e:
-                        LOGGER.error(f"Error sending disconnect to repeater {int.from_bytes(radio_id, 'big')}: {e}")
+                        LOGGER.error(f"Error sending disconnect to repeater {int.from_bytes(repeater_id, 'big')}: {e}")
 
         # Give time for disconnects to be sent
         import time
@@ -556,10 +564,15 @@ class HBProtocol(DatagramProtocol):
             self._user_cache_cleanup_task.start(cleanup_interval)
             LOGGER.info(f'User cache cleanup task started (every {cleanup_interval}s)')
             
-            # Broadcast user cache to dashboard every 10 seconds
-            self._user_cache_broadcast_task = LoopingCall(self._broadcast_user_cache)
-            self._user_cache_broadcast_task.start(10.0)
-            LOGGER.info('User cache broadcast task started (every 10s)')
+            # Send user cache to dashboard every 10 seconds
+            self._user_cache_send_task = LoopingCall(self._send_user_cache)
+            self._user_cache_send_task.start(10.0)
+            LOGGER.info('User cache send task started (every 10s)')
+        
+        # Send forwarding stats to dashboard every 5 seconds
+        self._forwarding_stats_send_task = LoopingCall(self._send_forwarding_stats)
+        self._forwarding_stats_send_task.start(5.0)
+        LOGGER.info('Forwarding stats send task started (every 5s)')
 
     def stopProtocol(self):
         """Called when transport is disconnected"""
@@ -569,8 +582,10 @@ class HBProtocol(DatagramProtocol):
             self._stream_timeout_task.stop()
         if self._user_cache_cleanup_task and self._user_cache_cleanup_task.running:
             self._user_cache_cleanup_task.stop()
-        if self._user_cache_broadcast_task and self._user_cache_broadcast_task.running:
-            self._user_cache_broadcast_task.stop()
+        if self._user_cache_send_task and self._user_cache_send_task.running:
+            self._user_cache_send_task.stop()
+        if self._forwarding_stats_send_task and self._forwarding_stats_send_task.running:
+            self._forwarding_stats_send_task.stop()
             
     def _check_repeater_timeouts(self):
         """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
@@ -579,7 +594,7 @@ class HBProtocol(DatagramProtocol):
         max_missed = CONFIG.get('timeout', {}).get('max_missed', 3)  # 3 missed pings default
         
         # Make a list to avoid modifying dict during iteration
-        for radio_id, repeater in list(self._repeaters.items()):
+        for repeater_id, repeater in list(self._repeaters.items()):
             if repeater.connection_state != 'connected':
                 continue
                 
@@ -587,13 +602,13 @@ class HBProtocol(DatagramProtocol):
             
             if time_since_ping > timeout_duration:
                 repeater.missed_pings += 1
-                LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} missed ping #{repeater.missed_pings}')
+                LOGGER.warning(f'Repeater {int.from_bytes(repeater_id, "big")} missed ping #{repeater.missed_pings}')
                 
                 if repeater.missed_pings >= max_missed:
-                    LOGGER.error(f'Repeater {int.from_bytes(radio_id, "big")} timed out after {repeater.missed_pings} missed pings')
+                    LOGGER.error(f'Repeater {int.from_bytes(repeater_id, "big")} timed out after {repeater.missed_pings} missed pings')
                     # Send NAK to trigger re-registration
-                    self._send_nak(radio_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
-                    self._remove_repeater(radio_id, "timeout")
+                    self._send_nak(repeater_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
+                    self._remove_repeater(repeater_id, "timeout")
     
     def _check_stream_timeouts(self):
         """Check for and clean up stale streams on all repeaters"""
@@ -601,7 +616,7 @@ class HBProtocol(DatagramProtocol):
         stream_timeout = CONFIG.get('global', {}).get('stream_timeout', 2.0)
         hang_time = CONFIG.get('global', {}).get('stream_hang_time', 3.0)
         
-        for radio_id, repeater in self._repeaters.items():
+        for repeater_id, repeater in self._repeaters.items():
             if repeater.connection_state != 'connected':
                 continue
             
@@ -613,7 +628,7 @@ class HBProtocol(DatagramProtocol):
                         # Stream just ended - mark it and start hang time
                         stream.ended = True
                         duration = current_time - stream.start_time
-                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(radio_id, "big")} slot 1: '
+                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
                                    f'dst={int.from_bytes(stream.dst_id, "big")}, '
                                    f'duration={duration:.2f}s, '
@@ -621,7 +636,7 @@ class HBProtocol(DatagramProtocol):
                                    f'entering hang time ({hang_time}s)')
                         # Emit stream_end event (includes hang_time since they happen together)
                         self._events.emit('stream_end', {
-                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'repeater_id': int.from_bytes(repeater_id, 'big'),
                             'slot': 1,
                             'src_id': int.from_bytes(stream.rf_src, 'big'),
                             'dst_id': int.from_bytes(stream.dst_id, 'big'),
@@ -633,10 +648,10 @@ class HBProtocol(DatagramProtocol):
                         })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
-                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 1')
+                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(repeater_id, "big")} slot 1')
                         # Emit hang_time_expired event so dashboard clears the slot
                         self._events.emit('hang_time_expired', {
-                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'repeater_id': int.from_bytes(repeater_id, 'big'),
                             'slot': 1
                         })
                         repeater.slot1_stream = None
@@ -649,7 +664,7 @@ class HBProtocol(DatagramProtocol):
                         # Stream just ended - mark it and start hang time
                         stream.ended = True
                         duration = current_time - stream.start_time
-                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(radio_id, "big")} slot 2: '
+                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
                                    f'dst={int.from_bytes(stream.dst_id, "big")}, '
                                    f'duration={duration:.2f}s, '
@@ -657,7 +672,7 @@ class HBProtocol(DatagramProtocol):
                                    f'entering hang time ({hang_time}s)')
                         # Emit stream_end event (includes hang_time since they happen together)
                         self._events.emit('stream_end', {
-                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'repeater_id': int.from_bytes(repeater_id, 'big'),
                             'slot': 2,
                             'src_id': int.from_bytes(stream.rf_src, 'big'),
                             'dst_id': int.from_bytes(stream.dst_id, 'big'),
@@ -669,10 +684,10 @@ class HBProtocol(DatagramProtocol):
                         })
                     elif not stream.is_in_hang_time(stream_timeout, hang_time):
                         # Hang time expired - clear the slot
-                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(radio_id, "big")} slot 2')
+                        LOGGER.debug(f'Hang time expired on repeater {int.from_bytes(repeater_id, "big")} slot 2')
                         # Emit hang_time_expired event so dashboard clears the slot
                         self._events.emit('hang_time_expired', {
-                            'repeater_id': int.from_bytes(radio_id, 'big'),
+                            'repeater_id': int.from_bytes(repeater_id, 'big'),
                             'slot': 2
                         })
                         repeater.slot2_stream = None
@@ -684,8 +699,8 @@ class HBProtocol(DatagramProtocol):
             if removed > 0:
                 LOGGER.debug(f'User cache cleanup: removed {removed} expired entries')
     
-    def _broadcast_user_cache(self):
-        """Broadcast user cache data to dashboard"""
+    def _send_user_cache(self):
+        """Send user cache data to dashboard"""
         if self._user_cache:
             last_heard = self._user_cache.get_last_heard(limit=50)  # Limit to 50 for efficiency
             stats = self._user_cache.get_stats()
@@ -694,6 +709,14 @@ class HBProtocol(DatagramProtocol):
                 'users': last_heard,
                 'stats': stats
             })
+    
+    def _broadcast_forwarding_stats(self):
+        """Broadcast forwarding statistics to dashboard"""
+        self._events.emit('forwarding_stats', {
+            'packets_forwarded': self._forwarding_stats['packets_forwarded'],
+            'packets_received': self._forwarding_stats['packets_received'],
+            'uptime_seconds': time() - self._forwarding_stats['start_time']
+        })
     
     def get_user_cache_data(self, limit: int = 50) -> List[dict]:
         """
@@ -721,33 +744,33 @@ class HBProtocol(DatagramProtocol):
         #LOGGER.debug(f'Command bytes: {_command}')
         
         try:
-            # Extract radio_id based on packet type
-            radio_id = None
+            # Extract repeater_id based on packet type
+            repeater_id = None
             if _command == DMRD:
-                radio_id = data[11:15]
+                repeater_id = data[11:15]
             elif _command == RPTP:
-                radio_id = data[7:11]
+                repeater_id = data[7:11]
             elif _command == RPTL:
-                radio_id = data[4:8]
+                repeater_id = data[4:8]
             elif _command == RPTK:
-                radio_id = data[4:8]
+                repeater_id = data[4:8]
             elif _command == RPTC:
                 if data[:5] == RPTCL:
-                    radio_id = data[5:9]
+                    repeater_id = data[5:9]
                 else:
-                    radio_id = data[4:8]
+                    repeater_id = data[4:8]
                 
-            if radio_id:
+            if repeater_id:
                 # Per-packet logging - only enable for heavy troubleshooting
-                #LOGGER.debug(f'Packet received: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')
+                #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={int.from_bytes(repeater_id, "big")}, addr={addr}')
                 pass
             else:
-                LOGGER.warning(f'Packet received with unknown command: cmd={_command}, radio_id={int.from_bytes(radio_id, "big")}, addr={addr}')   
+                LOGGER.warning(f'Packet received with unknown command: cmd={_command}, repeater_id={int.from_bytes(repeater_id, "big")}, addr={addr}')   
                 return
             
             # Update ping time for connected repeaters
-            if radio_id and radio_id in self._repeaters:
-                repeater = self._repeaters[radio_id]
+            if repeater_id and repeater_id in self._repeaters:
+                repeater = self._repeaters[repeater_id]
                 if repeater.connection_state == 'connected':
                     repeater.last_ping = time()
                     repeater.missed_pings = 0
@@ -757,44 +780,44 @@ class HBProtocol(DatagramProtocol):
                 self._handle_dmr_data(data, addr)
             elif _command == RPTL:
                 LOGGER.debug(f'Received RPTL from {ip}:{port} - Repeater Login Request')
-                self._handle_repeater_login(radio_id, addr)
+                self._handle_repeater_login(repeater_id, addr)
             elif len(data) == 4:  # Special case: raw repeater ID login
                 # Try to interpret as a raw repeater ID
                 LOGGER.debug(f'Received possible raw repeater ID login from {ip}:{port}')
                 self._handle_repeater_login(data, addr)
             elif _command == RPTK:
                 LOGGER.debug(f'Received RPTK from {ip}:{port} - Authentication Response')
-                self._handle_auth_response(radio_id, data[8:], addr)
+                self._handle_auth_response(repeater_id, data[8:], addr)
             elif _command == RPTC:
                 if data[:5] == RPTCL:
                     LOGGER.debug(f'Received RPTCL from {ip}:{port} - Disconnect Request')
-                    self._handle_disconnect(radio_id, addr)
+                    self._handle_disconnect(repeater_id, addr)
                 else:
                     LOGGER.debug(f'Received RPTC from {ip}:{port} - Configuration Data')
                     self._handle_config(data, addr)
             elif _command[:4] == RPTP:  # Check just RPTP prefix since that's enough to identify RPTPING
                 LOGGER.debug(f'Received RPTPING from {ip}:{port} - Repeater Keepalive')
-                self._handle_ping(radio_id, addr)
+                self._handle_ping(repeater_id, addr)
             else:
                 LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
         except Exception as e:
             LOGGER.error(f'Error processing datagram from {ip}:{port}: {str(e)}')
 
-    def _validate_repeater(self, radio_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
+    def _validate_repeater(self, repeater_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
-        if radio_id not in self._repeaters:
+        if repeater_id not in self._repeaters:
             # Per-packet logging - only enable for heavy troubleshooting
-            #LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} not found in _repeaters dict')
-            self._send_nak(radio_id, addr, reason="Repeater not registered")
+            #LOGGER.debug(f'Repeater {int.from_bytes(repeater_id, "big")} not found in _repeaters dict')
+            self._send_nak(repeater_id, addr, reason="Repeater not registered")
             return None
             
-        repeater = self._repeaters[radio_id]
+        repeater = self._repeaters[repeater_id]
         # Per-packet logging - only enable for heavy troubleshooting
-        #LOGGER.debug(f'Validating repeater {int.from_bytes(radio_id, "big")}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
+        #LOGGER.debug(f'Validating repeater {int.from_bytes(repeater_id, "big")}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
         if repeater.sockaddr != addr:
-            LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(radio_id, "big")}')
-            self._send_nak(radio_id, addr, reason="Message from incorrect IP address")
+            LOGGER.warning(f'Message from wrong IP for repeater {int.from_bytes(repeater_id, "big")}')
+            self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
             return None
             
         return repeater
@@ -804,7 +827,7 @@ class HBProtocol(DatagramProtocol):
         try:
             # Get the repeater's configuration
             repeater_config = self._matcher.get_repeater_config(
-                int.from_bytes(repeater.radio_id, 'big'),
+                int.from_bytes(repeater.repeater_id, 'big'),
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
             
@@ -838,19 +861,19 @@ class HBProtocol(DatagramProtocol):
                 # Stream has ended but is in hang time
                 # Allow same RF source to continue, deny different source
                 if current_stream.rf_src == rf_src:
-                    LOGGER.info(f'Same source resuming on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot} '
+                    LOGGER.info(f'Same source resuming on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
                                f'during hang time: src={int.from_bytes(rf_src, "big")}, '
                                f'old_dst={int.from_bytes(current_stream.dst_id, "big")}, '
                                f'new_dst={int.from_bytes(dst_id, "big")}')
                     # Allow by falling through to create new stream
                 else:
-                    LOGGER.warning(f'Hang time contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                    LOGGER.warning(f'Hang time contention on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                                   f'slot reserved for src={int.from_bytes(current_stream.rf_src, "big")}, '
                                   f'denied src={int.from_bytes(rf_src, "big")}')
                     return False
             else:
                 # Active stream - different stream_id means contention
-                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                               f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
                               f'dst={int.from_bytes(current_stream.dst_id, "big")}) '
                               f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
@@ -862,12 +885,12 @@ class HBProtocol(DatagramProtocol):
         # Check if talkgroup is allowed for this repeater
         if not self._is_talkgroup_allowed(repeater, dst_id):
             LOGGER.warning(f'Talkgroup {int.from_bytes(dst_id, "big")} not allowed on repeater '
-                          f'{int.from_bytes(repeater.radio_id, "big")} slot {slot}')
+                          f'{int.from_bytes(repeater.repeater_id, "big")} slot {slot}')
             return False
         
         # No active stream, start a new one
         new_stream = StreamState(
-            radio_id=repeater.radio_id,
+            repeater_id=repeater.repeater_id,
             rf_src=rf_src,
             dst_id=dst_id,
             slot=slot,
@@ -880,13 +903,13 @@ class HBProtocol(DatagramProtocol):
         
         repeater.set_slot_stream(slot, new_stream)
         
-        LOGGER.info(f'Stream started on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+        LOGGER.info(f'Stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                    f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
                    f'stream_id={stream_id.hex()}')
         
         # Emit stream_start event
         self._events.emit('stream_start', {
-            'repeater_id': int.from_bytes(repeater.radio_id, 'big'),
+            'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
             'slot': slot,
             'src_id': int.from_bytes(rf_src, 'big'),
             'dst_id': int.from_bytes(dst_id, 'big'),
@@ -898,12 +921,12 @@ class HBProtocol(DatagramProtocol):
         # Update user cache (for "last heard" and private call routing)
         if self._user_cache:
             src_id = int.from_bytes(rf_src, 'big')
-            repeater_id = int.from_bytes(repeater.radio_id, 'big')
+            repeater_id = int.from_bytes(repeater.repeater_id, 'big')
             dst = int.from_bytes(dst_id, 'big')
             # Don't populate callsign field yet - wait for talker alias or user lookup
             # Callsign field will be empty string until we get talker alias
             self._user_cache.update(
-                radio_id=src_id,
+                subscriber_id=src_id,
                 repeater_id=repeater_id,
                 callsign='',  # Will be updated when talker alias is decoded
                 slot=slot,
@@ -936,7 +959,7 @@ class HBProtocol(DatagramProtocol):
             if time_since_last_packet > 0.2:  # 200ms threshold
                 # Old stream appears terminated - force end it and allow new stream
                 duration = current_time - current_stream.start_time
-                LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot} '
+                LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
                            f'ended via inactivity ({time_since_last_packet*1000:.0f}ms since last packet): '
                            f'src={int.from_bytes(current_stream.rf_src, "big")}, '
                            f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
@@ -944,7 +967,7 @@ class HBProtocol(DatagramProtocol):
                 
                 # Emit stream_end event
                 self._events.emit('stream_end', {
-                    'repeater_id': int.from_bytes(repeater.radio_id, 'big'),
+                    'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
                     'slot': slot,
                     'src_id': int.from_bytes(current_stream.rf_src, 'big'),
                     'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
@@ -960,7 +983,7 @@ class HBProtocol(DatagramProtocol):
                 return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id, call_type_bit)
             else:
                 # Real contention - stream still active
-                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.radio_id, "big")} slot {slot}: '
+                LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                               f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
                               f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
                               f'active {time_since_last_packet*1000:.0f}ms ago) '
@@ -974,64 +997,64 @@ class HBProtocol(DatagramProtocol):
         
         return True
         
-    def _remove_repeater(self, radio_id: bytes, reason: str) -> None:
+    def _remove_repeater(self, repeater_id: bytes, reason: str) -> None:
         """
         Remove a repeater and clean up all its state.
         This ensures we don't have any memory leaks from lingering references.
         """
-        if radio_id in self._repeaters:
-            repeater = self._repeaters[radio_id]
+        if repeater_id in self._repeaters:
+            repeater = self._repeaters[repeater_id]
             
             # Log current state before removal
-            LOGGER.debug(f'Removing repeater {int.from_bytes(radio_id, "big")}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.debug(f'Removing repeater {int.from_bytes(repeater_id, "big")}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Remove from active repeaters
-            del self._repeaters[radio_id]
+            del self._repeaters[repeater_id]
             
 
-    def _handle_repeater_login(self, radio_id: bytes, addr: PeerAddress) -> None:
+    def _handle_repeater_login(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater login request"""
         ip, port = addr
         
-        LOGGER.debug(f'Processing login for repeater ID {int.from_bytes(radio_id, "big")} from {ip}:{port}')
+        LOGGER.debug(f'Processing login for repeater ID {int.from_bytes(repeater_id, "big")} from {ip}:{port}')
         
-        if radio_id in self._repeaters:
-            repeater = self._repeaters[radio_id]
+        if repeater_id in self._repeaters:
+            repeater = self._repeaters[repeater_id]
             if repeater.sockaddr != addr:
-                LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
+                LOGGER.warning(f'Repeater {int.from_bytes(repeater_id, "big")} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
                 # Remove the old registration first
                 old_addr = repeater.sockaddr
-                self._remove_repeater(radio_id, "reconnect_different_port")
+                self._remove_repeater(repeater_id, "reconnect_different_port")
                 # Then send NAK to the old address to ensure cleanup
-                self._send_nak(radio_id, old_addr, reason="Repeater reconnecting from new address")
+                self._send_nak(repeater_id, old_addr, reason="Repeater reconnecting from new address")
                 # Continue with new connection below
             else:
                 # Same repeater reconnecting from same IP:port
                 old_state = repeater.connection_state
-                LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} reconnecting while in state {old_state}')
+                LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} reconnecting while in state {old_state}')
                 
         # Create or update repeater state
-        repeater = RepeaterState(radio_id=radio_id, ip=ip, port=port)
+        repeater = RepeaterState(repeater_id=repeater_id, ip=ip, port=port)
         repeater.connection_state = 'login'
-        self._repeaters[radio_id] = repeater
+        self._repeaters[repeater_id] = repeater
         
         # Send login ACK with salt
         salt_bytes = repeater.salt.to_bytes(4, 'big')
         self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
-        LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} login request from {ip}:{port}, sent salt: {repeater.salt}')
+        LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} login request from {ip}:{port}, sent salt: {repeater.salt}')
 
-    def _handle_auth_response(self, radio_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
+    def _handle_auth_response(self, repeater_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
-        repeater = self._validate_repeater(radio_id, addr)
+        repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'login':
-            LOGGER.warning(f'Auth response from repeater {int.from_bytes(radio_id, "big")} in wrong state')
-            self._send_nak(radio_id, addr)
+            LOGGER.warning(f'Auth response from repeater {int.from_bytes(repeater_id, "big")} in wrong state')
+            self._send_nak(repeater_id, addr)
             return
             
         try:
             # Get config for this repeater including its passphrase
             repeater_config = self._matcher.get_repeater_config(
-                int.from_bytes(radio_id, 'big'),
+                int.from_bytes(repeater_id, 'big'),
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
             
@@ -1042,26 +1065,26 @@ class HBProtocol(DatagramProtocol):
             if auth_hash == calc_hash:
                 repeater.authenticated = True
                 repeater.connection_state = 'config'
-                self._send_packet(b''.join([RPTACK, radio_id]), addr)
-                LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} authenticated successfully')
+                self._send_packet(b''.join([RPTACK, repeater_id]), addr)
+                LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} authenticated successfully')
             else:
-                LOGGER.warning(f'Repeater {int.from_bytes(radio_id, "big")} failed authentication')
-                self._send_nak(radio_id, addr, reason="Authentication failed")
-                self._remove_repeater(radio_id, "auth_failed")
+                LOGGER.warning(f'Repeater {int.from_bytes(repeater_id, "big")} failed authentication')
+                self._send_nak(repeater_id, addr, reason="Authentication failed")
+                self._remove_repeater(repeater_id, "auth_failed")
                 
         except Exception as e:
-            LOGGER.error(f'Authentication error for repeater {int.from_bytes(radio_id, "big")}: {str(e)}')
-            self._send_nak(radio_id, addr)
-            self._remove_repeater(radio_id, "auth_error")
+            LOGGER.error(f'Authentication error for repeater {int.from_bytes(repeater_id, "big")}: {str(e)}')
+            self._send_nak(repeater_id, addr)
+            self._remove_repeater(repeater_id, "auth_error")
 
     def _handle_config(self, data: bytes, addr: PeerAddress) -> None:
         """Handle configuration from repeater"""
         try:
-            radio_id = data[4:8]
-            repeater = self._validate_repeater(radio_id, addr)
+            repeater_id = data[4:8]
+            repeater = self._validate_repeater(repeater_id, addr)
             if not repeater or not repeater.authenticated or repeater.connection_state != 'config':
-                LOGGER.warning(f'Config from repeater {int.from_bytes(radio_id, "big")} in wrong state')
-                self._send_nak(radio_id, addr)
+                LOGGER.warning(f'Config from repeater {int.from_bytes(repeater_id, "big")} in wrong state')
+                self._send_nak(repeater_id, addr)
                 return
                 
             # Store raw bytes for metadata
@@ -1081,7 +1104,7 @@ class HBProtocol(DatagramProtocol):
             repeater.package_id = data[262:302]
             
             # Log detailed configuration at debug level
-            LOGGER.debug(f'Repeater {int.from_bytes(radio_id, "big")} config:'
+            LOGGER.debug(f'Repeater {int.from_bytes(repeater_id, "big")} config:'
                       f'\n    Callsign: {repeater.callsign.decode().strip()}'
                       f'\n    RX Freq: {repeater.rx_freq.decode().strip()}'
                       f'\n    TX Freq: {repeater.tx_freq.decode().strip()}'
@@ -1092,14 +1115,14 @@ class HBProtocol(DatagramProtocol):
 
             repeater.connected = True
             repeater.connection_state = 'connected'
-            self._send_packet(b''.join([RPTACK, radio_id]), addr)
-            LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
-            LOGGER.debug(f'Repeater state after config: id={int.from_bytes(radio_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            self._send_packet(b''.join([RPTACK, repeater_id]), addr)
+            LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
+            LOGGER.debug(f'Repeater state after config: id={int.from_bytes(repeater_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Emit repeater_connected event
             try:
                 repeater_config = self._matcher.get_repeater_config(
-                    int.from_bytes(radio_id, 'big'),
+                    int.from_bytes(repeater_id, 'big'),
                     repeater.callsign.decode().strip() if repeater.callsign else None
                 )
                 talkgroups = repeater_config.talkgroups if repeater_config else []
@@ -1107,7 +1130,7 @@ class HBProtocol(DatagramProtocol):
                 talkgroups = []
             
             self._events.emit('repeater_connected', {
-                'radio_id': int.from_bytes(radio_id, 'big'),
+                'repeater_id': int.from_bytes(repeater_id, 'big'),
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
                 'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
                 'address': f'{repeater.ip}:{repeater.port}',
@@ -1118,42 +1141,42 @@ class HBProtocol(DatagramProtocol):
             
         except Exception as e:
             LOGGER.error(f'Error parsing config: {str(e)}')
-            if 'radio_id' in locals():
-                self._send_nak(radio_id, addr)
+            if 'repeater_id' in locals():
+                self._send_nak(repeater_id, addr)
 
-    def _handle_ping(self, radio_id: bytes, addr: PeerAddress) -> None:
+    def _handle_ping(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle ping (RPTPING/RPTP) from the repeater as a keepalive."""
-        repeater = self._validate_repeater(radio_id, addr)
+        repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'Ping from repeater {int.from_bytes(radio_id, "big")} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
-            self._send_nak(radio_id, addr, reason="Wrong connection state")
+            LOGGER.warning(f'Ping from repeater {int.from_bytes(repeater_id, "big")} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
+            self._send_nak(repeater_id, addr, reason="Wrong connection state")
             return
             
         # Update ping time and reset missed pings
         repeater.last_ping = time()
         if repeater.missed_pings > 0:
-            LOGGER.info(f'Ping counter reset for repeater {int.from_bytes(radio_id, "big")} after {repeater.missed_pings} missed pings')
+            LOGGER.info(f'Ping counter reset for repeater {int.from_bytes(repeater_id, "big")} after {repeater.missed_pings} missed pings')
         repeater.missed_pings = 0
         repeater.ping_count += 1
         
         # Send MSTPONG in response to RPTPING/RPTP from repeater
-        LOGGER.debug(f'Sending MSTPONG to repeater {int.from_bytes(radio_id, "big")}')
-        self._send_packet(b''.join([MSTPONG, radio_id]), addr)
+        LOGGER.debug(f'Sending MSTPONG to repeater {int.from_bytes(repeater_id, "big")}')
+        self._send_packet(b''.join([MSTPONG, repeater_id]), addr)
 
-    def _handle_disconnect(self, radio_id: bytes, addr: PeerAddress) -> None:
+    def _handle_disconnect(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
-        repeater = self._validate_repeater(radio_id, addr)
+        repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
-            LOGGER.info(f'Repeater {int.from_bytes(radio_id, "big")} ({repeater.callsign.decode().strip()}) disconnected')
-            self._remove_repeater(radio_id, "disconnect")
+            LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} ({repeater.callsign.decode().strip()}) disconnected')
+            self._remove_repeater(repeater_id, "disconnect")
             
-    def _handle_status(self, radio_id: bytes, data: bytes, addr: PeerAddress) -> None:
+    def _handle_status(self, repeater_id: bytes, data: bytes, addr: PeerAddress) -> None:
         """Handle repeater status report (including RSSI)"""
-        repeater = self._validate_repeater(radio_id, addr)
+        repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
             # TODO: Parse and store RSSI and other status info
-            LOGGER.debug(f'Status report from repeater {int.from_bytes(radio_id, "big")}: {data[8:].hex()}')
-            self._send_packet(b''.join([RPTACK, radio_id]), addr)
+            LOGGER.debug(f'Status report from repeater {int.from_bytes(repeater_id, "big")}: {data[8:].hex()}')
+            self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
     def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
         """
@@ -1196,10 +1219,10 @@ class HBProtocol(DatagramProtocol):
             LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]} - length {len(data)} < 55')
             return
             
-        radio_id = data[11:15]
-        repeater = self._validate_repeater(radio_id, addr)
+        repeater_id = data[11:15]
+        repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'DMR data from repeater {int.from_bytes(radio_id, "big")} in wrong state')
+            LOGGER.warning(f'DMR data from repeater {int.from_bytes(repeater_id, "big")} in wrong state')
             return
             
         # Extract packet information
@@ -1236,7 +1259,7 @@ class HBProtocol(DatagramProtocol):
         
         if not stream_valid:
             # Stream contention or not allowed - drop packet silently
-            LOGGER.debug(f'Dropped packet from repeater {int.from_bytes(radio_id, "big")} slot {_slot}: '
+            LOGGER.debug(f'Dropped packet from repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
                         f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
                         f'reason=stream contention or talkgroup not allowed')
             return
@@ -1256,7 +1279,7 @@ class HBProtocol(DatagramProtocol):
                     current_stream.call_type = "private"
                 else:
                     current_stream.call_type = "data"
-                LOGGER.info(f'Stream LC info: repeater={int.from_bytes(radio_id, "big")} '
+                LOGGER.info(f'Stream LC info: repeater={int.from_bytes(repeater_id, "big")} '
                           f'slot={_slot}, '
                           f'src={_lc.src_id}, '
                           f'dst={_lc.dst_id}, '
@@ -1298,10 +1321,10 @@ class HBProtocol(DatagramProtocol):
                             # Update user cache with talker alias (which often contains callsign)
                             if self._user_cache:
                                 src_id = int.from_bytes(_rf_src, 'big')
-                                repeater_id = int.from_bytes(radio_id, 'big')
+                                repeater_id = int.from_bytes(repeater_id, 'big')
                                 dst = int.from_bytes(_dst_id, 'big')
                                 self._user_cache.update(
-                                    radio_id=src_id,
+                                    subscriber_id=src_id,
                                     repeater_id=repeater_id,
                                     callsign=decoded_alias,  # Talker alias often contains callsign
                                     slot=_slot,
@@ -1329,7 +1352,7 @@ class HBProtocol(DatagramProtocol):
         #                    current_stream.lc = embedded_lc
         #                    current_stream.missed_header = False  # We recovered the LC
         #                    LOGGER.info(f'Recovered LC from embedded data: '
-        #                              f'repeater={int.from_bytes(radio_id, "big")} '
+        #                              f'repeater={int.from_bytes(repeater_id, "big")} '
         #                              f'slot={_slot}, '
         #                              f'src={embedded_lc.src_id}, '
         #                              f'dst={embedded_lc.dst_id}')
@@ -1337,7 +1360,7 @@ class HBProtocol(DatagramProtocol):
         #                    current_stream.embedded_lc_bits = bytearray()
         
         # Per-packet logging - only enable for heavy troubleshooting
-        #LOGGER.debug(f'DMR data from {int.from_bytes(radio_id, "big")} slot {_slot}: '
+        #LOGGER.debug(f'DMR data from {int.from_bytes(repeater_id, "big")} slot {_slot}: '
         #            f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
         #            f'dst={int.from_bytes(_dst_id, "big")}, '
         #            f'stream_id={_stream_id.hex()}, '
@@ -1352,14 +1375,14 @@ class HBProtocol(DatagramProtocol):
             current_stream.ended = True
             hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
             duration = time() - current_stream.start_time
-            LOGGER.info(f'DMR terminator received on repeater {int.from_bytes(radio_id, "big")} slot {_slot}: '
+            LOGGER.info(f'DMR terminator received on repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
                        f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
                        f'duration={duration:.2f}s, '
                        f'packets={current_stream.packet_count} - '
                        f'entering hang time ({hang_time}s)')
             # Emit stream_end event (includes hang_time since they happen together)
             self._events.emit('stream_end', {
-                'repeater_id': int.from_bytes(radio_id, 'big'),
+                'repeater_id': int.from_bytes(repeater_id, 'big'),
                 'slot': _slot,
                 'src_id': int.from_bytes(_rf_src, 'big'),
                 'dst_id': int.from_bytes(_dst_id, 'big'),
@@ -1373,7 +1396,7 @@ class HBProtocol(DatagramProtocol):
         # Emit stream_update every 60 packets (10 superframes = 1 second)
         if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
             self._events.emit('stream_update', {
-                'repeater_id': int.from_bytes(radio_id, 'big'),
+                'repeater_id': int.from_bytes(repeater_id, 'big'),
                 'slot': _slot,
                 'src_id': int.from_bytes(_rf_src, 'big'),
                 'dst_id': int.from_bytes(_dst_id, 'big'),
@@ -1393,8 +1416,74 @@ class HBProtocol(DatagramProtocol):
         #   2. Cleanup after timeout when terminator is lost (packet loss case)
         #   3. Slot protection during multi-transmission conversations (hang time)
         
-        # TODO: Implement DMR data routing/forwarding logic here
-        # For now, we're just tracking streams without forwarding
+        # Forward DMR data to other connected repeaters
+        self._forward_stream(data, repeater_id, _slot, _rf_src, _dst_id, _stream_id)
+
+    def _forward_stream(self, data: bytes, source_repeater_id: bytes, slot: int, 
+                       rf_src: bytes, dst_id: bytes, stream_id: bytes) -> None:
+        """
+        Forward incoming DMR stream packet to appropriate target repeaters.
+        
+        This method provides an extensible framework for routing decisions:
+        - Phase 1: Forward to all connected repeaters (except source)
+        - Phase 2: Add contention and hang time checking
+        - Phase 3: Add configuration-based routing rules (TS/TGID tuples)
+        - Phase 4: Add ACLs and advanced filtering
+        
+        Args:
+            data: Complete DMRD packet (20-byte HBP header + 33-byte DMR data)
+            source_repeater_id: Repeater ID of originating repeater (don't echo back)
+            slot: Timeslot (1 or 2)
+            rf_src: RF source subscriber ID (3 bytes)
+            dst_id: Destination TGID or subscriber ID (3 bytes)  
+            stream_id: Unique stream identifier (4 bytes)
+        """
+        forwarded_count = 0
+        
+        # TODO: Track active calls instead of packets
+        # This will be implemented when we add call tracking in Phase 2
+        
+        # Loop through all connected repeaters
+        for target_repeater_id, target_repeater in self._repeaters.items():
+            # Skip source repeater (don't echo back)
+            if target_repeater_id == source_repeater_id:
+                continue
+            
+            # Only forward to fully connected repeaters
+            if target_repeater.connection_state != 'connected':
+                continue
+            
+            # TODO Phase 2: Check contention on target slot
+            # target_stream = target_repeater.get_slot_stream(slot)
+            # if target_stream and self._is_slot_busy(target_stream, rf_src):
+            #     continue
+            
+            # TODO Phase 3: Check routing rules (TS/TGID tuples)
+            # if not self._check_routing_rules(target_repeater_id, slot, dst_id):
+            #     continue
+            
+            # Forward packet to target repeater
+            self._send_packet(data, target_repeater.sockaddr)
+            forwarded_count += 1
+        
+        # Log forwarding activity
+        if forwarded_count > 0:
+            LOGGER.debug(f'Forwarded stream packet: '
+                        f'src_repeater={int.from_bytes(source_repeater_id, "big")} '
+                        f'slot={slot} subscriber={int.from_bytes(rf_src, "big")} '
+                        f'tgid={int.from_bytes(dst_id, "big")} '
+                        f'stream={stream_id.hex()[:8]} -> {forwarded_count} target(s)')
+            
+            # Emit forwarding event for dashboard
+            self._events.emit('stream_forwarded', {
+                'source_repeater_id': int.from_bytes(source_repeater_id, 'big'),
+                'slot': slot,
+                'src_id': int.from_bytes(rf_src, 'big'),
+                'dst_id': int.from_bytes(dst_id, 'big'),
+                'stream_id': stream_id.hex(),
+                'target_count': forwarded_count,
+                'timestamp': time()
+            })
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
@@ -1403,22 +1492,22 @@ class HBProtocol(DatagramProtocol):
         #    LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
         self.transport.write(data, addr)
 
-    def _send_nak(self, radio_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
+    def _send_nak(self, repeater_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
         """Send NAK to specified address
         
         Args:
-            radio_id: The repeater's ID
+            repeater_id: The repeater's ID
             addr: The address to send the NAK to
             reason: Why the NAK is being sent
             is_shutdown: Whether this NAK is part of a graceful shutdown
         """
         log_level = logging.DEBUG if is_shutdown else logging.WARNING
-        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {int.from_bytes(radio_id, "big")}'
+        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {int.from_bytes(repeater_id, "big")}'
         if reason:
             log_msg += f' - {reason}'
         
         LOGGER.log(log_level, log_msg)
-        self._send_packet(b''.join([MSTNAK, radio_id]), addr)
+        self._send_packet(b''.join([MSTNAK, repeater_id]), addr)
 
 
 def cleanup_old_logs(log_dir: pathlib.Path, max_days: int) -> None:

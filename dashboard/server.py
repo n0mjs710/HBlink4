@@ -1,12 +1,18 @@
 """
 HBlink4 Dashboard - Separate Process
-FastAPI + Uvicorn + WebSockets for real-time monitoring
+FastAPI + Uvicorn + WebSockets for re        self.stats['total_streams_today'] = 0
+        self.stats['total_duration_today'] = 0
+        self.stats['total_calls_today'] = 0ime monitoring
 
 Updates every 10 superframes (60 packets = 1 second) for smooth real-time feel
 """
 import asyncio
 import json
-from datetime import datetime, date
+from d        # Send to all WebSocket clients
+        await self.send_to_clients(event)
+    
+    async def send_to_clients(self, event: dict):
+        """Send event to all connected WebSocket clients"""me import datetime, date
 from collections import deque
 from typing import Dict, List, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -68,6 +74,8 @@ class DashboardState:
         self.stats = {
             'total_streams_today': 0,
             'total_duration_today': 0.0,  # Total duration in seconds
+            'packets_forwarded': 0,  # Total packets forwarded
+            'packets_received': 0,  # Total packets received
             'start_time': datetime.now().isoformat(),
             'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
@@ -76,6 +84,8 @@ class DashboardState:
         """Reset daily statistics at midnight"""
         self.stats['total_streams_today'] = 0
         self.stats['total_duration_today'] = 0.0
+        self.stats['packets_forwarded'] = 0
+        self.stats['packets_received'] = 0
         self.stats['last_reset_date'] = date.today().isoformat()
         logger.info(f"📊 Daily stats reset at midnight (server time)")
 
@@ -190,8 +200,17 @@ class EventReceiver:
             state.last_heard = data.get('users', [])
             state.last_heard_stats = data.get('stats', {})
             logger.debug(f"Last heard updated: {len(state.last_heard)} users")
-            # Broadcast to WebSocket clients but skip adding to events log
-            await self.broadcast(event)
+            # Send to WebSocket clients but skip adding to events log
+            await self.send_to_clients(event)
+            return
+        
+        elif event_type == 'forwarding_stats':
+            # Update forwarding statistics (don't add to events log)
+            state.stats['active_calls'] = data.get('active_calls', 0)
+            state.stats['total_calls_today'] = data.get('total_calls_today', 0)
+            logger.debug(f"Forwarding stats updated: Active={data.get('active_calls', 0)}, Total Today={data.get('total_calls_today', 0)}")
+            # Send to WebSocket clients but skip adding to events log
+            await self.send_to_clients(event)
             return
         
         # Add to event log (only for user-facing on-air activity events)
@@ -199,10 +218,10 @@ class EventReceiver:
         if event_type in ['stream_start', 'stream_end']:
             state.events.append(event)
         
-        # Broadcast to all WebSocket clients
-        await self.broadcast(event)
+        # Send to all WebSocket clients
+        await self.send_to_clients(event)
     
-    async def broadcast(self, event: dict):
+    async def send_to_clients(self, event: dict):
         """Send event to all connected WebSocket clients"""
         if not state.websocket_clients:
             return
@@ -320,15 +339,15 @@ async def midnight_reset_task():
         current_date = date.today().isoformat()
         if current_date != state.stats.get('last_reset_date'):
             state.reset_daily_stats()
-            # Broadcast stats update to all WebSocket clients
-            await broadcast_stats_update()
+            # Send stats update to all WebSocket clients
+            await send_stats_update()
         
         # Check every 60 seconds
         await asyncio.sleep(60)
 
 
-async def broadcast_stats_update():
-    """Broadcast stats update to all WebSocket clients"""
+async def send_stats_update():
+    """Send stats update to all WebSocket clients"""
     if not state.websocket_clients:
         return
     

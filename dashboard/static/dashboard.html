@@ -335,6 +335,14 @@
                 <div class="stat-label">Total Traffic Today</div>
                 <div class="stat-value" id="statTotalDuration">0:00:00</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Forwarded Calls</div>
+                <div class="stat-value" id="statActiveCalls">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Calls Today</div>
+                <div class="stat-value" id="statTotalCalls">0</div>
+            </div>
         </div>
         
         <!-- Last Heard Users (Top 10) -->
@@ -417,7 +425,9 @@
             last_heard_stats: {},
             stats: {
                 total_streams_today: 0,
-                total_duration_today: 0
+                total_duration_today: 0,
+                active_calls: 0,
+                total_calls_today: 0
             },
             config: {}
         };
@@ -511,6 +521,10 @@
                 stats.total_streams_today.toLocaleString();
             document.getElementById('statTotalDuration').textContent = 
                 formatDuration(stats.total_duration_today || 0);
+            document.getElementById('statActiveCalls').textContent = 
+                (stats.active_calls || 0).toLocaleString();
+            document.getElementById('statTotalCalls').textContent = 
+                (stats.total_calls_today || 0).toLocaleString();
         }
         
         function updateRepeaters(repeaters) {
@@ -864,6 +878,13 @@
                     state.last_heard = data.users || [];
                     state.last_heard_stats = data.stats || {};
                     updateLastHeard(state.last_heard);
+                    break;
+                    
+                case 'forwarding_stats':
+                    // Update forwarding statistics
+                    state.stats.active_calls = data.active_calls || 0;
+                    state.stats.total_calls_today = data.total_calls_today || 0;
+                    updateStats(state.stats);
                     break;
             }
         }
