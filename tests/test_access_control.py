@@ -170,7 +170,7 @@ class TestRepeaterMatcher(unittest.TestCase):
         self.assertEqual(config.timeout, 30)
         self.assertEqual(config.description, "Default Repeater Configuration")
         self.assertEqual(config.passphrase, "passw0rd")
-        self.assertEqual(config.talkgroups, [8])
+        self.assertEqual(config.talkgroups, [9])  # talkgroups defaults to slot2_talkgroups for backward compatibility
 
     def test_match_priority(self):
         """Test that match priority is enforced correctly"""

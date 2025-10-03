@@ -61,7 +61,13 @@ class RepeaterConfig:
     description: str
     slot1_talkgroups: List[int] = field(default_factory=list)
     slot2_talkgroups: List[int] = field(default_factory=list)
-    talkgroups: List[int] = field(default_factory=list)  # Deprecated: backward compatibility only
+    talkgroups: List[int] | None = None  # Deprecated: backward compatibility only
+    
+    def __post_init__(self):
+        """Ensure talkgroups is populated for backward compatibility"""
+        # If talkgroups not explicitly provided, use slot2_talkgroups for backward compatibility
+        if self.talkgroups is None:
+            self.talkgroups = self.slot2_talkgroups if self.slot2_talkgroups else []
 
 MatchType = Literal['specific_id', 'id_range', 'callsign']
 

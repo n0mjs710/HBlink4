@@ -42,6 +42,7 @@ def test_hang_time():
     
     # Test 3: Mark stream as ended - now it should be in hang time
     stream.ended = True
+    stream.end_time = time()  # Must set end_time for hang time calculation
     assert stream.is_in_hang_time(2.0, 3.0), "Ended stream should be in hang time"
     print("✓ Ended stream is in hang time")
     
@@ -85,7 +86,8 @@ def test_hang_time_edge_cases():
         last_seen=current - 2.0,  # Exactly at timeout
         stream_id=b'\xa1\xb2\xc3\xd4',
         packet_count=10,
-        ended=True
+        ended=True,
+        end_time=current  # Must set end_time for hang time calculation
     )
     
     assert stream.is_in_hang_time(2.0, 3.0), "Should be in hang time at boundary"
@@ -93,18 +95,21 @@ def test_hang_time_edge_cases():
     
     # Test 2: Stream at exactly hang time expiry
     stream.last_seen = current - 5.0  # 2.0s timeout + 3.0s hang = 5.0s total
+    stream.end_time = current - 3.0  # Ended 3s ago (exactly at hang time expiry)
     assert not stream.is_in_hang_time(2.0, 3.0), "Should be out of hang time at expiry"
     print("✓ Hang time ends exactly at expiry boundary")
     
     # Test 3: Different timeout and hang time values
     stream.last_seen = current - 3.5
     stream.ended = True
+    stream.end_time = current - 0.5  # Ended 0.5s ago, within 2.0s hang time
     assert stream.is_in_hang_time(3.0, 2.0), "Should work with different timeout/hang values"
     print("✓ Hang time works with custom timeout values")
     
     # Test 4: Zero hang time
     stream.last_seen = current - 2.1
     stream.ended = True
+    stream.end_time = current - 0.1  # Ended 0.1s ago, but 0.0s hang time
     assert not stream.is_in_hang_time(2.0, 0.0), "Zero hang time should immediately expire"
     print("✓ Zero hang time expires immediately")
     
