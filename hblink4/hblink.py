@@ -926,7 +926,7 @@ class HBProtocol(DatagramProtocol):
             # Don't populate callsign field yet - wait for talker alias or user lookup
             # Callsign field will be empty string until we get talker alias
             self._user_cache.update(
-                subscriber_id=src_id,
+                radio_id=src_id,  # User's radio ID (subscriber)
                 repeater_id=repeater_id,
                 callsign='',  # Will be updated when talker alias is decoded
                 slot=slot,
@@ -1324,7 +1324,7 @@ class HBProtocol(DatagramProtocol):
                                 repeater_id = int.from_bytes(repeater_id, 'big')
                                 dst = int.from_bytes(_dst_id, 'big')
                                 self._user_cache.update(
-                                    subscriber_id=src_id,
+                                    radio_id=src_id,  # User's radio ID (subscriber)
                                     repeater_id=repeater_id,
                                     callsign=decoded_alias,  # Talker alias often contains callsign
                                     slot=_slot,
