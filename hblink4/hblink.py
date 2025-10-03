@@ -1531,10 +1531,11 @@ class HBProtocol(DatagramProtocol):
             current_stream.ended = True
             hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
             duration = time() - current_stream.start_time
-            LOGGER.info(f'DMR terminator received on repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
+            LOGGER.info(f'RX stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
                        f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
                        f'duration={duration:.2f}s, '
-                       f'packets={current_stream.packet_count} - '
+                       f'packets={current_stream.packet_count}, '
+                       f'reason=terminator - '
                        f'entering hang time ({hang_time}s)')
             # Emit stream_end event (includes hang_time since they happen together)
             self._events.emit('stream_end', {
@@ -1715,12 +1716,13 @@ class HBProtocol(DatagramProtocol):
             current_stream.end_time = current_time
             current_stream.ended = True
             
-            # Log at INFO level (will also be logged by timeout checker with TX prefix)
-            LOGGER.debug(f'TX stream terminator received on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                        f'src={int.from_bytes(rf_src, "big")}, '
-                        f'tgid={int.from_bytes(dst_id, "big")}, '
-                        f'duration={duration:.2f}s, '
-                        f'packets={current_stream.packet_count}')
+            # Log at INFO level with consistent format
+            LOGGER.info(f'TX stream ended on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(rf_src, "big")}, '
+                       f'tgid={int.from_bytes(dst_id, "big")}, '
+                       f'duration={duration:.2f}s, '
+                       f'packets={current_stream.packet_count}, '
+                       f'reason=terminator')
             
             # Emit stream_end event for dashboard
             self._events.emit('stream_end', {
