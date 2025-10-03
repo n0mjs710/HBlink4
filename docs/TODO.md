@@ -61,14 +61,20 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 - ✅ Automatic midnight reset for daily statistics
 - ✅ Clickable connection status badges
 
-**Remaining**:
+**Next Up** (Quick Wins):
+- **Layout reorganization**: Move "Last Heard" table below repeaters table (better information hierarchy)
+- **Mobile responsiveness**: Make dashboard usable on tablets (768px) and phones (375px)
+  - Responsive table layouts
+  - Collapsible sections
+  - Compact mode for small screens
+  
+**Future Enhancements**:
 - Stream history view (last N transmissions)
 - Repeater statistics graphs (traffic over time)
-- Audio player integration (if storing recordings)
 - Map view of repeater locations
-- Alert notifications (WebSocket push)
+- Event-driven updates (vs polling) - when performance becomes a concern
 
-**Estimated Effort**: Ongoing (1-2 days per feature)
+**Estimated Effort**: 1-2 days for quick wins, ongoing for future features
 
 ---
 
