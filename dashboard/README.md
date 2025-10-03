@@ -7,7 +7,7 @@ Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 - **Real-time Updates**: WebSocket-based live updates every second (no page refreshes required)
 - **Repeater Monitoring**: See all connected repeaters with their configurations and connection health
 - **Active Streams**: Monitor ongoing DMR transmissions in real-time with duration counters
-- **Last Heard Tracking**: View the 10 most recent users with talker alias display
+- **Last Heard Tracking**: View the 10 most recent users with alias display
   - 10-minute user cache with configurable timeout
   - View full cache (up to 50 users) in modal dialog
   - Shows radio ID, callsign/alias, repeater, slot, talkgroup, and time
@@ -90,7 +90,7 @@ Top row displays key metrics:
 ### Last Heard Table
 Shows the 10 most recent users:
 - Radio ID
-- Callsign/Alias (from talker alias, or "-" if not available)
+- Callsign/Alias (or "-" if not available)
 - Repeater ID
 - Slot (1 or 2)
 - Talkgroup

@@ -72,8 +72,8 @@ Changes:
 | Event | Trigger | Frequency | Data |
 |-------|---------|-----------|------|
 | repeater_connected | Config complete | Once per connection | radio_id, callsign, address, color_code, talkgroups |
-| stream_start | First packet | Once per stream | repeater_id, slot, src_id, dst_id, stream_id, talker_alias |
-| stream_update | During transmission | Every 60 packets (1 sec) | repeater_id, slot, src_id, dst_id, duration, packets, talker_alias |
+| stream_start | First packet | Once per stream | repeater_id, slot, src_id, dst_id, stream_id |
+| stream_update | During transmission | Every 60 packets (1 sec) | repeater_id, slot, src_id, dst_id, duration, packets |
 | stream_end | Terminator/timeout + hang time | Once per stream | repeater_id, slot, src_id, dst_id, duration, packets, reason, hang_time |
 
 **Note**: Stream end and hang time start are combined into a single `stream_end` event since they happen sequentially with no human-perceivable gap. This reduces event traffic by 50% during stream termination.
@@ -218,14 +218,12 @@ requirements-dashboard.txt (11 lines)
 ```bash
 pytest tests/ -v
 ```
-**Result**: All 43 tests passing ✅
+**Result**: Tests passing ✅
 - 9 access control tests
-- 7 embedded LC tests
 - 2 hang time tests
-- 5 LC extraction tests
 - 2 stream tracking tests
-- 13 talker alias tests
 - 5 terminator detection tests
+- User cache tests
 
 ### Manual Testing Required
 1. **Dashboard Installation**

@@ -32,7 +32,7 @@ import os
 import sys
 
 # DMR protocol utilities from mature dmr_utils3 library
-from dmr_utils3 import decode, bptc
+# (LC extraction removed - no dmr_utils3 imports needed)
 
 # Try package-relative imports first, fall back to direct imports
 try:
@@ -56,10 +56,6 @@ except ImportError:
 
 # Type definitions
 PeerAddress = Tuple[str, int]
-
-def bhex(data: bytes) -> bytes:
-    """Convert hex bytes to bytes, useful for consistent hex handling"""
-    return bytes.fromhex(data.decode())
 
 from dataclasses import dataclass, field
 
@@ -519,20 +515,6 @@ class HBProtocol(DatagramProtocol):
         
         # Slot is busy with a different active stream or in hang time
         return True
-    
-    def get_user_cache_data(self, limit: int = 50) -> List[dict]:
-        """
-        Get last heard users from cache.
-        
-        Args:
-            limit: Maximum number of entries to return
-            
-        Returns:
-            List of user entries sorted by most recent first
-        """
-        if self._user_cache:
-            return self._user_cache.get_last_heard(limit)
-        return []
 
     def datagramReceived(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
@@ -872,7 +854,7 @@ class HBProtocol(DatagramProtocol):
             
             # Validate the hash
             salt_bytes = repeater.salt.to_bytes(4, 'big')
-            calc_hash = bhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest().encode())
+            calc_hash = bytes.fromhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest())
             
             if auth_hash == calc_hash:
                 repeater.authenticated = True

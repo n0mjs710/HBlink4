@@ -37,9 +37,6 @@ HBlink4 will not implement transit call routing. The focus of HBlink has always 
 - **Real-time duration counter with 1-second updates**
 - **Two-tier stream end detection (immediate terminator + timeout fallback)**
 - **User routing cache for efficient private call routing**
-- **DMR Link Control (LC) metadata extraction from packet headers and voice frames**
-- **Embedded LC reassembly with 4-frame accumulation**
-- **Talker alias extraction with multi-format support (7-bit, ISO-8859-1, UTF-8, UTF-16)**
 - Pattern-based repeater configuration and blacklisting
 - Per-slot transmission management
 
@@ -101,7 +98,6 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[Stream Tracking](docs/stream_tracking.md)** - How DMR transmission streams are managed
 - **[Stream Tracking Diagrams](docs/stream_tracking_diagrams.md)** - Visual flow diagrams
 - **[Hang Time](docs/hang_time.md)** - Preventing conversation interruption
-- **[LC Extraction](docs/lc_extraction.md)** - DMR Link Control metadata extraction
 - **[TODO List](docs/TODO.md)** - Planned features and enhancements (11 items)
 - **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)** - Completed features overview
 - **[Protocol Specification](docs/protocol.md)** - HomeBrew DMR protocol details

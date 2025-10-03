@@ -65,7 +65,6 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 - Stream history view (last N transmissions)
 - Repeater statistics graphs (traffic over time)
 - Audio player integration (if storing recordings)
-- Talker alias display in dashboard
 - Map view of repeater locations
 - Alert notifications (WebSocket push)
 
@@ -285,11 +284,6 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 - Call type, source, destination from DMRD header
 - Embedded LC from voice frames (backup method)
 - Automatic extraction and storage
-
-### ✅ Talker Alias Extraction
-- Multi-format support (7-bit, ISO-8859-1, UTF-8, UTF-16)
-- Assembly across multiple frames
-- Full FLCO handling
 
 ### ✅ Access Control Framework
 - Radio ID blacklist/whitelist
