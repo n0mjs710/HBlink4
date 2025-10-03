@@ -596,8 +596,14 @@
             let statusLabel = 'IDLE';
             
             if (stream) {
-                status = 'receiving';  // Default for now, will change when we add TX
-                statusLabel = '⬇️ RX';
+                // Check if this is a TX (forwarded) stream or RX (received) stream
+                if (stream.is_assumed) {
+                    status = 'transmitting';
+                    statusLabel = '⬆️ TX';
+                } else {
+                    status = 'receiving';
+                    statusLabel = '⬇️ RX';
+                }
                 
                 if (stream.status === 'hang_time') {
                     status = 'hang_time';

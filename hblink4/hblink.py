@@ -644,7 +644,8 @@ class HBProtocol(DatagramProtocol):
                         stream.ended = True
                         stream.end_time = current_time
                         duration = current_time - stream.start_time
-                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
+                        stream_type = "TX" if stream.is_assumed else "RX"
+                        LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
                                    f'dst={int.from_bytes(stream.dst_id, "big")}, '
                                    f'duration={duration:.2f}s, '
@@ -685,7 +686,8 @@ class HBProtocol(DatagramProtocol):
                         stream.ended = True
                         stream.end_time = current_time
                         duration = current_time - stream.start_time
-                        LOGGER.info(f'Stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
+                        stream_type = "TX" if stream.is_assumed else "RX"
+                        LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
                                    f'dst={int.from_bytes(stream.dst_id, "big")}, '
                                    f'duration={duration:.2f}s, '
@@ -1713,12 +1715,12 @@ class HBProtocol(DatagramProtocol):
             current_stream.end_time = current_time
             current_stream.ended = True
             
-            # Log at INFO level
-            LOGGER.info(f'Forwarding ended to repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                       f'src={int.from_bytes(rf_src, "big")}, '
-                       f'tgid={int.from_bytes(dst_id, "big")}, '
-                       f'duration={duration:.2f}s, '
-                       f'packets={current_stream.packet_count}')
+            # Log at INFO level (will also be logged by timeout checker with TX prefix)
+            LOGGER.debug(f'TX stream terminator received on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                        f'src={int.from_bytes(rf_src, "big")}, '
+                        f'tgid={int.from_bytes(dst_id, "big")}, '
+                        f'duration={duration:.2f}s, '
+                        f'packets={current_stream.packet_count}')
             
             # Emit stream_end event for dashboard
             self._events.emit('stream_end', {
