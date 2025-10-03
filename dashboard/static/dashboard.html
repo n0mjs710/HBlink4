@@ -505,9 +505,9 @@
         
         function updateConnectionStatus(connected) {
             const el = document.getElementById('connectionStatus');
-            el.textContent = connected ? 'Connected' : 'Disconnected';
+            el.textContent = connected ? 'Connected' : '🔄 Click to Reconnect';
             el.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
-            el.title = connected ? 'Click to reload page' : 'Click to reconnect';
+            el.title = connected ? 'Click to reload page' : 'Reconnect to server';
         }
         
         function updateStats(stats, repeaters, streams) {
