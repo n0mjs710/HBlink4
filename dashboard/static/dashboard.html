@@ -644,6 +644,14 @@
             
             const packets = stream?.packets || 0;
             
+            // Lookup callsign from last_heard cache
+            let callsign = '—';
+            if (stream?.src_id) {
+                const lastHeardUsers = state.lastHeard || [];
+                const user = lastHeardUsers.find(u => u.radio_id === stream.src_id);
+                callsign = user?.callsign || '—';
+            }
+            
             return `
                 <div class="slot ${status}">
                     <div class="slot-col">
@@ -671,8 +679,8 @@
                              data-final-duration="${stream?.duration || ''}">${duration}</div>
                     </div>
                     <div class="slot-col">
-                        <div class="slot-col-label">Packets</div>
-                        <div class="slot-col-value ${stream ? '' : 'empty'}">${packets || '—'}</div>
+                        <div class="slot-col-label">Callsign</div>
+                        <div class="slot-col-value ${stream && callsign !== '—' ? '' : 'empty'}">${callsign}</div>
                     </div>
                 </div>
             `;

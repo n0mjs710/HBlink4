@@ -450,7 +450,8 @@ class HBProtocol(DatagramProtocol):
         # Check if TGID is in the allowed list for this slot
         return tgid in allowed_tgids
     
-    def _is_slot_busy(self, repeater_id: bytes, slot: int, stream_id: bytes) -> bool:
+    def _is_slot_busy(self, repeater_id: bytes, slot: int, stream_id: bytes, 
+                     rf_src: bytes = None, dst_id: bytes = None) -> bool:
         """
         Check if a slot is busy with a different stream (contention check).
         
@@ -458,6 +459,8 @@ class HBProtocol(DatagramProtocol):
             repeater_id: Repeater ID to check
             slot: Timeslot to check
             stream_id: Current stream ID (to allow same stream through)
+            rf_src: Source subscriber ID (optional, for hang time check)
+            dst_id: Destination TGID (optional, for hang time check)
             
         Returns:
             True if slot is busy with different stream, False if available
@@ -475,7 +478,7 @@ class HBProtocol(DatagramProtocol):
         if current_stream.stream_id == stream_id:
             return False  # Same stream, not busy
         
-        # Check if stream has ended and is outside hang time
+        # Check if stream has ended and is in hang time
         current_time = time()
         hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
         
@@ -484,8 +487,14 @@ class HBProtocol(DatagramProtocol):
             time_since_end = current_time - current_stream.end_time
             if time_since_end > hang_time:
                 return False  # Hang time expired, slot is free
+            
+            # Still in hang time - check if new stream is same src/dst
+            # Allow same conversation to continue (break through hang time)
+            if rf_src and dst_id:
+                if current_stream.rf_src == rf_src and current_stream.dst_id == dst_id:
+                    return False  # Same src/dst, allow continuation
         
-        # Slot is busy with a different active stream or in hang time
+        # Slot is busy with a different active stream or protected by hang time
         return True
 
     def datagramReceived(self, data: bytes, addr: tuple):
@@ -1111,8 +1120,8 @@ class HBProtocol(DatagramProtocol):
             if not self._check_outbound_routing(target_repeater_id, slot, tgid):
                 continue
             
-            # Check contention on target slot
-            if self._is_slot_busy(target_repeater_id, slot, stream_id):
+            # Check contention on target slot (pass src/dst for hang time check)
+            if self._is_slot_busy(target_repeater_id, slot, stream_id, rf_src, dst_id):
                 LOGGER.debug(f'Slot busy on target repeater {int.from_bytes(target_repeater_id, "big")} '
                            f'TS{slot}, skipping forward')
                 continue
