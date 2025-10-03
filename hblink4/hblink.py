@@ -93,10 +93,10 @@ class StreamState:
     
     def is_in_hang_time(self, timeout: float, hang_time: float) -> bool:
         """Check if stream is in hang time (ended but slot reserved for same source)"""
-        if not self.ended:
+        if not self.ended or not self.end_time:
             return False
-        time_since_last = time() - self.last_seen
-        return timeout <= time_since_last < (timeout + hang_time)
+        time_since_end = time() - self.end_time
+        return time_since_end < hang_time
 
 
 @dataclass
@@ -642,6 +642,7 @@ class HBProtocol(DatagramProtocol):
                     if not stream.ended:
                         # Stream just ended - mark it and start hang time
                         stream.ended = True
+                        stream.end_time = current_time
                         duration = current_time - stream.start_time
                         LOGGER.info(f'Stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
@@ -678,6 +679,7 @@ class HBProtocol(DatagramProtocol):
                     if not stream.ended:
                         # Stream just ended - mark it and start hang time
                         stream.ended = True
+                        stream.end_time = current_time
                         duration = current_time - stream.start_time
                         LOGGER.info(f'Stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
                                    f'src={int.from_bytes(stream.rf_src, "big")}, '
