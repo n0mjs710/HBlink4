@@ -8,6 +8,7 @@ HBlink4 is the next evolution of the HBlink DMR Server implementation using the 
 - Individual repeater management rather than server-level system management
 - Direct repeater registration without binding to specific server instances
 - Granular per-repeater control and monitoring
+- **Tightly integrated web dashboard with modern look and feel** - Real-time monitoring with WebSocket updates, no page refreshes required
 
 ## Features
 
@@ -16,13 +17,14 @@ HBlink4 is the next evolution of the HBlink DMR Server implementation using the 
 - JSON-based configuration
 - Enhanced repeater management
 - Built on Twisted framework for reliable async operation
+- **Tightly integrated web dashboard** - Real-time monitoring with modern look and feel (see [Dashboard Documentation](dashboard/README.md))
 - **Stream tracking with immediate DMR terminator detection (~60ms)**
 - **Real-time duration counter with 1-second updates**
 - **Two-tier stream end detection (immediate terminator + timeout fallback)**
+- **User routing cache for efficient private call routing**
 - **DMR Link Control (LC) metadata extraction from packet headers and voice frames**
 - **Embedded LC reassembly with 4-frame accumulation**
 - **Talker alias extraction with multi-format support (7-bit, ISO-8859-1, UTF-8, UTF-16)**
-- **Web-based real-time dashboard with WebSocket updates**
 - Pattern-based repeater configuration and blacklisting
 - Per-slot transmission management
 
@@ -56,12 +58,25 @@ Edit the configuration file to set up your access control, repeater options, and
 
 ## Running
 
-To start HBlink4:
+### Start all services (recommended)
 ```bash
-python3 hblink4/hblink.py config/my_hblink.json
+./run_all.sh
 ```
 
-The server will start and listen for repeater registrations on the configured bind_ip and bind_port.
+This starts both HBlink4 and the web dashboard. Access the dashboard at http://localhost:8080
+
+### Start services separately
+```bash
+# Start HBlink4 server
+python3 run.py
+
+# In another terminal, start the dashboard
+python3 run_dashboard.py
+```
+
+The server will listen for repeater registrations on the configured bind_ip and bind_port.
+
+For detailed dashboard features and configuration, see the [Dashboard Documentation](dashboard/README.md).
 
 ## Documentation
 
