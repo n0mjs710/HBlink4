@@ -1,6 +1,21 @@
 # HBlink4
 
-HBlink4 is the next evolution of the HBlink DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. This version represents a complete architectural redesign, moving from a server-centric to a repeater-centric model for more granular control and management of connected systems.
+HBlink4 is the next evolution of the HBlink DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. This version represents a complete architectural redesign reflecting a fundamental shift in how DMR networks operate.
+
+## Architectural Philosophy: From Transit Router to Endpoint Server
+
+When I developed HBlink3, DMR networks required transit call routing—servers had to relay traffic between networks, much like Internet autonomous systems. Repeaters could only connect to one server, so if you wanted access to multiple networks (KS-DMR, Brandmeister, DMR-MARC), your regional network had to act as a transit router, forwarding calls to and from other national or international networks.
+
+The landscape changed dramatically with the development of **DMRGateway** by the MMDVM team. This software allows repeaters to split traffic by timeslot and talkgroup (TS/TGID tuples), connecting directly to multiple servers simultaneously. Repeaters can now reach different networks as primary sources, eliminating the need for transit routing.
+
+**HBlink4 embraces this new paradigm.** Rather than implementing complex transit routing features, HBlink4 focuses on being an efficient **endpoint network server** with granular per-repeater control. This architectural shift enables:
+
+- **Per-repeater routing rules** using TS/TGID tuples for precise call handling
+- **Individual repeater management** rather than server-level "system" groupings
+- **Direct source connectivity** without multi-hop relay complexity
+- **Simplified architecture** focused on what modern networks actually need
+
+HBlink4 will not implement transit call routing. That era of DMR networking is past, and the design reflects where we're going, not where we've been.
 
 ## Key Architectural Changes
 
