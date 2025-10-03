@@ -272,6 +272,63 @@ class HBProtocol(DatagramProtocol):
                     self._send_nak(repeater_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
                     self._remove_repeater(repeater_id, "timeout")
     
+    def _check_slot_timeout(self, repeater_id: bytes, repeater: RepeaterState, slot: int, 
+                           stream: StreamState, current_time: float, stream_timeout: float, 
+                           hang_time: float) -> bool:
+        """
+        Check and handle timeout for a single slot stream.
+        
+        Returns:
+            True if slot should be cleared, False otherwise
+        """
+        if not stream.is_active(stream_timeout):
+            if not stream.ended:
+                # Stream just ended - mark it and start hang time
+                stream.ended = True
+                stream.end_time = current_time
+                duration = current_time - stream.start_time
+                stream_type = "TX" if stream.is_assumed else "RX"
+                LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
+                           f'src={int.from_bytes(stream.rf_src, "big")}, '
+                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                           f'duration={duration:.2f}s, '
+                           f'packets={stream.packet_count} - '
+                           f'entering hang time ({hang_time}s)')
+                # Emit stream_end event (includes hang_time since they happen together)
+                self._events.emit('stream_end', {
+                    'repeater_id': int.from_bytes(repeater_id, 'big'),
+                    'slot': slot,
+                    'src_id': int.from_bytes(stream.rf_src, 'big'),
+                    'dst_id': int.from_bytes(stream.dst_id, 'big'),
+                    'duration': round(duration, 2),
+                    'packets': stream.packet_count,
+                    'end_reason': 'timeout',
+                    'hang_time': hang_time,
+                    'call_type': stream.call_type
+                })
+                
+                # Decrement forwarding stats if this was an assumed stream
+                if stream.is_assumed:
+                    self._forwarding_stats['active_calls'] -= 1
+                return False  # Don't clear yet - entering hang time
+                
+            elif not stream.is_in_hang_time(stream_timeout, hang_time):
+                # Hang time expired - clear the slot
+                hang_duration = current_time - stream.end_time if stream.end_time else 0
+                stream_type = "TX" if stream.is_assumed else "RX"
+                LOGGER.info(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
+                           f'src={int.from_bytes(stream.rf_src, "big")}, '
+                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                           f'hang_duration={hang_duration:.2f}s')
+                # Emit hang_time_expired event so dashboard clears the slot
+                self._events.emit('hang_time_expired', {
+                    'repeater_id': int.from_bytes(repeater_id, 'big'),
+                    'slot': slot
+                })
+                return True  # Clear the slot
+        
+        return False  # Stream still active or in hang time
+    
     def _check_stream_timeouts(self):
         """Check for and clean up stale streams on all repeaters"""
         current_time = time()
@@ -284,97 +341,15 @@ class HBProtocol(DatagramProtocol):
             
             # Check slot 1
             if repeater.slot1_stream:
-                stream = repeater.slot1_stream
-                if not stream.is_active(stream_timeout):
-                    if not stream.ended:
-                        # Stream just ended - mark it and start hang time
-                        stream.ended = True
-                        stream.end_time = current_time
-                        duration = current_time - stream.start_time
-                        stream_type = "TX" if stream.is_assumed else "RX"
-                        LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
-                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
-                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                                   f'duration={duration:.2f}s, '
-                                   f'packets={stream.packet_count} - '
-                                   f'entering hang time ({hang_time}s)')
-                        # Emit stream_end event (includes hang_time since they happen together)
-                        self._events.emit('stream_end', {
-                            'repeater_id': int.from_bytes(repeater_id, 'big'),
-                            'slot': 1,
-                            'src_id': int.from_bytes(stream.rf_src, 'big'),
-                            'dst_id': int.from_bytes(stream.dst_id, 'big'),
-                            'duration': round(duration, 2),
-                            'packets': stream.packet_count,
-                            'end_reason': 'timeout',
-                            'hang_time': hang_time,
-                            'call_type': stream.call_type
-                        })
-                        
-                        # Decrement forwarding stats if this was an assumed stream
-                        if stream.is_assumed:
-                            self._forwarding_stats['active_calls'] -= 1
-                    elif not stream.is_in_hang_time(stream_timeout, hang_time):
-                        # Hang time expired - clear the slot
-                        hang_duration = current_time - stream.end_time if stream.end_time else 0
-                        stream_type = "TX" if stream.is_assumed else "RX"
-                        LOGGER.info(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot 1: '
-                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
-                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                                   f'hang_duration={hang_duration:.2f}s')
-                        # Emit hang_time_expired event so dashboard clears the slot
-                        self._events.emit('hang_time_expired', {
-                            'repeater_id': int.from_bytes(repeater_id, 'big'),
-                            'slot': 1
-                        })
-                        repeater.slot1_stream = None
+                if self._check_slot_timeout(repeater_id, repeater, 1, repeater.slot1_stream,
+                                           current_time, stream_timeout, hang_time):
+                    repeater.slot1_stream = None
             
             # Check slot 2
             if repeater.slot2_stream:
-                stream = repeater.slot2_stream
-                if not stream.is_active(stream_timeout):
-                    if not stream.ended:
-                        # Stream just ended - mark it and start hang time
-                        stream.ended = True
-                        stream.end_time = current_time
-                        duration = current_time - stream.start_time
-                        stream_type = "TX" if stream.is_assumed else "RX"
-                        LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
-                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
-                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                                   f'duration={duration:.2f}s, '
-                                   f'packets={stream.packet_count} - '
-                                   f'entering hang time ({hang_time}s)')
-                        # Emit stream_end event (includes hang_time since they happen together)
-                        self._events.emit('stream_end', {
-                            'repeater_id': int.from_bytes(repeater_id, 'big'),
-                            'slot': 2,
-                            'src_id': int.from_bytes(stream.rf_src, 'big'),
-                            'dst_id': int.from_bytes(stream.dst_id, 'big'),
-                            'duration': round(duration, 2),
-                            'packets': stream.packet_count,
-                            'end_reason': 'timeout',
-                            'hang_time': hang_time,
-                            'call_type': stream.call_type
-                        })
-                        
-                        # Decrement forwarding stats if this was an assumed stream
-                        if stream.is_assumed:
-                            self._forwarding_stats['active_calls'] -= 1
-                    elif not stream.is_in_hang_time(stream_timeout, hang_time):
-                        # Hang time expired - clear the slot
-                        hang_duration = current_time - stream.end_time if stream.end_time else 0
-                        stream_type = "TX" if stream.is_assumed else "RX"
-                        LOGGER.info(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot 2: '
-                                   f'src={int.from_bytes(stream.rf_src, "big")}, '
-                                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                                   f'hang_duration={hang_duration:.2f}s')
-                        # Emit hang_time_expired event so dashboard clears the slot
-                        self._events.emit('hang_time_expired', {
-                            'repeater_id': int.from_bytes(repeater_id, 'big'),
-                            'slot': 2
-                        })
-                        repeater.slot2_stream = None
+                if self._check_slot_timeout(repeater_id, repeater, 2, repeater.slot2_stream,
+                                           current_time, stream_timeout, hang_time):
+                    repeater.slot2_stream = None
         
         # Cleanup old denied stream entries (older than 10 seconds)
         denied_cutoff = current_time - 10.0
