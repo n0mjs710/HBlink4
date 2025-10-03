@@ -754,15 +754,13 @@ class HBProtocol(DatagramProtocol):
         """
         # Get repeater configuration
         repeater_id_int = int.from_bytes(repeater_id, 'big')
-        config = self._matcher.match_repeater(repeater_id_int)
-        
-        if not config:
-            # No config means use default behavior (allow all inbound)
-            return True
+        config = self._matcher.get_repeater_config(repeater_id_int)
         
         # Get slot-specific talkgroup list
-        slot_key = f'slot{slot}_talkgroups'
-        allowed_tgids = config.get(slot_key, [])
+        if slot == 1:
+            allowed_tgids = config.slot1_talkgroups
+        else:
+            allowed_tgids = config.slot2_talkgroups
         
         # Empty list means accept all (backward compatibility)
         if not allowed_tgids:
@@ -788,15 +786,13 @@ class HBProtocol(DatagramProtocol):
         """
         # Get repeater configuration
         repeater_id_int = int.from_bytes(repeater_id, 'big')
-        config = self._matcher.match_repeater(repeater_id_int)
-        
-        if not config:
-            # No config means use default behavior (don't forward by default)
-            return False
+        config = self._matcher.get_repeater_config(repeater_id_int)
         
         # Get slot-specific talkgroup list
-        slot_key = f'slot{slot}_talkgroups'
-        allowed_tgids = config.get(slot_key, [])
+        if slot == 1:
+            allowed_tgids = config.slot1_talkgroups
+        else:
+            allowed_tgids = config.slot2_talkgroups
         
         # Empty list means send nothing (safe default)
         if not allowed_tgids:
