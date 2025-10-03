@@ -1178,6 +1178,10 @@ class HBProtocol(DatagramProtocol):
             This enables immediate terminator detection (~60ms latency) instead of
             timeout-based detection (~200ms). HBlink3 uses this same method.
         """
+        # Check packet length
+        if len(data) < 16:
+            return False
+            
         # Extract the data type / voice sequence from bits 0-3 of byte 15
         _bits = data[15]
         _dtype_vseq = _bits & 0xF
