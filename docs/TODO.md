@@ -5,29 +5,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## High Priority
 
-### 1. Enhanced Access Control (Medium) 🟡
-**Status**: Not started  
-**Difficulty**: Medium  
-**Dependencies**: Current access control framework  
-**Description**: Expand access control with more granular permissions.
-
-**Features**:
-- Per-talkgroup permissions (not just global allow/deny)
-- Time-based restrictions (e.g., only allow 9-5)
-- Emergency call prioritization
-- Private call policies
-- Blacklist/whitelist per repeater
-
-**Implementation Notes**:
-- Extend existing access control module
-- New configuration schema
-- May need separate permission levels
-
-**Estimated Effort**: 1 week
-
----
-
-### 2. Dashboard Enhancements (Medium) 🟡
+### 1. Dashboard Enhancements (Medium) 🟡
 **Status**: In progress  
 **Difficulty**: Medium  
 **Dependencies**: Current dashboard  
@@ -37,101 +15,40 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 - ✅ Real-time duration counter for active streams
 - ✅ Automatic midnight reset for daily statistics
 - ✅ Clickable connection status badges
+- ✅ Event-driven updates (UDP events → WebSocket broadcasts)
 
-**Next Up** (Quick Wins):
+**Practical Next Steps**:
 - **Layout reorganization**: Move "Last Heard" table below repeaters table (better information hierarchy)
 - **Mobile responsiveness**: Make dashboard usable on tablets (768px) and phones (375px)
   - Responsive table layouts
   - Collapsible sections
   - Compact mode for small screens
-  
-**Future Enhancements**:
-- Stream history view (last N transmissions)
-- Repeater statistics graphs (traffic over time)
-- Map view of repeater locations
-- Event-driven updates (vs polling) - when performance becomes a concern
 
-**Estimated Effort**: 1-2 days for quick wins, ongoing for future features
+**Estimated Effort**: 1-2 days
 
 ---
 
 ## Medium Priority
 
-### 3. Stream Recording (Medium) 🟡
-
----
-
-## Medium Priority
-
-### 3. LC Extraction from Sync Frames (Complex) 🟠
-**Status**: Not started  
-**Difficulty**: High  
-**Dependencies**: None  
-**Description**: Extract Link Control from voice header/terminator sync frames.
-
-**Current State**:
-- LC already available from DMRD packet header (call type, IDs)
-- Embedded LC extraction from voice frames working (when header missed)
-- This would provide redundant/backup LC source
-
-**Use Cases**:
-- **Stream forwarding with LC modification**: When bridging streams and changing source/destination IDs, we need to rebuild LC data in sync frames
-- **Verification**: Compare LC from multiple sources for consistency
-- **Recovery**: Extract LC even if DMRD header is corrupted
-
-**Implementation Notes**:
-- LC is embedded in ETSI sync patterns at bytes 14-19
-- May need FEC (Forward Error Correction) decoding
-- HBlink3 uses dmr_utils3 library for this
-- Would enable rebuilding entire DMR frames from scratch
-
-**Why Lower Priority**:
-- Current methods work fine for read-only use cases
-- Only critical when implementing stream forwarding with LC modification
-- More complex than other features
-
-**Estimated Effort**: 1-2 weeks (research + implementation)
-
----
-
-### 3. Stream Recording (Medium) 🟡
-**Status**: Not started  
-**Difficulty**: Medium  
-**Dependencies**: Storage backend  
-**Description**: Record DMR audio streams to disk for playback/archival.
-
-**Features**:
-- Capture raw AMBE frames
-- Transcode to MP3/WAV (requires AMBE codec)
-- Metadata storage (who, when, talkgroup)
-- Automatic cleanup/rotation
-- Privacy controls (exclude private calls?)
-
-**Implementation Notes**:
-- AMBE codec may require licensing
-- Large storage requirements
-- Configuration for recording policies
-
-**Estimated Effort**: 2-3 weeks
-
----
-
-### 4. Performance Monitoring (Easy) 🟢
+### 2. Performance Monitoring (Easy) 🟢
 **Status**: Not started  
 **Difficulty**: Low  
 **Dependencies**: None  
 **Description**: Track and expose performance metrics.
 
-**Metrics**:
-- Packets per second
-- Active streams count
+**Critical Metrics**:
+- **Latency**: Time from packet receipt to forwarding (most important)
+- **Jitter**: Variance in latency (critical for voice quality)
+
+**Additional Metrics**:
 - Memory usage
 - CPU usage
 - Network bandwidth
-- Latency measurements
 
 **Implementation Notes**:
-- Use Python `psutil` library
+- Timestamp packets on receipt and forward
+- Calculate rolling average latency and jitter per repeater
+- Use Python `psutil` library for system metrics
 - Expose via dashboard or Prometheus endpoint
 - Minimal overhead
 
@@ -141,7 +58,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## Low Priority
 
-### 5. Advanced Logging (Easy) 🟢
+### 3. Advanced Logging (Easy) 🟢
 **Status**: Partial  
 **Difficulty**: Low  
 **Dependencies**: Current logging  
@@ -162,28 +79,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 6. Multi-Server Clustering (Complex) 🔴
-**Status**: Not started  
-**Difficulty**: Very High  
-**Dependencies**: Stream forwarding, distributed state  
-**Description**: Run multiple HBlink4 instances with shared state.
-
-**Requirements**:
-- Distributed stream tracking
-- Load balancing repeater connections
-- Failover/high availability
-- State synchronization (Redis/etcd?)
-
-**Implementation Notes**:
-- Architectural redesign required
-- Complex consensus protocols
-- May not be needed for typical deployments
-
-**Estimated Effort**: 4-6 weeks
-
----
-
-### 7. Web-Based Configuration UI (Medium) 🟡
+### 4. Web-Based Configuration UI (Medium) 🟡
 **Status**: Not started  
 **Difficulty**: Medium  
 **Dependencies**: Dashboard  
@@ -205,7 +101,7 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-### 8. Protocol Extensions (Research) 🔵
+### 5. Protocol Extensions (Research) 🔵
 **Status**: Research phase  
 **Difficulty**: Unknown  
 **Dependencies**: Community input  
@@ -223,27 +119,6 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 - Document carefully
 
 **Estimated Effort**: Unknown
-
----
-
-### 9. Mobile App Integration (Medium) 🟡
-**Status**: Not started  
-**Difficulty**: Medium  
-**Dependencies**: API endpoints  
-**Description**: Mobile app for monitoring/control.
-
-**Features**:
-- Real-time stream monitoring
-- Push notifications for events
-- Quick enable/disable repeaters
-- View statistics on mobile
-
-**Implementation Notes**:
-- REST API for mobile client
-- WebSocket for real-time updates
-- Separate project (iOS/Android)
-
-**Estimated Effort**: 4-6 weeks
 
 ---
 
