@@ -1043,6 +1043,9 @@ class HBProtocol(DatagramProtocol):
                         f'reason=stream contention or talkgroup not allowed')
             return
         
+        # Get the current stream for this slot (after _handle_stream_packet has updated it)
+        current_stream = repeater.get_slot_stream(_slot)
+        
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'DMR data from {int.from_bytes(repeater_id, "big")} slot {_slot}: '
         #            f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
