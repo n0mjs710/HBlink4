@@ -186,13 +186,18 @@ class EventReceiver:
                 logger.debug(f"Hang time expired for {key}")
         
         elif event_type == 'last_heard_update':
-            # Update last heard users
+            # Update last heard users (don't add to events log - not an on-air event)
             state.last_heard = data.get('users', [])
             state.last_heard_stats = data.get('stats', {})
             logger.debug(f"Last heard updated: {len(state.last_heard)} users")
+            # Broadcast to WebSocket clients but skip adding to events log
+            await self.broadcast(event)
+            return
         
-        # Add to event log
-        state.events.append(event)
+        # Add to event log (only for user-facing on-air activity events)
+        # Skip system events like repeater_connected, repeater_disconnected, hang_time_expired, repeater_keepalive
+        if event_type in ['stream_start', 'stream_end']:
+            state.events.append(event)
         
         # Broadcast to all WebSocket clients
         await self.broadcast(event)
