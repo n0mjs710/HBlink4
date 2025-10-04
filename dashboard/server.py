@@ -7,6 +7,8 @@ Updates every 10 superframes (60 packets = 1 second) for smooth real-time feel
 import asyncio
 import json
 import csv
+import socket
+import os
 from datetime import datetime, date
 from collections import deque
 from typing import Dict, List, Set, Optional
@@ -64,7 +66,15 @@ def load_config() -> dict:
         "server_description": "Amateur Radio DMR Network",
         "dashboard_title": "HBlink4 Dashboard",
         "refresh_interval": 1000,
-        "max_events": 50
+        "max_events": 50,
+        "event_receiver": {
+            "transport": "unix",
+            "host": "127.0.0.1",
+            "port": 8765,
+            "unix_socket": "/tmp/hblink4.sock",
+            "ipv6": False,
+            "buffer_size": 65536
+        }
     }
     
     if config_path.exists():
@@ -119,32 +129,155 @@ class DashboardState:
 state = DashboardState()
 
 
-class UDPProtocol(asyncio.DatagramProtocol):
-    """UDP protocol handler for receiving events from hblink4"""
+class TCPProtocol(asyncio.Protocol):
+    """TCP protocol handler for receiving events from hblink4"""
     
     def __init__(self, callback):
         self.callback = callback
+        self.buffer = b''
+        self.transport = None
     
-    def datagram_received(self, data, addr):
-        """Called when UDP datagram received"""
-        asyncio.create_task(self.callback(data))
+    def connection_made(self, transport):
+        """Called when TCP connection established"""
+        peername = transport.get_extra_info('peername')
+        logger.info(f"✅ HBlink4 connected via TCP from {peername}")
+        self.transport = transport
+    
+    def data_received(self, data):
+        """Called when TCP data received (handles framing)"""
+        self.buffer += data
+        
+        # Process all complete frames in buffer
+        while len(self.buffer) >= 4:
+            # Read length prefix (4 bytes, big-endian)
+            length = int.from_bytes(self.buffer[:4], byteorder='big')
+            
+            # Check if we have complete frame
+            if len(self.buffer) < 4 + length:
+                break  # Wait for more data
+            
+            # Extract frame
+            frame = self.buffer[4:4+length]
+            self.buffer = self.buffer[4+length:]
+            
+            # Process event
+            asyncio.create_task(self.callback(frame))
+    
+    def connection_lost(self, exc):
+        """Called when TCP connection lost"""
+        if exc:
+            logger.warning(f"⚠️ HBlink4 TCP connection lost: {exc}")
+        else:
+            logger.info("HBlink4 TCP connection closed")
+
+
+class UnixProtocol(asyncio.Protocol):
+    """Unix socket protocol handler for receiving events from hblink4"""
+    
+    def __init__(self, callback):
+        self.callback = callback
+        self.buffer = b''
+        self.transport = None
+    
+    def connection_made(self, transport):
+        """Called when Unix socket connection established"""
+        logger.info(f"✅ HBlink4 connected via Unix socket")
+        self.transport = transport
+    
+    def data_received(self, data):
+        """Called when data received (handles framing)"""
+        self.buffer += data
+        
+        # Process all complete frames in buffer
+        while len(self.buffer) >= 4:
+            # Read length prefix (4 bytes, big-endian)
+            length = int.from_bytes(self.buffer[:4], byteorder='big')
+            
+            # Check if we have complete frame
+            if len(self.buffer) < 4 + length:
+                break  # Wait for more data
+            
+            # Extract frame
+            frame = self.buffer[4:4+length]
+            self.buffer = self.buffer[4+length:]
+            
+            # Process event
+            asyncio.create_task(self.callback(frame))
+    
+    def connection_lost(self, exc):
+        """Called when Unix socket connection lost"""
+        if exc:
+            logger.warning(f"⚠️ HBlink4 Unix socket connection lost: {exc}")
+        else:
+            logger.info("HBlink4 Unix socket connection closed")
 
 
 class EventReceiver:
-    """Receives UDP datagrams from hblink4 and processes events"""
+    """Receives events from hblink4 via TCP or Unix socket"""
     
-    def __init__(self, host='127.0.0.1', port=8765):
+    def __init__(self, transport='unix', host='127.0.0.1', port=8765, 
+                 unix_socket='/tmp/hblink4.sock', ipv6=False):
+        """
+        Initialize event receiver with transport abstraction
+        
+        Args:
+            transport: 'tcp' or 'unix'
+            host: Listen address (for TCP)
+            port: Listen port (for TCP)
+            unix_socket: Unix socket path (for Unix transport)
+            ipv6: Use IPv6 (for TCP)
+        """
+        self.transport = transport.lower()
         self.host = host
         self.port = port
+        self.unix_socket = unix_socket
+        self.ipv6 = ipv6
+        self.server = None
     
     async def start(self):
-        """Start receiving UDP datagrams from hblink4"""
+        """Start receiving events from hblink4"""
         loop = asyncio.get_event_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: UDPProtocol(self.process_event),
-            local_addr=(self.host, self.port)
+        
+        if self.transport == 'tcp':
+            await self._start_tcp(loop)
+        elif self.transport == 'unix':
+            await self._start_unix(loop)
+        else:
+            logger.error(f"Unknown transport: {self.transport} (valid options: 'tcp', 'unix')")
+            raise ValueError(f"Unknown transport: {self.transport}")
+    
+    async def _start_tcp(self, loop):
+        """Start TCP server"""
+        family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
+        self.server = await loop.create_server(
+            lambda: TCPProtocol(self.process_event),
+            self.host, self.port,
+            family=family
         )
-        logger.info(f"📡 Listening for HBlink4 events on {self.host}:{self.port}")
+        logger.info(f"📡 Listening for HBlink4 events via TCP on {self.host}:{self.port}")
+    
+    async def _start_unix(self, loop):
+        """Start Unix socket server"""
+        # Remove existing socket file if it exists
+        if os.path.exists(self.unix_socket):
+            try:
+                os.unlink(self.unix_socket)
+                logger.info(f"Removed existing socket file: {self.unix_socket}")
+            except Exception as e:
+                logger.warning(f"Failed to remove existing socket: {e}")
+        
+        self.server = await loop.create_unix_server(
+            lambda: UnixProtocol(self.process_event),
+            self.unix_socket
+        )
+        
+        # Set socket permissions (readable/writable by owner and group)
+        try:
+            os.chmod(self.unix_socket, 0o660)
+        except Exception as e:
+            logger.warning(f"Failed to set socket permissions: {e}")
+        
+        logger.info(f"📡 Listening for HBlink4 events via Unix socket at {self.unix_socket}")
     
     async def process_event(self, data: bytes):
         """Process incoming event from hblink4"""
@@ -384,10 +517,18 @@ if static_path.exists():
 @app.on_event("startup")
 async def startup_event():
     """Start event receiver on startup"""
-    receiver = EventReceiver()
+    receiver_config = dashboard_config.get('event_receiver', {})
+    receiver = EventReceiver(
+        transport=receiver_config.get('transport', 'unix'),
+        host=receiver_config.get('host', '127.0.0.1'),
+        port=receiver_config.get('port', 8765),
+        unix_socket=receiver_config.get('unix_socket', '/tmp/hblink4.sock'),
+        ipv6=receiver_config.get('ipv6', False)
+    )
     asyncio.create_task(receiver.start())
     asyncio.create_task(midnight_reset_task())
     logger.info("🚀 HBlink4 Dashboard started!")
+    logger.info(f"📡 Event transport: {receiver_config.get('transport', 'unix').upper()}")
     logger.info("📊 Access dashboard at http://localhost:8080")
 
 

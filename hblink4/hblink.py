@@ -153,7 +153,21 @@ class HBProtocol(DatagramProtocol):
         self._user_cache_send_task = None
         self._forwarding_stats_send_task = None
         self._port = None  # Store the port instance instead of transport
-        self._events = EventEmitter()  # Dashboard event emitter
+        
+        # Initialize dashboard event emitter with config
+        dashboard_config = CONFIG.get('global', {}).get('dashboard', {})
+        self._events = EventEmitter(
+            enabled=dashboard_config.get('enabled', True),
+            transport=dashboard_config.get('transport', 'unix'),
+            host=dashboard_config.get('host', '127.0.0.1'),
+            port=dashboard_config.get('port', 8765),
+            unix_socket=dashboard_config.get('unix_socket', '/tmp/hblink4.sock'),
+            ipv6=dashboard_config.get('ipv6', False),
+            buffer_size=dashboard_config.get('buffer_size', 65536)
+        )
+        
+        # Register reconnect callback to send current state when dashboard connects
+        self._events.on_reconnect = self._send_initial_state
         
         # Forwarding statistics
         self._forwarding_stats = {
@@ -401,6 +415,44 @@ class HBProtocol(DatagramProtocol):
             self._forwarding_stats['total_calls_today'] = 0
             self._forwarding_stats['last_reset_date'] = current_date
             LOGGER.info(f'📊 Daily forwarding stats reset at midnight (server time)')
+    
+    def _send_initial_state(self):
+        """Send current state of all connected repeaters to dashboard (called on reconnect)"""
+        try:
+            for repeater_id, repeater in self._repeaters.items():
+                if repeater.connected and repeater.connection_state == 'connected':
+                    rid_int = int.from_bytes(repeater_id, 'big')
+                    
+                    # Get repeater config
+                    try:
+                        repeater_config = self._matcher.get_repeater_config(
+                            rid_int,
+                            repeater.callsign.decode().strip() if repeater.callsign else None
+                        )
+                        slot1_talkgroups = repeater_config.slot1_talkgroups if repeater_config else []
+                        slot2_talkgroups = repeater_config.slot2_talkgroups if repeater_config else []
+                    except:
+                        slot1_talkgroups = []
+                        slot2_talkgroups = []
+                    
+                    # Emit repeater_connected for each already-connected repeater
+                    self._events.emit('repeater_connected', {
+                        'repeater_id': rid_int,
+                        'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
+                        'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
+                        'address': f'{repeater.ip}:{repeater.port}',
+                        'rx_freq': repeater.rx_freq.decode().strip() if repeater.rx_freq else '',
+                        'tx_freq': repeater.tx_freq.decode().strip() if repeater.tx_freq else '',
+                        'colorcode': repeater.colorcode.decode().strip() if repeater.colorcode else '',
+                        'slot1_talkgroups': slot1_talkgroups,
+                        'slot2_talkgroups': slot2_talkgroups,
+                        'last_ping': repeater.last_ping,
+                        'missed_pings': repeater.missed_pings
+                    })
+            
+            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters')
+        except Exception as e:
+            LOGGER.error(f'Error sending initial state: {e}')
     
     def _check_inbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
         """

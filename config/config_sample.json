@@ -16,6 +16,15 @@
         "report_stats": true,
         "stream_timeout": 2.0,
         "stream_hang_time": 10.0,
+        "dashboard": {
+            "enabled": true,
+            "transport": "unix",
+            "host": "127.0.0.1",
+            "port": 8765,
+            "unix_socket": "/tmp/hblink4.sock",
+            "ipv6": false,
+            "buffer_size": 65536
+        },
         "user_cache": {
             "enabled": true,
             "timeout": 600,
