@@ -610,7 +610,13 @@ class HBProtocol(DatagramProtocol):
             else:
                 LOGGER.warning(f'Packet received with unknown command: cmd={_command}, repeater_id={int.from_bytes(repeater_id, "big")}, addr={addr}')   
                 return
-            
+
+            # If repeater is not registered and this is not a login or auth packet, send NAK and return
+            if repeater_id and repeater_id not in self._repeaters:
+                if _command not in [RPTL, RPTK]:
+                    self._send_nak(repeater_id, addr, reason="Repeater not registered")
+                    return
+
             # Update ping time for connected repeaters
             if repeater_id and repeater_id in self._repeaters:
                 repeater = self._repeaters[repeater_id]
