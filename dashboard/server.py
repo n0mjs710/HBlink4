@@ -184,14 +184,42 @@ class EventReceiver:
         
         elif event_type == 'stream_start':
             key = f"{data['repeater_id']}.{data['slot']}"
+            
+            # Look up callsign from user database
+            src_id = data.get('src_id')
+            callsign = user_database.get(src_id, '') if src_id else ''
+            
             state.streams[key] = {
                 **data,
+                'callsign': callsign,  # Add callsign to stream data
                 'start_time': event['timestamp'],
                 'packets': 0,
                 'duration': 0,
                 'status': 'active'
             }
             state.stats['total_streams_today'] += 1
+            
+            # Add/update user in last_heard immediately with "active" status
+            if src_id:
+                # Find existing entry or create new one
+                existing_idx = next((i for i, u in enumerate(state.last_heard) if u['radio_id'] == src_id), None)
+                user_entry = {
+                    'radio_id': src_id,
+                    'callsign': callsign,
+                    'repeater_id': data['repeater_id'],
+                    'slot': data['slot'],
+                    'talkgroup': data.get('dst_id', 0),
+                    'last_heard': event['timestamp'],
+                    'active': True  # Mark as currently active
+                }
+                
+                if existing_idx is not None:
+                    state.last_heard[existing_idx] = user_entry
+                else:
+                    state.last_heard.insert(0, user_entry)  # Add to front
+                
+                # Keep only most recent 50 entries
+                state.last_heard = state.last_heard[:50]
             
             # Update repeater last activity
             if data['repeater_id'] in state.repeaters:
@@ -207,13 +235,22 @@ class EventReceiver:
             key = f"{data['repeater_id']}.{data['slot']}"
             if key in state.streams:
                 # Stream ended and entering hang time (combined event)
-                state.streams[key]['status'] = 'hang_time'
-                state.streams[key]['packets'] = data['packets']
-                state.streams[key]['duration'] = data['duration']
-                state.streams[key]['end_reason'] = data.get('end_reason', 'unknown')
-                state.streams[key]['hang_time'] = data.get('hang_time', 0)
+                stream = state.streams[key]
+                stream['status'] = 'hang_time'
+                stream['packets'] = data['packets']
+                stream['duration'] = data['duration']
+                stream['end_reason'] = data.get('end_reason', 'unknown')
+                stream['hang_time'] = data.get('hang_time', 0)
                 # Accumulate total duration when stream ends
                 state.stats['total_duration_today'] += data['duration']
+                
+                # Update last_heard entry to mark as no longer active
+                src_id = stream.get('src_id')
+                if src_id:
+                    user_entry = next((u for u in state.last_heard if u['radio_id'] == src_id), None)
+                    if user_entry:
+                        user_entry['active'] = False
+                        user_entry['last_heard'] = event['timestamp']
         
         elif event_type == 'hang_time_expired':
             # Hang time has expired, clear the slot
@@ -234,6 +271,13 @@ class EventReceiver:
                 elif not user.get('callsign'):
                     # No callsign found - dashboard will display as "-"
                     user['callsign'] = ''
+                
+                # Preserve 'active' flag from our existing state if user is in an active stream
+                existing_user = next((u for u in state.last_heard if u['radio_id'] == radio_id), None)
+                if existing_user and existing_user.get('active'):
+                    user['active'] = True
+                else:
+                    user['active'] = False
             
             state.last_heard = users
             state.last_heard_stats = data.get('stats', {})

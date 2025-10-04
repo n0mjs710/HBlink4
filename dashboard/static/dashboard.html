@@ -671,13 +671,8 @@
             
             const packets = stream?.packets || 0;
             
-            // Lookup callsign from last_heard cache
-            let callsign = '—';
-            if (stream?.src_id) {
-                const lastHeardUsers = state.lastHeard || [];
-                const user = lastHeardUsers.find(u => u.radio_id === stream.src_id);
-                callsign = user?.callsign || '—';
-            }
+            // Get callsign directly from stream data (looked up by server)
+            const callsign = stream?.callsign || '—';
             
             return `
                 <div class="slot ${status}">
@@ -765,7 +760,10 @@
                 const elapsed = Math.floor((now - lastHeardDate) / 1000);
                 
                 let timeAgo;
-                if (elapsed < 60) {
+                if (user.active) {
+                    // Stream is currently active
+                    timeAgo = '🔴 Active now';
+                } else if (elapsed < 60) {
                     timeAgo = `${elapsed}s ago`;
                 } else if (elapsed < 3600) {
                     timeAgo = `${Math.floor(elapsed / 60)}m ago`;
@@ -782,7 +780,7 @@
                         <td style="padding: 8px;">${user.repeater_id}</td>
                         <td style="padding: 8px; text-align: center;">${user.slot}</td>
                         <td style="padding: 8px;">${user.talkgroup}</td>
-                        <td style="padding: 8px; color: #9ca3af;">${timeAgo}</td>
+                        <td style="padding: 8px; color: ${user.active ? '#10b981' : '#9ca3af'};">${timeAgo}</td>
                     </tr>
                 `;
             }).join('');
