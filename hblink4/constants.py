@@ -17,6 +17,7 @@ RPTCL   = b'RPTCL'
 RPTPING = b'RPTPING'  # Full command sent by repeater for keepalive
 RPTP    = b'RPTP'     # Prefix used to identify RPTPING commands when parsing
 RPTA    = b'RPTA'
+RPTO    = b'RPTO'     # Repeater seding Options
 
 # Protocol Configuration
 DMR_DATA_PACKET_LENGTH = 55  # Minimum length of valid DMR data packet

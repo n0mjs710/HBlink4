@@ -35,7 +35,7 @@ import sys
 try:
     from .constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
+        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO
     )
     from .access_control import RepeaterMatcher
     from .events import EventEmitter
@@ -44,7 +44,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
         RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP
+        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO
     )
     from access_control import RepeaterMatcher
     from events import EventEmitter
@@ -595,6 +595,8 @@ class HBProtocol(DatagramProtocol):
                 repeater_id = data[4:8]
             elif _command == RPTK:
                 repeater_id = data[4:8]
+            elif _command == RPTO:
+                repeater_id = data[4:8]
             elif _command == RPTC:
                 if data[:5] == RPTCL:
                     repeater_id = data[5:9]
@@ -639,6 +641,9 @@ class HBProtocol(DatagramProtocol):
             elif _command[:4] == RPTP:  # Check just RPTP prefix since that's enough to identify RPTPING
                 LOGGER.debug(f'Received RPTPING from {ip}:{port} - Repeater Keepalive')
                 self._handle_ping(repeater_id, addr)
+            elif _command == RPTO:
+                LOGGER.info(f'Received RPTO from {ip}:{port} - Repeater sending options')
+                self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             else:
                 LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
         except Exception as e:
