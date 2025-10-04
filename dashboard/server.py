@@ -273,6 +273,10 @@ class EventReceiver:
         if event_type in ['stream_start', 'stream_end']:
             state.events.append(event)
         
+        # For stream events, include updated last_heard list in the event
+        if event_type in ['stream_start', 'stream_end', 'hang_time_expired']:
+            event['last_heard'] = state.last_heard
+        
         # Send to all WebSocket clients
         await self.send_to_clients(event)
     

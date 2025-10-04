@@ -374,13 +374,16 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
         </div>
         
         <!-- Repeaters with Inline Slot Status -->
         <h2 class="section-header">Repeaters</h2>
-        <div id="repeatersContainer"></div>
-        
         <div class="card">
+            <div id="repeatersContainer"></div>
+        </div>
+        
+        <div class="card" style="margin-top: 15px;">
             <h2>Recent Events</h2>
             <div id="eventsLog"></div>
         </div>
@@ -534,7 +537,7 @@
                         <div class="repeater-card">
                             <div class="repeater-info">
                                 <div class="${headerClass}">
-                                    📡 ${r.callsign || 'Unknown'} (${r.repeater_id})
+                                    📶 ${r.callsign || 'Unknown'} (${r.repeater_id})
                                 </div>
                                 <div class="repeater-meta">
                                     <!-- Row 1: Location / TX / TS1 -->
@@ -602,6 +605,47 @@
                     status = 'hang_time';
                     statusLabel = 'HANG';
                 }
+            }
+            
+            // Special rendering for hang time: show only TG and call type
+            if (status === 'hang_time') {
+                const callTypeMap = {
+                    'group': 'Group Voice',
+                    'private': 'Private Voice',
+                    'data': 'Data',
+                    'unknown': 'Unknown'
+                };
+                const destination = stream?.dst_id || '—';
+                const callType = stream ? (callTypeMap[stream.call_type] || stream.call_type || 'Unknown') : '—';
+                
+                return `
+                    <div class="slot ${status}">
+                        <div class="slot-col">
+                            <div class="slot-col-label">Slot ${slotNum}</div>
+                            <div class="slot-status-badge ${status}">${statusLabel}</div>
+                        </div>
+                        <div class="slot-col">
+                            <div class="slot-col-label">Source</div>
+                            <div class="slot-col-value empty">—</div>
+                        </div>
+                        <div class="slot-col">
+                            <div class="slot-col-label">Destination</div>
+                            <div class="slot-col-value highlight">${destination}</div>
+                        </div>
+                        <div class="slot-col">
+                            <div class="slot-col-label">Type</div>
+                            <div class="slot-col-value">${callType}</div>
+                        </div>
+                        <div class="slot-col">
+                            <div class="slot-col-label">Duration</div>
+                            <div class="slot-col-value empty">—</div>
+                        </div>
+                        <div class="slot-col">
+                            <div class="slot-col-label">Callsign</div>
+                            <div class="slot-col-value empty">—</div>
+                        </div>
+                    </div>
+                `;
             }
             
             // Format call type
@@ -751,6 +795,12 @@
         }
         
         function processEventUpdate(event) {
+            // Update last_heard if included in event
+            if (event.last_heard) {
+                state.last_heard = event.last_heard;
+                updateLastHeard(state.last_heard);
+            }
+            
             // Update local state immediately based on event type
             const eventType = event.type;
             const data = event.data;
