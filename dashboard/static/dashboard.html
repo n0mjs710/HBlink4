@@ -1,23 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
+    <meta charse        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+        }-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HBlink4 Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; 
+            font-family: system-ui, -apple-system, sans-serif; 
             background: #0f172a; 
             color: #e2e8f0; 
-            padding: 20px; 
-        }
+            padding: 12px;
         
         .container { max-width: 1600px; margin: 0 auto; }
         
         header { 
-            margin-bottom: 30px; 
+            margin-bottom: 20px; 
             display: flex; 
             justify-content: space-between; 
             align-items: center;
@@ -26,7 +30,7 @@
         .header-branding {
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 12px;
         }
         
         .logo {
@@ -57,42 +61,50 @@
         .stats-bar {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
+            gap: 10px;
+            margin-bottom: 15px;
         }
         
         .stat-card {
             background: #1e293b;
-            padding: 15px 20px;
-            border-radius: 8px;
-            border-left: 4px solid #38bdf8;
-        }
-        
-        .stat-label { color: #94a3b8; font-size: 12px; margin-bottom: 5px; }
+            padding: 8px 12px;
+            border-radius: 6px;
+        }        .stat-label { color: #94a3b8; font-size: 12px; margin-bottom: 5px; }
         .stat-value { color: #e2e8f0; font-size: 24px; font-weight: 600; }
         
         .card { 
             background: #1e293b; 
             border-radius: 8px; 
-            padding: 20px; 
+            padding: 12px; 
             box-shadow: 0 4px 6px rgba(0,0,0,0.3); 
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
         
         .card h2 { 
             color: #94a3b8; 
-            font-size: 14px; 
-            margin-bottom: 15px; 
+            font-size: 16px; 
+            margin-bottom: 12px; 
             text-transform: uppercase; 
             letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        
+        .section-header {
+            color: #94a3b8;
+            font-size: 16px;
+            margin-bottom: 12px;
+            margin-top: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
         }
         
         /* Repeater Card Layout */
         .repeater-card {
             background: #1e293b;
             border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 15px;
+            padding: 2px;
+            margin-bottom: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             display: flex;
             justify-content: space-between;
@@ -101,7 +113,7 @@
         
         .repeater-info {
             flex: 1;
-            padding-right: 20px;
+            padding: 8px;
         }
         
         .repeater-header {
@@ -117,21 +129,18 @@
             margin-bottom: 12px;
         }
         
-        .repeater-meta {
-            display: flex;
-            gap: 20px;
-            font-size: 13px;
-            color: #64748b;
-        }
-        
-        .repeater-meta-item {
+            .repeater-meta {
+                display: grid;
+                grid-template-columns: 180px auto 1fr;
+                grid-template-rows: auto auto;
+                gap: 4px 20px;
+                font-size: 0.85em;
+                margin-top: 4px;
+            }        .repeater-meta-item {
             display: flex;
             align-items: center;
             gap: 5px;
-        }
-        
-        .repeater-meta-item:first-child {
-            min-width: 140px;  /* Fixed width for "Connected: H:MM:SS" */
+            white-space: nowrap;
         }
         
         .repeater-meta-label {
@@ -145,6 +154,7 @@
             flex-direction: column;
             gap: 6px;
             min-width: 500px;
+            padding: 8px;
         }
         
         .slot {
@@ -318,11 +328,12 @@
             <div class="connection-status" id="connectionStatus">Connecting...</div>
         </header>
         
+        <h2 class="section-header">Statistics</h2>
         <div class="stats-bar">
-            <div class="stat-card">
-                <div class="stat-label">Connected Repeaters</div>
-                <div class="stat-value" id="statRepeaters">0</div>
-            </div>
+                <div class="stat-card">
+                    <div class="stat-label">Connected Repeaters</div>
+                    <div class="stat-value" id="statRepeaters">0</div>
+                </div>
             <div class="stat-card">
                 <div class="stat-label">Active Streams</div>
                 <div class="stat-value" id="statStreams">0</div>
@@ -346,9 +357,8 @@
         </div>
         
         <!-- Last Heard Users (Top 10) -->
-        <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h2 style="margin: 0;">Last Heard</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; margin-top: 20px;">
+            <h2 class="section-header" style="margin: 0;">Last Heard</h2>
                 <button onclick="showFullCache()" style="background-color: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
                     View Full Cache
                 </button>
@@ -377,6 +387,7 @@
         </div>
         
         <!-- Repeaters with Inline Slot Status -->
+        <h2 class="section-header">Repeaters</h2>
         <div id="repeatersContainer"></div>
         
         <div class="card">
@@ -531,7 +542,7 @@
             const container = document.getElementById('repeatersContainer');
             
             if (repeaters.length === 0) {
-                container.innerHTML = '<div class="card"><p style="color: #64748b; text-align: center; padding: 20px;">No repeaters connected</p></div>';
+                container.innerHTML = '<p style="color: #64748b; text-align: center; padding: 20px;">No repeaters connected</p>';
                 return;
             }
             
@@ -564,20 +575,41 @@
                                 <div class="${headerClass}">
                                     📡 ${r.callsign || 'Unknown'} (${r.repeater_id})
                                 </div>
-                                <div class="repeater-location">
-                                    ${r.location || 'Location unknown'}
-                                </div>
                                 <div class="repeater-meta">
+                                    <!-- Row 1: Location / TX / TS1 -->
+                                    <div class="repeater-meta-item">
+                                        ${r.location || 'Location unknown'}
+                                    </div>
+                                    ${r.tx_freq ? `
+                                    <div class="repeater-meta-item">
+                                        <span class="repeater-meta-label">TX:</span>
+                                        <span>${(parseFloat(r.tx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
+                                    </div>
+                                    ` : '<div></div>'}
+                                    ${r.slot1_talkgroups && r.slot1_talkgroups.length > 0 ? `
+                                    <div class="repeater-meta-item">
+                                        <span class="repeater-meta-label">TS1 TGs:</span>
+                                        <span>${r.slot1_talkgroups.join(', ')}</span>
+                                    </div>
+                                    ` : '<div></div>'}
+                                    
+                                    <!-- Row 2: Connected / RX / TS2 -->
                                     <div class="repeater-meta-item">
                                         <span class="repeater-meta-label">Connected:</span>
                                         <span data-connected-duration data-connected-at="${r.connected_at || ''}">${connectedDuration}</span>
                                     </div>
-                                    ${r.talkgroups && r.talkgroups.length > 0 ? `
+                                    ${r.rx_freq ? `
                                     <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">TGs:</span>
-                                        <span>${r.talkgroups.join(', ')}</span>
+                                        <span class="repeater-meta-label">RX:</span>
+                                        <span>${(parseFloat(r.rx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
                                     </div>
-                                    ` : ''}
+                                    ` : '<div></div>'}
+                                    ${r.slot2_talkgroups && r.slot2_talkgroups.length > 0 ? `
+                                    <div class="repeater-meta-item">
+                                        <span class="repeater-meta-label">TS2 TGs:</span>
+                                        <span>${r.slot2_talkgroups.join(', ')}</span>
+                                    </div>
+                                    ` : '<div></div>'}
                                 </div>
                             </div>
                             

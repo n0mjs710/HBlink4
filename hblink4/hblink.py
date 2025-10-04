@@ -269,6 +269,63 @@ class HBProtocol(DatagramProtocol):
                     self._send_nak(repeater_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
                     self._remove_repeater(repeater_id, "timeout")
     
+    def _end_stream(self, stream: StreamState, repeater_id: bytes, slot: int, 
+                    current_time: float, end_reason: str) -> None:
+        """
+        Unified stream ending logic - marks stream as ended and emits events.
+        
+        Args:
+            stream: The StreamState to end
+            repeater_id: Repeater ID (bytes)
+            slot: Slot number
+            current_time: Current timestamp
+            end_reason: Reason for ending ('timeout', 'terminator', 'fast_terminator')
+        """
+        if stream.ended:
+            return  # Already ended
+        
+        # Mark stream as ended
+        stream.ended = True
+        stream.end_time = current_time
+        duration = current_time - stream.start_time
+        hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+        
+        # Determine stream type for logging
+        stream_type = "TX" if stream.is_assumed else "RX"
+        
+        # Build reason text
+        if end_reason == 'terminator':
+            reason_text = f'reason=terminator - entering hang time ({hang_time}s)'
+        elif end_reason == 'fast_terminator':
+            reason_text = f'reason=fast_terminator - entering hang time ({hang_time}s)'
+        else:  # timeout
+            reason_text = f'entering hang time ({hang_time}s)'
+        
+        # Log stream end
+        LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
+                   f'src={int.from_bytes(stream.rf_src, "big")}, '
+                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                   f'duration={duration:.2f}s, '
+                   f'packets={stream.packet_count}, '
+                   f'{reason_text}')
+        
+        # Emit stream_end event
+        self._events.emit('stream_end', {
+            'repeater_id': int.from_bytes(repeater_id, 'big'),
+            'slot': slot,
+            'src_id': int.from_bytes(stream.rf_src, 'big'),
+            'dst_id': int.from_bytes(stream.dst_id, 'big'),
+            'duration': round(duration, 2),
+            'packets': stream.packet_count,
+            'end_reason': end_reason,
+            'hang_time': hang_time,
+            'call_type': stream.call_type
+        })
+        
+        # Decrement forwarding stats if this was an assumed (TX) stream
+        if stream.is_assumed:
+            self._forwarding_stats['active_calls'] -= 1
+    
     def _check_slot_timeout(self, repeater_id: bytes, repeater: RepeaterState, slot: int, 
                            stream: StreamState, current_time: float, stream_timeout: float, 
                            hang_time: float) -> bool:
@@ -280,33 +337,8 @@ class HBProtocol(DatagramProtocol):
         """
         if not stream.is_active(stream_timeout):
             if not stream.ended:
-                # Stream just ended - mark it and start hang time
-                stream.ended = True
-                stream.end_time = current_time
-                duration = current_time - stream.start_time
-                stream_type = "TX" if stream.is_assumed else "RX"
-                LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
-                           f'src={int.from_bytes(stream.rf_src, "big")}, '
-                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                           f'duration={duration:.2f}s, '
-                           f'packets={stream.packet_count} - '
-                           f'entering hang time ({hang_time}s)')
-                # Emit stream_end event (includes hang_time since they happen together)
-                self._events.emit('stream_end', {
-                    'repeater_id': int.from_bytes(repeater_id, 'big'),
-                    'slot': slot,
-                    'src_id': int.from_bytes(stream.rf_src, 'big'),
-                    'dst_id': int.from_bytes(stream.dst_id, 'big'),
-                    'duration': round(duration, 2),
-                    'packets': stream.packet_count,
-                    'end_reason': 'timeout',
-                    'hang_time': hang_time,
-                    'call_type': stream.call_type
-                })
-                
-                # Decrement forwarding stats if this was an assumed stream
-                if stream.is_assumed:
-                    self._forwarding_stats['active_calls'] -= 1
+                # Stream just ended - use unified ending logic
+                self._end_stream(stream, repeater_id, slot, current_time, 'timeout')
                 return False  # Don't clear yet - entering hang time
                 
             elif not stream.is_in_hang_time(stream_timeout, hang_time):
@@ -488,11 +520,19 @@ class HBProtocol(DatagramProtocol):
             if time_since_end > hang_time:
                 return False  # Hang time expired, slot is free
             
-            # Still in hang time - check if new stream is same src/dst
-            # Allow same conversation to continue (break through hang time)
+            # Still in hang time - hang time protects the TALKGROUP conversation
+            # Allow: 1) Any user on same talkgroup (conversation continues)
+            #        2) Original user switching to different talkgroup (special case)
+            # Block: Different user trying to use different talkgroup (hijacking)
             if rf_src and dst_id:
-                if current_stream.rf_src == rf_src and current_stream.dst_id == dst_id:
-                    return False  # Same src/dst, allow continuation
+                # Same user can always break through (any talkgroup)
+                if current_stream.rf_src == rf_src:
+                    return False  # Same user, allow through
+                # Different user - check if same talkgroup
+                if current_stream.dst_id == dst_id:
+                    return False  # Different user, but same TG conversation - allow
+                # Different user AND different talkgroup = blocked
+                # This is the hijacking case we prevent
         
         # Slot is busy with a different active stream or protected by hang time
         return True
@@ -614,6 +654,7 @@ class HBProtocol(DatagramProtocol):
         """
         current_stream = repeater.get_slot_stream(slot)
         current_time = time()
+        fast_tg_switch = False  # Track if this is a fast talkgroup switch
         
         # Check if there's already an active stream on this slot
         if current_stream:
@@ -624,17 +665,34 @@ class HBProtocol(DatagramProtocol):
             # Check if stream is in hang time
             if current_stream.ended:
                 # Stream has ended but is in hang time
-                # Allow same RF source to continue, deny different source
+                # Hang time protects the TALKGROUP conversation from being hijacked
+                # Allow: 1) Any user continuing same talkgroup conversation
+                #        2) Original user switching to different talkgroup (special case)
+                # Block: Different user trying different talkgroup (hijacking)
+                
+                # Same user can always continue (any talkgroup)
                 if current_stream.rf_src == rf_src:
-                    LOGGER.info(f'Same source resuming on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
-                               f'during hang time: src={int.from_bytes(rf_src, "big")}, '
-                               f'old_dst={int.from_bytes(current_stream.dst_id, "big")}, '
-                               f'new_dst={int.from_bytes(dst_id, "big")}')
+                    if current_stream.dst_id == dst_id:
+                        LOGGER.info(f'Same user continuing conversation on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
+                                   f'during hang time: src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}')
+                    else:
+                        LOGGER.info(f'Same user switching talkgroup on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
+                                   f'during hang time: src={int.from_bytes(rf_src, "big")}, '
+                                   f'old_dst={int.from_bytes(current_stream.dst_id, "big")}, '
+                                   f'new_dst={int.from_bytes(dst_id, "big")}')
+                        fast_tg_switch = True  # Mark as fast talkgroup switch
+                    # Allow by falling through to create new stream
+                # Different user - check if same talkgroup
+                elif current_stream.dst_id == dst_id:
+                    LOGGER.info(f'Different user joining conversation on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
+                               f'during hang time: old_src={int.from_bytes(current_stream.rf_src, "big")}, '
+                               f'new_src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}')
                     # Allow by falling through to create new stream
                 else:
-                    LOGGER.warning(f'Hang time contention on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                                  f'slot reserved for src={int.from_bytes(current_stream.rf_src, "big")}, '
-                                  f'denied src={int.from_bytes(rf_src, "big")}')
+                    # Different user AND different talkgroup = hijacking attempt
+                    LOGGER.warning(f'Hang time hijacking blocked on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                                  f'slot reserved for TG {int.from_bytes(current_stream.dst_id, "big")}, '
+                                  f'denied src={int.from_bytes(rf_src, "big")} attempting TG {int.from_bytes(dst_id, "big")}')
                     return False
             else:
                 # Active stream - different stream_id means contention
@@ -683,9 +741,15 @@ class HBProtocol(DatagramProtocol):
         
         repeater.set_slot_stream(slot, new_stream)
         
-        LOGGER.info(f'RX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                   f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
-                   f'stream_id={stream_id.hex()}')
+        # Log stream start with fast talkgroup switch indicator
+        if fast_tg_switch:
+            LOGGER.info(f'RX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
+                       f'stream_id={stream_id.hex()} [FAST TG SWITCH]')
+        else:
+            LOGGER.info(f'RX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
+                       f'stream_id={stream_id.hex()}')
         
         # Emit stream_start event
         self._events.emit('stream_start', {
@@ -733,28 +797,19 @@ class HBProtocol(DatagramProtocol):
             time_since_last_packet = current_time - current_stream.last_seen
             
             if time_since_last_packet > 0.2:  # 200ms threshold
-                # Old stream appears terminated - force end it and allow new stream
-                duration = current_time - current_stream.start_time
+                # Old stream appears terminated - use unified ending logic
+                # Log the fast terminator detection first
                 LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
                            f'ended via inactivity ({time_since_last_packet*1000:.0f}ms since last packet): '
                            f'src={int.from_bytes(current_stream.rf_src, "big")}, '
                            f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
-                           f'duration={duration:.2f}s, packets={current_stream.packet_count}')
+                           f'duration={(current_time - current_stream.start_time):.2f}s, packets={current_stream.packet_count}')
                 
-                # Emit stream_end event
-                self._events.emit('stream_end', {
-                    'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-                    'slot': slot,
-                    'src_id': int.from_bytes(current_stream.rf_src, 'big'),
-                    'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
-                    'duration': round(duration, 2),
-                    'packets': current_stream.packet_count,
-                    'call_type': current_stream.call_type,
-                    'end_reason': 'fast_terminator'
-                })
+                # Now use unified ending logic
+                self._end_stream(current_stream, repeater.repeater_id, slot, current_time, 'fast_terminator')
                 
-                # Clear the old stream and start new one
-                repeater.set_slot_stream(slot, None)
+                # Don't clear the stream - let _handle_stream_start check hang time
+                # It will create the new stream and replace this one if allowed
                 return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id, call_type_bit)
             else:
                 # Real contention - stream still active
@@ -900,16 +955,22 @@ class HBProtocol(DatagramProtocol):
                     int.from_bytes(repeater_id, 'big'),
                     repeater.callsign.decode().strip() if repeater.callsign else None
                 )
-                talkgroups = repeater_config.talkgroups if repeater_config else []
+                slot1_talkgroups = repeater_config.slot1_talkgroups if repeater_config else []
+                slot2_talkgroups = repeater_config.slot2_talkgroups if repeater_config else []
             except:
-                talkgroups = []
+                slot1_talkgroups = []
+                slot2_talkgroups = []
             
             self._events.emit('repeater_connected', {
                 'repeater_id': int.from_bytes(repeater_id, 'big'),
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
                 'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
                 'address': f'{repeater.ip}:{repeater.port}',
-                'talkgroups': talkgroups,
+                'rx_freq': repeater.rx_freq.decode().strip() if repeater.rx_freq else '',
+                'tx_freq': repeater.tx_freq.decode().strip() if repeater.tx_freq else '',
+                'colorcode': repeater.colorcode.decode().strip() if repeater.colorcode else '',
+                'slot1_talkgroups': slot1_talkgroups,
+                'slot2_talkgroups': slot2_talkgroups,
                 'last_ping': repeater.last_ping,
                 'missed_pings': repeater.missed_pings
             })
@@ -1038,28 +1099,7 @@ class HBProtocol(DatagramProtocol):
         
         # Handle terminator frame for immediate stream end detection
         if _is_terminator and current_stream and not current_stream.ended:
-            current_stream.ended = True
-            current_stream.end_time = time()  # Set for hang time calculation
-            hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
-            duration = time() - current_stream.start_time
-            LOGGER.info(f'RX stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {_slot}: '
-                       f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
-                       f'duration={duration:.2f}s, '
-                       f'packets={current_stream.packet_count}, '
-                       f'reason=terminator - '
-                       f'entering hang time ({hang_time}s)')
-            # Emit stream_end event (includes hang_time since they happen together)
-            self._events.emit('stream_end', {
-                'repeater_id': int.from_bytes(repeater_id, 'big'),
-                'slot': _slot,
-                'src_id': int.from_bytes(_rf_src, 'big'),
-                'dst_id': int.from_bytes(_dst_id, 'big'),
-                'duration': round(duration, 2),
-                'packets': current_stream.packet_count,
-                'reason': 'terminator',
-                'hang_time': hang_time,
-                'call_type': current_stream.call_type
-            })
+            self._end_stream(current_stream, repeater_id, _slot, time(), 'terminator')
         
         # Emit stream_update every 60 packets (10 superframes = 1 second)
         if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
@@ -1215,35 +1255,7 @@ class HBProtocol(DatagramProtocol):
         
         # Handle terminator
         if is_terminator and current_stream:
-            duration = current_time - current_stream.start_time
-            current_stream.end_time = current_time
-            current_stream.ended = True
-            hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
-            
-            # Log at INFO level with consistent format
-            LOGGER.info(f'TX stream ended on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                       f'src={int.from_bytes(rf_src, "big")}, '
-                       f'dst={int.from_bytes(dst_id, "big")}, '
-                       f'duration={duration:.2f}s, '
-                       f'packets={current_stream.packet_count}, '
-                       f'reason=terminator - '
-                       f'entering hang time ({hang_time}s)')
-            
-            # Emit stream_end event for dashboard
-            self._events.emit('stream_end', {
-                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-                'slot': slot,
-                'src_id': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
-                'duration': round(duration, 2),
-                'packets': current_stream.packet_count,
-                'end_reason': 'terminator',
-                'hang_time': CONFIG.get('global', {}).get('stream_hang_time', 3.0),
-                'call_type': 'group'
-            })
-            
-            # Update forwarding stats
-            self._forwarding_stats['active_calls'] -= 1
+            self._end_stream(current_stream, repeater.repeater_id, slot, current_time, 'terminator')
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""

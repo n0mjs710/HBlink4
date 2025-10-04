@@ -115,6 +115,86 @@ def test_hang_time_edge_cases():
     
     print("Hang time edge case tests passed!\n")
 
+def test_hang_time_hijacking_protection():
+    """Test that hang time protects talkgroup conversations correctly"""
+    print("Testing Hang Time Talkgroup Protection...")
+    
+    # Create a repeater with an ended stream in hang time
+    repeater = RepeaterState(
+        repeater_id=b'\x00\x04\xc3d',  # 312100
+        ip='127.0.0.1',
+        port=54321
+    )
+    
+    current = time()
+    
+    # Create stream from user 3121413 on TG 9, mark it ended
+    original_stream = StreamState(
+        repeater_id=b'\x00\x04\xc3d',
+        rf_src=b'\x2f\xa9\x05',     # 3121413 (original user)
+        dst_id=b'\x00\x00\x09',      # TG 9
+        slot=1,
+        start_time=current - 5.0,
+        last_seen=current - 2.0,
+        stream_id=b'\xa1\xb2\xc3\xd4',
+        packet_count=50,
+        ended=True,
+        end_time=current - 1.0  # Ended 1s ago, in hang time
+    )
+    
+    repeater.set_slot_stream(1, original_stream)
+    
+    # Test 1: Same user can continue on same talkgroup
+    from hblink4.hblink import HBProtocol
+    hb = HBProtocol()
+    hb._repeaters[repeater.repeater_id] = repeater
+    
+    # Same user, same talkgroup
+    is_busy = hb._is_slot_busy(
+        repeater.repeater_id, 
+        1, 
+        b'\xb1\xc2\xd3\xe4',  # Different stream_id
+        b'\x2f\xa9\x05',      # Same rf_src
+        b'\x00\x00\x09'       # Same dst_id (TG 9)
+    )
+    assert not is_busy, "Same user should be able to continue on same talkgroup during hang time"
+    print("✓ Same user can continue same conversation during hang time")
+    
+    # Test 2: Same user can switch to different talkgroup (special case)
+    is_busy = hb._is_slot_busy(
+        repeater.repeater_id,
+        1,
+        b'\xb1\xc2\xd3\xe4',  # Different stream_id
+        b'\x2f\xa9\x05',      # Same rf_src
+        b'\x00\x00\x02'       # Different dst_id (TG 2)
+    )
+    assert not is_busy, "Same user should be able to switch talkgroups during hang time (special case)"
+    print("✓ Same user can switch talkgroups during hang time (special case)")
+    
+    # Test 3: Different user CAN join same talkgroup conversation
+    is_busy = hb._is_slot_busy(
+        repeater.repeater_id,
+        1,
+        b'\xc1\xd2\xe3\xf4',  # Different stream_id
+        b'\x2f\xa9\x99',      # DIFFERENT rf_src (different user)
+        b'\x00\x00\x09'       # SAME dst_id (TG 9) - same conversation
+    )
+    assert not is_busy, "Different user should be able to join same talkgroup conversation during hang time"
+    print("✓ Different user can join same talkgroup conversation during hang time")
+    
+    # Test 4: Different user BLOCKED on different talkgroup (hijacking protection)
+    is_busy = hb._is_slot_busy(
+        repeater.repeater_id,
+        1,
+        b'\xc1\xd2\xe3\xf4',  # Different stream_id
+        b'\x2f\xa9\x99',      # DIFFERENT rf_src
+        b'\x00\x00\x02'       # DIFFERENT dst_id (TG 2) - hijacking attempt
+    )
+    assert is_busy, "Different user should be BLOCKED on different talkgroup during hang time (hijacking protection)"
+    print("✓ Different user blocked on different talkgroup during hang time (hijacking prevented)")
+    
+    print("Hang time talkgroup protection tests passed!\n")
+
 def main():
     """Run all hang time tests"""
     print("="*60)
@@ -124,6 +204,7 @@ def main():
     try:
         test_hang_time()
         test_hang_time_edge_cases()
+        test_hang_time_hijacking_protection()
         
         print("="*60)
         print("All hang time tests passed! ✓")
