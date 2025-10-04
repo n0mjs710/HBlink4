@@ -5,7 +5,35 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ## High Priority
 
-### 1. Dashboard Enhancements (Medium) 🟡
+### 1. Code Refactoring - Reduce Repetition (High) 🔴
+**Status**: Not started  
+**Difficulty**: Medium  
+**Dependencies**: None  
+**Description**: Identify and consolidate repetitive code patterns across all files using helper functions to create single sources of truth.
+
+**Goals**:
+- Scan all Python files for duplicate/similar code patterns
+- Extract common patterns into reusable helper functions
+- Improve maintainability and reduce bugs from inconsistent implementations
+- Build on recent success with `_end_stream()` helper consolidation
+
+**Areas to Review**:
+- Packet parsing and validation logic
+- Event emission patterns
+- Logging patterns
+- Configuration validation
+- Error handling patterns
+- Data structure transformations
+
+**Recent Success Example**:
+- Consolidated 4 stream ending code paths into unified `_end_stream()` helper
+- Resulted in: single source of truth, consistent behavior, easier maintenance
+
+**Estimated Effort**: 2-3 days
+
+---
+
+### 2. Dashboard Enhancements (Medium) 🟡
 **Status**: In progress  
 **Difficulty**: Medium  
 **Dependencies**: Current dashboard  
