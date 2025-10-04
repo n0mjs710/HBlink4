@@ -215,11 +215,6 @@ class HBProtocol(DatagramProtocol):
             self._user_cache_cleanup_task = LoopingCall(self._cleanup_user_cache)
             self._user_cache_cleanup_task.start(cleanup_interval)
             LOGGER.info(f'User cache cleanup task started (every {cleanup_interval}s)')
-            
-            # Send user cache to dashboard every 10 seconds
-            self._user_cache_send_task = LoopingCall(self._send_user_cache)
-            self._user_cache_send_task.start(10.0)
-            LOGGER.info('User cache send task started (every 10s)')
         
         # Send forwarding stats to dashboard every 5 seconds
         self._forwarding_stats_send_task = LoopingCall(self._send_forwarding_stats)
@@ -390,17 +385,6 @@ class HBProtocol(DatagramProtocol):
             removed = self._user_cache.cleanup()
             if removed > 0:
                 LOGGER.debug(f'User cache cleanup: removed {removed} expired entries')
-    
-    def _send_user_cache(self):
-        """Send user cache data to dashboard"""
-        if self._user_cache:
-            last_heard = self._user_cache.get_last_heard(limit=50)  # Limit to 50 for efficiency
-            stats = self._user_cache.get_stats()
-            
-            self._events.emit('last_heard_update', {
-                'users': last_heard,
-                'stats': stats
-            })
     
     def _send_forwarding_stats(self):
         """Send forwarding statistics to dashboard"""

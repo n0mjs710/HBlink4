@@ -218,8 +218,8 @@ class EventReceiver:
                 else:
                     state.last_heard.insert(0, user_entry)  # Add to front
                 
-                # Keep only most recent 50 entries
-                state.last_heard = state.last_heard[:50]
+                # Keep only most recent 10 entries
+                state.last_heard = state.last_heard[:10]
             
             # Update repeater last activity
             if data['repeater_id'] in state.repeaters:
@@ -258,33 +258,6 @@ class EventReceiver:
             if key in state.streams:
                 del state.streams[key]
                 logger.debug(f"Hang time expired for {key}")
-        
-        elif event_type == 'last_heard_update':
-            # Update last heard users and enrich with callsign data
-            users = data.get('users', [])
-            
-            # Enrich each user with callsign from user database (silent failure on miss)
-            for user in users:
-                radio_id = user.get('radio_id')
-                if radio_id and radio_id in user_database:
-                    user['callsign'] = user_database[radio_id]
-                elif not user.get('callsign'):
-                    # No callsign found - dashboard will display as "-"
-                    user['callsign'] = ''
-                
-                # Preserve 'active' flag from our existing state if user is in an active stream
-                existing_user = next((u for u in state.last_heard if u['radio_id'] == radio_id), None)
-                if existing_user and existing_user.get('active'):
-                    user['active'] = True
-                else:
-                    user['active'] = False
-            
-            state.last_heard = users
-            state.last_heard_stats = data.get('stats', {})
-            logger.debug(f"Last heard updated: {len(state.last_heard)} users")
-            # Send to WebSocket clients but skip adding to events log
-            await self.send_to_clients(event)
-            return
         
         elif event_type == 'forwarding_stats':
             # Update forwarding statistics (don't add to events log)
