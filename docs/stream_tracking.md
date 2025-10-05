@@ -120,32 +120,6 @@ When a repeater starts receiving (real stream) while we have an assumed stream t
 4. **Allow Real Stream**: Clear assumed stream and process real stream normally
 5. **Bandwidth Saved**: No wasted packets to busy repeater
 
-### Implementation in `_handle_stream_start()`
-
-```python
-if current_stream:
-    # Same stream continuing
-    if current_stream.stream_id == stream_id:
-        return True
-    
-    # Special case: Assumed stream (we're TX'ing) vs real stream (repeater RX'ing)
-    if current_stream.is_assumed:
-        LOGGER.info(f'Repeater {repeater_id} slot {slot} starting RX '
-                   f'while we have assumed TX stream - repeater wins')
-        
-        # Remove from all active route-caches
-        for other_repeater in self._repeaters.values():
-            for other_slot in [1, 2]:
-                other_stream = other_repeater.get_slot_stream(other_slot)
-                if (other_stream and other_stream.routing_cached and 
-                    other_stream.target_repeaters and
-                    repeater.repeater_id in other_stream.target_repeaters):
-                    other_stream.target_repeaters.discard(repeater.repeater_id)
-        
-        # Clear assumed stream, fall through to create real stream
-    # ... rest of contention logic ...
-```
-
 ### Performance
 
 **Efficiency:** O(R×S) where R = repeaters, S = 2 slots
@@ -281,24 +255,6 @@ Periodic check (every 1 second) to clean up stale streams.
 
 Updated `_handle_dmr_data()` method:
 
-```python
-def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
-    # ... validation code ...
-    
-    # Extract packet information including stream_id
-    _stream_id = data[16:20]
-    
-    # Handle stream tracking
-    stream_valid = self._handle_stream_packet(repeater, _rf_src, _dst_id, _slot, _stream_id)
-    
-    if not stream_valid:
-        # Drop packet - contention or not allowed
-        return
-    
-    # Packet accepted - ready for forwarding (not yet implemented)
-    # TODO: Forward to other repeaters based on bridging rules
-```
-
 ## Configuration Impact
 
 Stream tracking respects the repeater configuration patterns:
@@ -358,40 +314,3 @@ DEBUG - Dropped packet from repeater 312100 slot 1: src=3125678, dst=9, reason=s
 2. **CPU Usage**: Stream timeout check runs every 1 second (very lightweight)
 3. **Scalability**: O(n) where n = number of connected repeaters (typically < 100)
 4. **No Locking Needed**: Twisted's event loop is single-threaded
-
-## Future Enhancements
-
-When implementing traffic forwarding:
-
-1. **Bridge Detection**: Check if talkgroup has `"bridge": true` in config
-2. **Target Selection**: Find other repeaters with same talkgroup in their allowed list
-3. **Packet Forwarding**: Send DMRD packet to target repeaters
-4. **Sequence Management**: May need to track sequence numbers per destination
-5. **Stream Synchronization**: Ensure stream_id is preserved across repeaters
-
-## Testing Recommendations
-
-1. **Single Repeater**: Verify stream tracking on one repeater, both slots
-2. **Multiple Repeaters**: Connect multiple repeaters, verify independent slot tracking
-3. **Contention**: Attempt simultaneous transmissions on same slot
-4. **Talkgroup Filtering**: Send disallowed talkgroups, verify rejection
-5. **Timeout**: Start stream, wait 3+ seconds, verify cleanup
-6. **Rapid Succession**: Multiple streams in quick succession on same slot
-
-## Known Limitations
-
-1. **No Forwarding**: Traffic is not yet forwarded between repeaters
-2. **No Late Join**: Repeaters joining mid-stream don't receive earlier packets
-3. **No Priority**: All streams have equal priority (first-come-first-served)
-4. **Fixed Timeout**: 2-second timeout is hardcoded (could be made configurable)
-5. **No Stream End Detection**: Relies on timeout rather than DMR end-of-stream markers
-
-## Next Steps
-
-To implement traffic forwarding:
-
-1. Add `_get_bridge_targets()` method to find repeaters that should receive traffic
-2. Implement `_forward_dmr_packet()` to send to target repeaters
-3. Add stream state synchronization across repeaters
-4. Implement proper DMR stream end handling
-5. Add statistics tracking (packets forwarded, bandwidth, etc.)
