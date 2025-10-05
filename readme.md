@@ -1,6 +1,6 @@
 # HBlink4
 
-HBlink4 is the next evolution of the HBlink DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. This version represents a complete architectural redesign reflecting a fundamental shift in how DMR networks operate.
+HBlink4 is the next evolution of the HBlink DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. This version represents a complete architectural redesign reflecting a fundamental shift in how DMR networks operate. This version does not implement transit call-routing between DMR networks -- this is depreciated due to the ability for operators to make these choices by using DMRGateway in the MMDVM suite.
 
 ## Architectural Philosophy: From Transit Router to Endpoint Server
 
