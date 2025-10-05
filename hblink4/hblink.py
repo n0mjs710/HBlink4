@@ -13,6 +13,7 @@ import json
 import logging
 import logging.handlers
 import pathlib
+import ipaddress
 from typing import Dict, Any, Optional, Tuple, Union, List
 from time import time
 from datetime import date
@@ -162,14 +163,15 @@ class HBProtocol(DatagramProtocol):
         self._port = None  # Store the port instance instead of transport
         
         # Initialize dashboard event emitter with config
-        dashboard_config = CONFIG.get('global', {}).get('dashboard', {})
+        dashboard_config = CONFIG.get('dashboard', {})
         self._events = EventEmitter(
             enabled=dashboard_config.get('enabled', True),
             transport=dashboard_config.get('transport', 'unix'),
-            host=dashboard_config.get('host', '127.0.0.1'),
+            host_ipv4=dashboard_config.get('host_ipv4', '127.0.0.1'),
+            host_ipv6=dashboard_config.get('host_ipv6', '::1'),
             port=dashboard_config.get('port', 8765),
             unix_socket=dashboard_config.get('unix_socket', '/tmp/hblink4.sock'),
-            ipv6=dashboard_config.get('ipv6', False),
+            disable_ipv6=dashboard_config.get('disable_ipv6', False),
             buffer_size=dashboard_config.get('buffer_size', 65536)
         )
         
@@ -188,15 +190,14 @@ class HBProtocol(DatagramProtocol):
         # Key: (repeater_id, slot, stream_id), Value: timestamp of first denial
         self._denied_streams: Dict[tuple, float] = {}
         
-        # Initialize user cache if enabled
+        # Initialize user cache (mandatory for proper operation)
         user_cache_config = CONFIG.get('global', {}).get('user_cache', {})
-        if user_cache_config.get('enabled', True):
-            cache_timeout = user_cache_config.get('timeout', 600)
-            self._user_cache = UserCache(timeout_seconds=cache_timeout)
-            LOGGER.info(f'User cache enabled with {cache_timeout}s timeout')
-        else:
-            self._user_cache = None
-            LOGGER.info('User cache disabled')
+        cache_timeout = user_cache_config.get('timeout', 600)
+        if cache_timeout < 60:
+            LOGGER.warning(f'user_cache timeout of {cache_timeout}s is too low, using minimum of 60s')
+            cache_timeout = 60
+        self._user_cache = UserCache(timeout_seconds=cache_timeout)
+        LOGGER.info(f'User cache initialized with {cache_timeout}s timeout')
         
     def cleanup(self) -> None:
         """Send disconnect messages to all repeaters and cleanup resources."""
@@ -230,12 +231,10 @@ class HBProtocol(DatagramProtocol):
         self._stream_timeout_task = LoopingCall(self._check_stream_timeouts)
         self._stream_timeout_task.start(1.0)  # Check every second
         
-        # Start user cache cleanup if enabled
-        if self._user_cache:
-            cleanup_interval = CONFIG.get('global', {}).get('user_cache', {}).get('cleanup_interval', 60)
-            self._user_cache_cleanup_task = LoopingCall(self._cleanup_user_cache)
-            self._user_cache_cleanup_task.start(cleanup_interval)
-            LOGGER.info(f'User cache cleanup task started (every {cleanup_interval}s)')
+        # Start user cache cleanup (fixed at 60s for optimal efficiency)
+        self._user_cache_cleanup_task = LoopingCall(self._cleanup_user_cache)
+        self._user_cache_cleanup_task.start(60)  # Cleanup every 60 seconds
+        LOGGER.info('User cache cleanup task started (every 60s)')
         
         # Send forwarding stats to dashboard every 5 seconds
         self._forwarding_stats_send_task = LoopingCall(self._send_forwarding_stats)
@@ -265,8 +264,8 @@ class HBProtocol(DatagramProtocol):
     def _check_repeater_timeouts(self):
         """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
         current_time = time()
-        timeout_duration = CONFIG.get('timeout', {}).get('repeater', 30)  # 30 second default
-        max_missed = CONFIG.get('timeout', {}).get('max_missed', 3)  # 3 missed pings default
+        timeout_duration = CONFIG.get('global', {}).get('timeout_duration', 30)  # 30 second default
+        max_missed = CONFIG.get('global', {}).get('max_missed', 3)  # 3 missed pings default
         
         # Make a list to avoid modifying dict during iteration
         for repeater_id, repeater in list(self._repeaters.items()):
@@ -497,7 +496,7 @@ class HBProtocol(DatagramProtocol):
         Check if traffic should be forwarded to this repeater on this TS/TGID.
         
         Uses cached TG sets in RepeaterState for O(1) lookup.
-        Same set is used for both inbound and outbound (simplicity).
+        Same set and logic as inbound - symmetric routing.
         
         Args:
             repeater_id: Repeater ID to check
@@ -515,9 +514,9 @@ class HBProtocol(DatagramProtocol):
         # Get slot-specific talkgroup set from repeater state
         allowed_tgids = repeater.slot1_talkgroups if slot == 1 else repeater.slot2_talkgroups
         
-        # Empty set means send nothing (safe default)
+        # Empty set means accept all (symmetric with inbound)
         if not allowed_tgids:
-            return False
+            return True
         
         # O(1) set membership check
         return tgid in allowed_tgids
@@ -1641,12 +1640,56 @@ def main():
     # Create protocol instance so we can access it for cleanup
     protocol = HBProtocol()
 
-    # Listen on UDP port only since HomeBrew DMR only uses UDP
-    reactor.listenUDP(
-        CONFIG['global']['bind_port'],
-        protocol,
-        interface=CONFIG['global']['bind_ip']
-    )
+    # Check global IPv6 disable flag
+    disable_ipv6 = CONFIG['global'].get('disable_ipv6', False)
+    
+    # Dual-stack support: Bind to both IPv4 and IPv6 if configured
+    port_ipv4 = CONFIG['global'].get('port_ipv4', 62031)
+    port_ipv6 = CONFIG['global'].get('port_ipv6', 62031)
+    bind_ipv4 = CONFIG['global'].get('bind_ipv4', '0.0.0.0')
+    bind_ipv6 = CONFIG['global'].get('bind_ipv6', '::')
+    
+    if disable_ipv6:
+        LOGGER.warning('⚠️  IPv6 is globally disabled - only binding to IPv4')
+        bind_ipv6 = None
+    
+    listeners = []
+    
+    # Bind to IPv4 if configured (and not empty)
+    if bind_ipv4:
+        try:
+            listener = reactor.listenUDP(port_ipv4, protocol, interface=bind_ipv4)
+            listeners.append(listener)
+            LOGGER.info(f'✓ HBlink4 listening on {bind_ipv4}:{port_ipv4} (UDP, IPv4)')
+        except Exception as e:
+            LOGGER.error(f'✗ Failed to bind IPv4 to {bind_ipv4}:{port_ipv4}: {e}')
+            if bind_ipv4 != '0.0.0.0':
+                # If specific address failed, don't exit - maybe IPv6 will work
+                pass
+            else:
+                sys.exit(1)
+    
+    # Bind to IPv6 if configured, enabled, and not empty
+    if bind_ipv6 and not disable_ipv6:
+        try:
+            # Create new protocol instance for IPv6 (each listener needs its own)
+            protocol_v6 = HBProtocol()
+            listener = reactor.listenUDP(port_ipv6, protocol_v6, interface=bind_ipv6)
+            listeners.append(listener)
+            LOGGER.info(f'✓ HBlink4 listening on [{bind_ipv6}]:{port_ipv6} (UDP, IPv6/dual-stack)')
+        except Exception as e:
+            LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
+            if bind_ipv6 != '::':
+                # If specific address failed, don't exit - maybe IPv4 worked
+                pass
+            else:
+                # If neither worked, exit
+                if not listeners:
+                    sys.exit(1)
+    
+    if not listeners:
+        LOGGER.error('Failed to bind to any interface')
+        sys.exit(1)
     
     # Set up signal handlers for graceful shutdown
     def signal_handler(signum, frame):
@@ -1660,7 +1703,6 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    LOGGER.info(f'HBlink4 server is running on {CONFIG["global"]["bind_ip"]}:{CONFIG["global"]["bind_port"]} (UDP)')
     reactor.run()
 
 if __name__ == '__main__':

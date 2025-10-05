@@ -9,6 +9,7 @@ import socket
 import json
 import logging
 import os
+import ipaddress
 from time import time
 from typing import Dict, Any, Optional
 
@@ -22,9 +23,10 @@ class EventEmitter:
     """
     
     def __init__(self, enabled: bool = True, transport: str = 'unix', 
-                 host: str = '127.0.0.1', port: int = 8765,
+                 host_ipv4: str = '127.0.0.1', host_ipv6: str = '::1',
+                 port: int = 8765,
                  unix_socket: str = '/tmp/hblink4.sock',
-                 ipv6: bool = False,
+                 disable_ipv6: bool = False,
                  buffer_size: int = 65536):
         """
         Initialize event emitter with transport abstraction
@@ -32,23 +34,29 @@ class EventEmitter:
         Args:
             enabled: Whether to emit events (False = zero overhead)
             transport: 'tcp' or 'unix'
-            host: Dashboard host (for TCP)
+            host_ipv4: Dashboard host IPv4 address (for TCP)
+            host_ipv6: Dashboard host IPv6 address (for TCP)
             port: Dashboard port (for TCP)
             unix_socket: Unix socket path (for Unix transport)
-            ipv6: Use IPv6 (for TCP)
+            disable_ipv6: Disable IPv6 (for networks with broken IPv6)
             buffer_size: Socket send buffer size
         """
         self.enabled = enabled
         self.transport = transport.lower()
-        self.host = host
+        self.host_ipv4 = host_ipv4
+        self.host_ipv6 = host_ipv6 if not disable_ipv6 else None
         self.port = port
         self.unix_socket = unix_socket
-        self.ipv6 = ipv6
+        self.disable_ipv6 = disable_ipv6
         self.buffer_size = buffer_size
         self.sock = None
         self.connected = False
         self.last_connect_attempt = 0
         self.connect_retry_interval = 10.0  # Retry every 10 seconds
+        self.using_ipv6 = False  # Track which protocol connected
+        
+        if disable_ipv6 and transport == 'tcp':
+            logger.warning('⚠️  IPv6 disabled for dashboard connection - using IPv4 only')
         
         if not enabled:
             return
@@ -63,21 +71,41 @@ class EventEmitter:
             self.enabled = False
     
     def _init_tcp(self):
-        """Initialize TCP socket (connection-oriented)"""
-        try:
-            family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
-            self.sock = socket.socket(family, socket.SOCK_STREAM)
-            self.sock.setblocking(False)
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disable Nagle
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            
-            # Attempt connection (non-blocking)
-            self._try_connect()
-            
-            logger.info(f"📡 TCP event emitter initialized for {self.host}:{self.port}")
-        except Exception as e:
-            logger.error(f"Failed to initialize TCP socket: {e}")
+        """Initialize TCP socket (connection-oriented) - tries IPv6 first, falls back to IPv4"""
+        # Try IPv6 first if configured
+        if self.host_ipv6:
+            try:
+                self.sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                self.sock.setblocking(False)
+                self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self.using_ipv6 = True
+                self._try_connect()
+                logger.info(f"📡 TCP event emitter initialized for [{self.host_ipv6}]:{self.port} (IPv6)")
+                return
+            except Exception as e:
+                logger.warning(f"IPv6 connection failed: {e}, trying IPv4...")
+                self.sock = None
+                self.using_ipv6 = False
+        
+        # Fall back to IPv4
+        if self.host_ipv4:
+            try:
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.setblocking(False)
+                self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self.using_ipv6 = False
+                self._try_connect()
+                logger.info(f"📡 TCP event emitter initialized for {self.host_ipv4}:{self.port} (IPv4)")
+                return
+            except Exception as e:
+                logger.error(f"Failed to initialize TCP socket (IPv4): {e}")
+                self.enabled = False
+        else:
+            logger.error("No host configured for TCP transport")
             self.enabled = False
     
     def _init_unix(self):
@@ -105,7 +133,8 @@ class EventEmitter:
         
         try:
             if self.transport == 'tcp':
-                self.sock.connect((self.host, self.port))
+                host = self.host_ipv6 if self.using_ipv6 else self.host_ipv4
+                self.sock.connect((host, self.port))
             elif self.transport == 'unix':
                 self.sock.connect(self.unix_socket)
             

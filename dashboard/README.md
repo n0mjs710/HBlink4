@@ -19,7 +19,30 @@ Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 
 ## Configuration
 
-The dashboard can be customized via `config.json`:
+The dashboard has two configuration files:
+
+### 1. HBlink4 Config (`config/config.json`)
+
+This configures how HBlink4 **sends** events to the dashboard:
+
+```json
+{
+    "dashboard": {
+        "enabled": true,
+        "disable_ipv6": false,
+        "transport": "unix",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
+        "port": 8765,
+        "unix_socket": "/tmp/hblink4.sock",
+        "buffer_size": 65536
+    }
+}
+```
+
+### 2. Dashboard Config (`dashboard/config.json`)
+
+This configures the dashboard application itself and how it **receives** events:
 
 ```json
 {
@@ -27,18 +50,56 @@ The dashboard can be customized via `config.json`:
     "server_description": "Amateur Radio DMR Network",
     "dashboard_title": "HBlink4 Dashboard",
     "refresh_interval": 1000,
-    "max_events": 50
+    "max_events": 50,
+    "event_receiver": {
+        "disable_ipv6": false,
+        "transport": "unix",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
+        "port": 8765,
+        "unix_socket": "/tmp/hblink4.sock",
+        "buffer_size": 65536
+    }
 }
 ```
 
-**Configuration Options:**
+**Dashboard Display Options:**
 - `server_name`: Displayed below the dashboard title (e.g., "KD0ABC Repeater Network")
 - `server_description`: Reserved for future use
 - `dashboard_title`: Main page title and browser tab text
 - `refresh_interval`: WebSocket update interval in milliseconds (default: 1000)
 - `max_events`: Maximum events to retain in event log (default: 50)
 
-The config file is created automatically with defaults on first run. Edit `config.json` and refresh your browser to see changes.
+**Event Receiver Options:**
+- `disable_ipv6`: Disable IPv6 (must match HBlink4 config)
+- `transport`: Transport type: `"unix"` or `"tcp"` (must match HBlink4 config)
+- `host_ipv4`: IPv4 address to listen on (for TCP transport)
+- `host_ipv6`: IPv6 address to listen on (for TCP transport)
+- `port`: Port number (for TCP transport)
+- `unix_socket`: Unix socket path (for Unix transport)
+- `buffer_size`: Socket receive buffer size (default: 65536)
+
+**CRITICAL**: Both config files must use the **same transport type and connection details**, or the dashboard won't receive events from HBlink4.
+
+### Transport Selection
+
+**Unix Socket (`"unix"`)** - Recommended for local deployment:
+```json
+// Both configs:
+"transport": "unix",
+"unix_socket": "/tmp/hblink4.sock"
+```
+
+**TCP (`"tcp"`)** - Required for remote dashboard:
+```json
+// Both configs:
+"transport": "tcp",
+"host_ipv4": "127.0.0.1",  // Use dashboard server's IP in HBlink4 config
+"host_ipv6": "::1",        // Optional IPv6 address
+"port": 8765
+```
+
+The config file is created automatically with defaults on first run. Edit `dashboard/config.json` and restart the dashboard to apply changes.
 
 ## Installation
 

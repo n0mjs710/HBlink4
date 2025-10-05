@@ -91,15 +91,13 @@ class TestRepeaterMatcher(unittest.TestCase):
         config = self.matcher.get_repeater_config(radio_id, callsign)
         logging.info(f"Result: MATCHED specific ID (ignoring callsign)")
         logging.info(f"Configuration applied:")
-        logging.info(f"- Description: {config.description}")
-        logging.info(f"- Timeout: {config.timeout}s")
         logging.info(f"- Passphrase: {config.passphrase}")
-        logging.info(f"- Talkgroups: {config.talkgroups}")
+        logging.info(f"- Slot 1 TGs: {config.slot1_talkgroups}")
+        logging.info(f"- Slot 2 TGs: {config.slot2_talkgroups}")
         
-        self.assertEqual(config.timeout, 30)
-        self.assertEqual(config.description, "Club Network Repeater")
         self.assertEqual(config.passphrase, "club-network-key")
-        self.assertEqual(config.talkgroups, [3100, 3101, 3102])
+        self.assertEqual(config.slot1_talkgroups, [8])
+        self.assertEqual(config.slot2_talkgroups, [3100, 3101, 3102])
 
     def test_id_range_match(self):
         """Test matching a radio ID within KS-DMR range"""
@@ -115,15 +113,13 @@ class TestRepeaterMatcher(unittest.TestCase):
         config = self.matcher.get_repeater_config(radio_id, callsign)
         logging.info(f"Result: MATCHED within KS-DMR range (ignoring callsign)")
         logging.info(f"Configuration applied:")
-        logging.info(f"- Description: {config.description}")
-        logging.info(f"- Timeout: {config.timeout}s")
         logging.info(f"- Passphrase: {config.passphrase}")
-        logging.info(f"- Talkgroups: {config.talkgroups}")
+        logging.info(f"- Slot 1 TGs: {config.slot1_talkgroups}")
+        logging.info(f"- Slot 2 TGs: {config.slot2_talkgroups}")
         
-        self.assertEqual(config.timeout, 30)
-        self.assertEqual(config.description, "KS-DMR Network Repeater")
         self.assertEqual(config.passphrase, "ks-dmr-network-key")
-        self.assertEqual(config.talkgroups, [3120, 3121, 3122])
+        self.assertEqual(config.slot1_talkgroups, [8, 9])
+        self.assertEqual(config.slot2_talkgroups, [3120, 3121, 3122])
 
     def test_callsign_match(self):
         """Test matching WA0EDA callsign pattern"""
@@ -139,15 +135,13 @@ class TestRepeaterMatcher(unittest.TestCase):
         config = self.matcher.get_repeater_config(radio_id, callsign)
         logging.info(f"Result: MATCHED WA0EDA callsign pattern")
         logging.info(f"Configuration applied:")
-        logging.info(f"- Description: {config.description}")
-        logging.info(f"- Timeout: {config.timeout}s")
         logging.info(f"- Passphrase: {config.passphrase}")
-        logging.info(f"- Talkgroups: {config.talkgroups}")
+        logging.info(f"- Slot 1 TGs: {config.slot1_talkgroups}")
+        logging.info(f"- Slot 2 TGs: {config.slot2_talkgroups}")
         
-        self.assertEqual(config.timeout, 30)
-        self.assertEqual(config.description, "WA0EDA Club Repeater")
         self.assertEqual(config.passphrase, "wa0eda-network-key")
-        self.assertEqual(config.talkgroups, [31201, 31202])
+        self.assertEqual(config.slot1_talkgroups, [8])
+        self.assertEqual(config.slot2_talkgroups, [31201, 31202])
 
     def test_default_config(self):
         """Test falling back to default configuration"""
@@ -162,15 +156,13 @@ class TestRepeaterMatcher(unittest.TestCase):
         config = self.matcher.get_repeater_config(radio_id, callsign)
         logging.info(f"Result: NO MATCH - using default configuration")
         logging.info(f"Configuration applied:")
-        logging.info(f"- Description: {config.description}")
-        logging.info(f"- Timeout: {config.timeout}s")
         logging.info(f"- Passphrase: {config.passphrase}")
-        logging.info(f"- Talkgroups: {config.talkgroups}")
+        logging.info(f"- Slot 1 TGs: {config.slot1_talkgroups}")
+        logging.info(f"- Slot 2 TGs: {config.slot2_talkgroups}")
         
-        self.assertEqual(config.timeout, 30)
-        self.assertEqual(config.description, "Default Repeater Configuration")
         self.assertEqual(config.passphrase, "passw0rd")
-        self.assertEqual(config.talkgroups, [9])  # talkgroups defaults to slot2_talkgroups for backward compatibility
+        self.assertEqual(config.slot1_talkgroups, [1])
+        self.assertEqual(config.slot2_talkgroups, [2])
 
     def test_match_priority(self):
         """Test that match priority is enforced correctly"""
@@ -184,7 +176,6 @@ class TestRepeaterMatcher(unittest.TestCase):
         
         config = self.matcher.get_repeater_config(radio_id, callsign)
         logging.info(f"Result: MATCHED specific ID (priority 1)")
-        logging.info(f"Configuration applied: {config.description}")
         logging.info(f"Using passphrase: {config.passphrase}")
         self.assertEqual(config.passphrase, "club-network-key")  # Should match Club Network config
         
@@ -195,7 +186,6 @@ class TestRepeaterMatcher(unittest.TestCase):
         
         config = self.matcher.get_repeater_config(radio_id, callsign)
         logging.info(f"Result: MATCHED ID range (priority 2)")
-        logging.info(f"Configuration applied: {config.description}")
         logging.info(f"Using passphrase: {config.passphrase}")
         self.assertEqual(config.passphrase, "ks-dmr-network-key")  # Should match KS-DMR config
 

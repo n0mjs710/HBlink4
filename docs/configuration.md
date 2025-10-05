@@ -4,11 +4,12 @@ HBlink4 uses a JSON configuration file to define server settings, repeater acces
 
 ## Configuration File Structure
 
-The configuration file consists of four main sections:
-- Global Settings
-- Blacklist Rules
-- Repeater Configurations
-- Talkgroup Definitions
+The configuration file consists of five main sections:
+- **Global Settings** - Server-wide settings
+- **Dashboard** - Web dashboard and event communication
+- **Blacklist Rules** - Access control for blocking repeaters
+- **Repeater Configurations** - Per-repeater authentication and routing
+- **Talkgroup Definitions** - Talkgroup names and bridging
 
 ## Global Settings
 
@@ -17,63 +18,185 @@ The `global` section contains server-wide settings that control the basic operat
 ```json
 {
     "global": {
-        "path": "./",
-        "ping_time": 5,
         "max_missed": 3,
-        "use_ipv6": false,
-        "bind_ip": "0.0.0.0",
-        "bind_port": 62031,
+        "timeout_duration": 30,
+        "disable_ipv6": false,
+        "bind_ipv4": "0.0.0.0",
+        "bind_ipv6": "::",
+        "port_ipv4": 62031,
+        "port_ipv6": 62031,
         "logging": {
             "file": "logs/hblink.log",
             "console_level": "INFO",
             "file_level": "DEBUG",
-            "log_protocol": false,
-            "log_dmr_data": false,
-            "log_status_updates": true
+            "retention_days": 30
         },
-        "stats_interval": 60,
-        "report_stats": true
+        "stream_timeout": 2.0,
+        "stream_hang_time": 10.0,
+        "user_cache": {
+            "timeout": 600
+        }
     }
 }
 ```
 
 | Setting | Type | Description |
 |---------|------|-------------|
-| `path` | string | Base path for relative file references |
-| `ping_time` | number | Seconds between keep-alive pings to repeaters |
-| `max_missed` | number | Maximum missed pings before disconnecting a repeater |
-| `use_ipv6` | boolean | Enable IPv6 support (default: false) |
-| `bind_ip` | string | IP address to bind the server to ("0.0.0.0" for all interfaces) |
-| `bind_port` | number | UDP port for the server (default: 62031) |
+| `max_missed` | number | Maximum consecutive missed pings before disconnecting a repeater (default: 3) |
+| `timeout_duration` | number | Seconds between expected pings from repeaters (default: 30) |
+| `disable_ipv6` | boolean | **Disable IPv6 globally** - use only if your network has broken IPv6 routing (default: false) |
+| `bind_ipv4` | string | IPv4 address to bind ("0.0.0.0" for all IPv4 interfaces) |
+| `bind_ipv6` | string | IPv6 address to bind ("::" for all IPv6 interfaces) |
+| `port_ipv4` | number | UDP port for IPv4 (default: 62031) |
+| `port_ipv6` | number | UDP port for IPv6 (default: 62031) |
 | `logging.file` | string | Path to log file |
 | `logging.console_level` | string | Logging level for console output ("DEBUG", "INFO", "WARNING", "ERROR") |
 | `logging.file_level` | string | Logging level for file output ("DEBUG", "INFO", "WARNING", "ERROR") |
-| `logging.log_protocol` | boolean | Log detailed protocol messages (default: false) |
-| `logging.log_dmr_data` | boolean | Log DMR data packets (default: false) |
-| `logging.log_status_updates` | boolean | Log repeater status updates (default: true) |
-| `stats_interval` | number | Seconds between statistics reports |
-| `report_stats` | boolean | Enable statistics reporting |
-| `stream_timeout` | float | Seconds without packets before stream is considered ended (default: 2.0) |
-| `stream_hang_time` | float | Seconds to reserve slot for same source after stream ends (default: 3.0) |
+| `logging.retention_days` | number | Number of days to retain log files (default: 30) |
+| `stream_timeout` | float | Fallback timeout when terminator frame is lost (default: 2.0 seconds) |
+| `stream_hang_time` | float | Seconds to reserve slot for same source after stream ends (default: 10.0-20.0 seconds) |
+| `user_cache.timeout` | number | Seconds before user cache entries expire (default: 600, minimum: 60) |
 
-The logging system supports different levels for console and file output. This allows you to have detailed debugging information in your log files while keeping the console output cleaner. The protocol, DMR data, and status update flags let you control what types of messages are logged:
+**Note on IPv6**: HBlink4 is dual-stack native and will bind to both IPv4 and IPv6 by default. If your network appears to support IPv6 but connections don't establish properly (a common issue with misconfigured IPv6), set `disable_ipv6: true` to force IPv4-only mode.
 
-- `log_protocol`: When enabled, logs all protocol messages (RPTL, RPTK, RPTC, etc.)
-- `log_dmr_data`: When enabled, logs DMR data packets (usually high volume)
-- `log_status_updates`: When enabled, logs repeater status updates like RSSI
+**User Cache**: The user cache tracks the last known repeater for each DMR ID to enable efficient private call routing. Entries are automatically cleaned up every 60 seconds. The timeout must be at least 60 seconds.
+
+### Dual-Stack IPv6 Support
+
+HBlink4 is **dual-stack native** and can listen on both IPv4 and IPv6 simultaneously:
+
+- Set `bind_ipv4` to `"0.0.0.0"` to listen on all IPv4 interfaces
+- Set `bind_ipv6` to `"::"` to listen on all IPv6 interfaces
+- Both can be active simultaneously for maximum compatibility
+- Specific addresses can be used instead of wildcards (e.g., `"192.168.1.10"` or `"2001:db8::1"`)
+- Use `disable_ipv6: true` to force IPv4-only mode if IPv6 is broken on your network
+
+**Example configurations:**
+```json
+// Dual-stack (both IPv4 and IPv6) - RECOMMENDED
+"bind_ipv4": "0.0.0.0",
+"bind_ipv6": "::",
+"port_ipv4": 62031,
+"port_ipv6": 62031,
+
+// IPv4 only
+"disable_ipv6": true,
+"bind_ipv4": "0.0.0.0",
+"port_ipv4": 62031,
+
+// Specific addresses
+"bind_ipv4": "192.168.1.10",
+"bind_ipv6": "2001:db8::1",
+"port_ipv4": 62031,
+"port_ipv6": 62031
+```
+
+## Dashboard Configuration
+
+The `dashboard` section is a **top-level** configuration (not nested under `global`) and controls the real-time monitoring dashboard and event communication:
+
+```json
+{
+    "dashboard": {
+        "enabled": true,
+        "disable_ipv6": false,
+        "transport": "unix",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
+        "port": 8765,
+        "unix_socket": "/tmp/hblink4.sock",
+        "buffer_size": 65536
+    }
+}
+```
+
+| Setting | Type | Description |
+|---------|------|-------------|
+| `enabled` | boolean | Enable/disable dashboard event emitting |
+| `disable_ipv6` | boolean | Disable IPv6 for dashboard (independent of global setting) |
+| `transport` | string | Transport type: `"unix"` or `"tcp"` (see below) |
+| `host_ipv4` | string | IPv4 address for TCP transport (e.g., "127.0.0.1") |
+| `host_ipv6` | string | IPv6 address for TCP transport (e.g., "::1") |
+| `port` | number | Port number for TCP transport (default: 8765) |
+| `unix_socket` | string | Unix socket path for Unix transport (default: "/tmp/hblink4.sock") |
+| `buffer_size` | number | Socket send buffer size (default: 65536) |
+
+### Transport Options
+
+**Unix Socket (`"unix"`)** - Recommended for local dashboard:
+- ✅ Fastest performance (~0.5-1μs per event)
+- ✅ Same-host only (most secure)
+- ✅ Automatic cleanup on startup
+- ✅ File permissions control access
+- **Use when**: Dashboard runs on same server as HBlink4
+- **Configuration**: Only `unix_socket` path is used (host and port fields ignored)
+
+**TCP (`"tcp"`)** - Required for remote dashboard:
+- ✅ Remote dashboard capability
+- ✅ Dual-stack IPv4/IPv6 support
+- ⚠️ Network exposed (use firewall rules)
+- **Use when**: Dashboard runs on different server
+- **Configuration**: Uses `host_ipv4`, `host_ipv6`, and `port` (unix_socket field ignored)
+- **IPv6 detection**: Automatic based on address format
+
+### Dashboard Configuration Examples
+
+**Local dashboard (Unix socket - recommended):**
+```json
+"dashboard": {
+    "enabled": true,
+    "transport": "unix",
+    "unix_socket": "/tmp/hblink4.sock"
+}
+```
+
+**Local dashboard (TCP - if Unix sockets unavailable):**
+```json
+"dashboard": {
+    "enabled": true,
+    "transport": "tcp",
+    "host_ipv4": "127.0.0.1",
+    "host_ipv6": "::1",
+    "port": 8765
+}
+```
+
+**Remote dashboard (TCP):**
+```json
+"dashboard": {
+    "enabled": true,
+    "transport": "tcp",
+    "host_ipv4": "192.168.1.100",  // Dashboard server IP
+    "host_ipv6": "2001:db8::100",  // Dashboard server IPv6 (optional)
+    "port": 8765
+}
+```
+
+**Disable IPv6 for dashboard only:**
+```json
+"dashboard": {
+    "enabled": true,
+    "disable_ipv6": true,  // Use IPv4 only
+    "transport": "tcp",
+    "host_ipv4": "127.0.0.1",
+    "port": 8765
+}
+```
+
+**Important**: Both HBlink4 config (`config/config.json`) and dashboard config (`dashboard/config.json`) must use the **same transport type and connection details**. See [Dashboard Documentation](../dashboard/README.md) for dashboard-side configuration.
 
 ### Stream Management
 
 The `stream_timeout` and `stream_hang_time` settings control two different aspects of DMR transmission management:
 
-- `stream_timeout`: **Fallback cleanup timeout** (default: 2.0 seconds). This is used when a DMR terminator frame is lost or not received. Under normal operation, streams end immediately when a terminator frame is detected. This timeout ensures slot cleanup even if the terminator packet is dropped. **Recommended: 2.0 seconds** to handle worst-case packet loss scenarios.
+- **`stream_timeout`**: Fallback cleanup timeout (default: 2.0 seconds). This is used **only** when a DMR terminator frame is lost or not received. Under normal operation, streams end immediately when a terminator frame is detected (~60ms). This timeout ensures slot cleanup even if the terminator packet is dropped. **Recommended: 2.0 seconds** to handle worst-case packet loss scenarios.
   
-- `stream_hang_time`: **Slot reservation period** (default: 10.0-20.0 seconds). After a stream ends (either via terminator frame or timeout), the timeslot remains reserved for the same RF source for this duration, preventing other stations from hijacking the slot between transmissions in a conversation. **Recommended: 10.0-20.0 seconds** depending on operator speed and network usage patterns.
+- **`stream_hang_time`**: Slot reservation period (default: 10.0-20.0 seconds). After a stream ends (either via terminator frame or timeout), the timeslot remains reserved for the same RF source for this duration, preventing other stations from hijacking the slot between transmissions in a conversation. **Recommended: 10.0-20.0 seconds** depending on operator speed and network usage patterns.
 
 **How It Works:**
 1. DMR transmission begins → stream active
-2. DMR terminator frame received → stream ends immediately, hang time begins
-3. If terminator lost → stream_timeout (2s) triggers cleanup, hang time begins
+2. DMR terminator frame received → stream ends immediately (~60ms), hang time begins
+3. If terminator lost → stream_timeout (2s) triggers cleanup, hang time begins  
 4. During hang time → only original source can re-use the slot
 5. After hang time expires → slot available to all
 
@@ -169,45 +292,63 @@ Each pattern defines a match rule and associated configuration:
 ```json
 {
     "name": "Pattern Name",
-    "description": "Pattern Description",
+    "description": "Optional description for documentation",
     "match": {
         "ids": [312100, 312101]
         // OR "id_ranges": [[312000, 312099]]
         // OR "callsigns": ["WA0EDA*"]
     },
     "config": {
-        "enabled": true,
-        "timeout": 30,
         "passphrase": "secret-key",
-        "talkgroups": [3100, 3101],
-        "description": "Repeater Configuration"
+        "slot1_talkgroups": [8, 9],
+        "slot2_talkgroups": [3100, 3101]
     }
 }
 ```
 
+**Note**: The `description` field is optional and for human documentation only—it is not used by the program.
+
 ### Match Types
 
-Like blacklist patterns, repeater patterns support three match types:
-- Specific IDs: `ids`: Array of DMR IDs
-- ID Ranges: `id_ranges`: Array of [start, end] ranges
-- Callsign Patterns: `callsigns`: Array of patterns with "*" wildcards
+Like blacklist patterns, repeater patterns support three match types (only ONE per pattern):
+- **Specific IDs**: `"ids"` - Array of DMR IDs
+- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive)
+- **Callsign Patterns**: `"callsigns"` - Array of patterns with "*" wildcards
 
 ### Configuration Options
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `enabled` | boolean | Whether this configuration is active |
-| `timeout` | number | Seconds before timing out inactive repeaters |
-| `passphrase` | string | Authentication key for the repeater |
-| `talkgroups` | array | List of allowed talkgroup IDs |
-| `description` | string | Human-readable description |
+| `passphrase` | string | Authentication key for the repeater (required) |
+| `slot1_talkgroups` | array | List of allowed talkgroup IDs for timeslot 1 (bidirectional) |
+| `slot2_talkgroups` | array | List of allowed talkgroup IDs for timeslot 2 (bidirectional) |
+
+**Symmetric Routing:**
+The same talkgroup lists control BOTH directions:
+- **FROM repeater (inbound)**: Only listed TGIDs are accepted from the repeater
+- **TO repeater (outbound)**: Only listed TGIDs are forwarded to the repeater
+
+**Special Case - Accept/Forward All Talkgroups:**
+- **Empty list `[]`**: Accepts and forwards ALL talkgroups (no filtering)
+- This ensures symmetric routing—if a repeater can send any TG, it can receive any TG
+
+**Example:**
+```json
+"config": {
+    "passphrase": "my-secret-key",
+    "slot1_talkgroups": [],          // Accept/forward ALL on TS1 (no filtering)
+    "slot2_talkgroups": [3120, 3121] // Accept/forward ONLY 3120 and 3121 on TS2
+}
+```
 
 ### Pattern Matching Priority
 
 When multiple patterns could match a repeater, they are evaluated in this order:
-1. Specific IDs (highest priority)
-2. ID Ranges
-3. Callsign patterns (lowest priority)
+1. **Specific IDs** (highest priority)
+2. **ID Ranges**
+3. **Callsign patterns** (lowest priority)
+
+The first matching pattern is used.
 
 ## Talkgroup Definitions
 

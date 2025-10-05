@@ -27,6 +27,7 @@ HBlink4 will not implement transit call routing. The focus of HBlink has always 
 
 ## Features
 
+- **Native dual-stack IPv4/IPv6 support** - Simultaneous listening on both protocols for maximum compatibility
 - Modern Python implementation with type hints
 - Improved error handling and logging
 - JSON-based configuration
@@ -61,12 +62,19 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Copy the example configuration file and modify it for your needs:
+Copy the sample configuration file and modify it for your needs:
 ```bash
-cp config/hblink.json config/my_hblink.json
+cp config/config_sample.json config/config.json
 ```
 
-Edit the configuration file to set up your access control, repeater options, and routing rules. For detailed configuration instructions, see the [Configuration Guide](docs/configuration.md).
+Edit the configuration file to set up your:
+- **Global settings** - IPv4/IPv6 binding, timeouts, logging
+- **Dashboard** - Event transport (Unix socket or TCP)
+- **Blacklist rules** - Block unwanted repeaters
+- **Repeater configurations** - Authentication and talkgroup routing
+- **Talkgroup definitions** - Talkgroup names and bridging
+
+For detailed configuration instructions, see the [Configuration Guide](docs/configuration.md).
 
 ## Running
 
@@ -86,7 +94,7 @@ python3 run.py
 python3 run_dashboard.py
 ```
 
-The server will listen for repeater registrations on the configured bind_ip and bind_port.
+The server will listen for repeater registrations on the configured ports (default: 62031 for both IPv4 and IPv6).
 
 For detailed dashboard features and configuration, see the [Dashboard Documentation](dashboard/README.md).
 
@@ -94,19 +102,25 @@ For detailed dashboard features and configuration, see the [Dashboard Documentat
 
 Comprehensive documentation is available in the `docs/` directory:
 
-- **[Configuration Guide](docs/configuration.md)** - Complete configuration reference
+- **[Configuration Guide](docs/configuration.md)** - Complete configuration reference with all settings explained
+- **[Dashboard README](dashboard/README.md)** - Dashboard features and usage
 - **[Stream Tracking](docs/stream_tracking.md)** - How DMR transmission streams are managed
-- **[Stream Tracking Diagrams](docs/stream_tracking_diagrams.md)** - Visual flow diagrams
 - **[Hang Time](docs/hang_time.md)** - Preventing conversation interruption
-- **[TODO List](docs/TODO.md)** - Planned features and enhancements (11 items)
-- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)** - Completed features overview
 - **[Protocol Specification](docs/protocol.md)** - HomeBrew DMR protocol details
 - **[Integration Guide](docs/integration.md)** - Using HBlink4 as a module
 - **[Logging](docs/logging.md)** - Log management and rotation
 
-## Configuration 
+## Configuration Details
 
-The configuration file uses JSON format and supports extensive customization of server behavior, access control, and routing rules. For detailed configuration instructions and examples, see the [Configuration Guide](docs/configuration.md).
+The configuration file uses JSON format and supports extensive customization. Key sections include:
+
+- **Global Settings**: Server binding, timeouts, logging, stream management
+- **Dashboard**: Event communication via Unix socket (local) or TCP (remote)
+- **Blacklist Rules**: Pattern-based repeater blocking
+- **Repeater Configurations**: Per-repeater authentication and talkgroup routing
+- **Talkgroup Definitions**: Talkgroup names and bridging settings
+
+For complete documentation of all configuration options, see the [Configuration Guide](docs/configuration.md).
 
 ## Contributing
 

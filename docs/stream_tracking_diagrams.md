@@ -364,15 +364,15 @@ Initial State:
 
 Problem Occurs:
 +------------------+                                +------------------+
-|  Repeater B      |  <===== NEW RX STREAM ======  |  Local User      |
-|  Wants Slot 1    |         (Stream ID: bbb)      |  Keys Up         |
-|  RX from User    |         TG 2                  |                  |
+|  Repeater B      |  <===== NEW RX STREAM ======   |  Local User      |
+|  Wants Slot 1    |         (Stream ID: bbb)       |  Keys Up         |
+|  RX from User    |         TG 2                   |                  |
 |  TG 2            |                                |                  |
 +------------------+                                +------------------+
 
 Contention Detected:
 +------------------------------------------------------------------+
-|  _handle_stream_start() on Repeater B Slot 1:                   |
+|  _handle_stream_start() on Repeater B Slot 1:                    |
 |                                                                  |
 |  1. Current stream exists? YES (assumed stream, ID: aaa)         |
 |  2. Same stream_id? NO (aaa != bbb)                              |

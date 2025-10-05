@@ -5,11 +5,12 @@
     "refresh_interval": 1000,
     "max_events": 50,
     "event_receiver": {
+        "disable_ipv6": false,
         "transport": "unix",
-        "host": "127.0.0.1",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
         "port": 8765,
         "unix_socket": "/tmp/hblink4.sock",
-        "ipv6": false,
         "buffer_size": 65536
     }
 }

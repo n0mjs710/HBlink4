@@ -9,6 +9,7 @@ import json
 import csv
 import socket
 import os
+import ipaddress
 from datetime import datetime, date
 from collections import deque
 from typing import Dict, List, Set, Optional
@@ -215,24 +216,30 @@ class UnixProtocol(asyncio.Protocol):
 class EventReceiver:
     """Receives events from hblink4 via TCP or Unix socket"""
     
-    def __init__(self, transport='unix', host='127.0.0.1', port=8765, 
-                 unix_socket='/tmp/hblink4.sock', ipv6=False):
+    def __init__(self, transport='unix', host_ipv4='127.0.0.1', host_ipv6='::1',
+                 port=8765, unix_socket='/tmp/hblink4.sock', disable_ipv6=False):
         """
         Initialize event receiver with transport abstraction
         
         Args:
             transport: 'tcp' or 'unix'
-            host: Listen address (for TCP)
+            host_ipv4: Listen address for IPv4 (for TCP)
+            host_ipv6: Listen address for IPv6 (for TCP)
             port: Listen port (for TCP)
             unix_socket: Unix socket path (for Unix transport)
-            ipv6: Use IPv6 (for TCP)
+            disable_ipv6: Disable IPv6 (for networks with broken IPv6)
         """
         self.transport = transport.lower()
-        self.host = host
+        self.host_ipv4 = host_ipv4
+        self.host_ipv6 = host_ipv6 if not disable_ipv6 else None
+        self.disable_ipv6 = disable_ipv6
+        
+        if disable_ipv6 and transport == 'tcp':
+            logger.warning('⚠️  IPv6 disabled for event receiver - using IPv4 only')
         self.port = port
         self.unix_socket = unix_socket
-        self.ipv6 = ipv6
         self.server = None
+        self.server_v6 = None
     
     async def start(self):
         """Start receiving events from hblink4"""
@@ -247,14 +254,30 @@ class EventReceiver:
             raise ValueError(f"Unknown transport: {self.transport}")
     
     async def _start_tcp(self, loop):
-        """Start TCP server"""
-        family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
-        self.server = await loop.create_server(
-            lambda: TCPProtocol(self.process_event),
-            self.host, self.port,
-            family=family
-        )
-        logger.info(f"📡 Listening for HBlink4 events via TCP on {self.host}:{self.port}")
+        """Start TCP server on both IPv4 and IPv6"""
+        # Start IPv4 listener
+        if self.host_ipv4:
+            try:
+                self.server = await loop.create_server(
+                    lambda: TCPProtocol(self.process_event),
+                    self.host_ipv4, self.port,
+                    family=socket.AF_INET
+                )
+                logger.info(f"✓ Listening for HBlink4 events via TCP on {self.host_ipv4}:{self.port} (IPv4)")
+            except Exception as e:
+                logger.error(f"✗ Failed to start IPv4 TCP listener: {e}")
+        
+        # Start IPv6 listener
+        if self.host_ipv6:
+            try:
+                self.server_v6 = await loop.create_server(
+                    lambda: TCPProtocol(self.process_event),
+                    self.host_ipv6, self.port,
+                    family=socket.AF_INET6
+                )
+                logger.info(f"✓ Listening for HBlink4 events via TCP on [{self.host_ipv6}]:{self.port} (IPv6)")
+            except Exception as e:
+                logger.error(f"✗ Failed to start IPv6 TCP listener: {e}")
     
     async def _start_unix(self, loop):
         """Start Unix socket server"""
@@ -528,10 +551,11 @@ async def startup_event():
     receiver_config = dashboard_config.get('event_receiver', {})
     receiver = EventReceiver(
         transport=receiver_config.get('transport', 'unix'),
-        host=receiver_config.get('host', '127.0.0.1'),
+        host_ipv4=receiver_config.get('host_ipv4', '127.0.0.1'),
+        host_ipv6=receiver_config.get('host_ipv6', '::1'),
         port=receiver_config.get('port', 8765),
         unix_socket=receiver_config.get('unix_socket', '/tmp/hblink4.sock'),
-        ipv6=receiver_config.get('ipv6', False)
+        disable_ipv6=receiver_config.get('disable_ipv6', False)
     )
     asyncio.create_task(receiver.start())
     asyncio.create_task(midnight_reset_task())

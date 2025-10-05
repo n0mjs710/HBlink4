@@ -112,10 +112,21 @@ This document summarizes the major features implemented in the recent developmen
 ```json
 {
   "global": {
-    "bind_ip": "0.0.0.0",
-    "bind_port": 54000,
+    "disable_ipv6": false,
+    "bind_ipv4": "0.0.0.0",
+    "bind_ipv6": "::",
+    "port_ipv4": 62031,
+    "port_ipv6": 62031,
     "stream_timeout": 2.0,
-    "stream_hang_time": 10.0
+    "stream_hang_time": 10.0,
+    "user_cache": {
+      "timeout": 600
+    }
+  },
+  "dashboard": {
+    "enabled": true,
+    "transport": "unix",
+    "unix_socket": "/tmp/hblink4.sock"
   }
 }
 ```
@@ -124,29 +135,50 @@ This document summarizes the major features implemented in the recent developmen
 
 ```json
 {
-  "repeaters": {
-    "312000": {
-      "enabled": true,
-      "passphrase": "s3cr3t",
-      "talkgroups": [9, 91, 311],
-      "stream_hang_time": 20.0
-    }
+  "repeater_configurations": {
+    "patterns": [
+      {
+        "name": "My Network",
+        "match": {
+          "ids": [312000, 312001]
+        },
+        "config": {
+          "passphrase": "s3cr3t",
+          "slot1_talkgroups": [9, 91],
+          "slot2_talkgroups": [311, 3100]
+        }
+      }
+    ]
   }
 }
 ```
 
 ## Architecture Decisions
 
+### Dual-Stack IPv6
+- Native dual-stack support with separate IPv4 and IPv6 listeners
+- Automatic address family detection
+- Optional IPv6 disable for networks with broken IPv6
+
 ### Stream Tracking
 - **Per-slot, per-repeater** design for DMR's dual timeslot nature
 - Stream ID-based tracking (not just RF source)
 - Separate hang time per slot
+- User cache for efficient private call routing
+
+### Dashboard Integration
+- Separate process architecture for isolation
+- Unix socket (local) or TCP (remote) transport
+- Real-time WebSocket updates to browser
+- Zero performance impact on DMR operations
 
 ## Performance Optimizations
 
 1. **Stream Tracking**: O(1) lookup per slot
 2. **Hang Time**: Prevents unnecessary stream creation attempts
-3. **Logging**: Debug-level for packet details, INFO for significant events
+3. **User Cache**: O(1) lookup for private call routing
+4. **Dashboard Events**: Non-blocking emission (<1μs overhead)
+5. **Logging**: Debug-level for packet details, INFO for significant events
 
 ## Known Limitations
 

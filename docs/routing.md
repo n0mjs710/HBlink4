@@ -29,15 +29,17 @@ Each repeater configuration includes slot-specific talkgroup lists that define w
 
 ### Routing Rules
 
-The same talkgroup lists control both **inbound** (what the repeater can send) and **outbound** (what it receives):
+The same talkgroup lists control both **inbound** and **outbound** routing (symmetric):
 
 - **slot1_talkgroups**: TGIDs allowed on timeslot 1
-  - Traffic on TS1 is only processed if TGID is in this list
-  - Traffic on TS1 is only forwarded to repeaters that have the TGID in their slot1_talkgroups
+  - Traffic on TS1 FROM this repeater is only processed if TGID is in this list
+  - Traffic on TS1 is only forwarded TO this repeater if TGID is in this list
   
 - **slot2_talkgroups**: TGIDs allowed on timeslot 2
-  - Traffic on TS2 is only processed if TGID is in this list
-  - Traffic on TS2 is only forwarded to repeaters that have the TGID in their slot2_talkgroups
+  - Traffic on TS2 FROM this repeater is only processed if TGID is in this list
+  - Traffic on TS2 is only forwarded TO this repeater if TGID is in this list
+
+**Symmetric routing ensures bidirectional communication** - if a repeater can send a talkgroup to the network, it can receive that talkgroup from the network.
 
 ### Forwarding Assumption
 
@@ -45,11 +47,10 @@ The same talkgroup lists control both **inbound** (what the repeater can send) a
 
 ### Default Behavior
 
-If a repeater configuration does not include slot talkgroup lists:
-- **Inbound**: All calls are accepted on both slots
-- **Outbound**: No calls are forwarded (empty lists = safe default)
+If a repeater configuration does not include slot talkgroup lists (empty `[]`):
+- **Both directions**: All talkgroups are accepted and forwarded (no filtering)
 
-This allows repeaters to transmit freely but requires explicit configuration to participate in call forwarding.
+This allows new repeaters to participate fully in the network without explicit configuration.
 
 ## Assumed Slot State
 

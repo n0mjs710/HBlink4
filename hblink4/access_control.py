@@ -55,19 +55,9 @@ class BlacklistMatch:
 @dataclass
 class RepeaterConfig:
     """Configuration settings for a matched repeater"""
-    enabled: bool
-    timeout: int
     passphrase: str
-    description: str
     slot1_talkgroups: List[int] = field(default_factory=list)
     slot2_talkgroups: List[int] = field(default_factory=list)
-    talkgroups: List[int] | None = None  # Deprecated: backward compatibility only
-    
-    def __post_init__(self):
-        """Ensure talkgroups is populated for backward compatibility"""
-        # If talkgroups not explicitly provided, use slot2_talkgroups for backward compatibility
-        if self.talkgroups is None:
-            self.talkgroups = self.slot2_talkgroups if self.slot2_talkgroups else []
 
 MatchType = Literal['specific_id', 'id_range', 'callsign']
 
@@ -105,11 +95,9 @@ class RepeaterMatcher:
         repeater_config = config.get('repeater_configurations', config.get('repeaters', {}))
         self.patterns = self._parse_patterns(repeater_config.get('patterns', []))
         self.default_config = RepeaterConfig(**repeater_config.get('default', {
-            "enabled": True,
-            "timeout": 30,
             "passphrase": "passw0rd",
-            "talkgroups": [8],
-            "description": "Default Repeater Configuration"
+            "slot1_talkgroups": [8],
+            "slot2_talkgroups": [8]
         }))
 
     def _parse_blacklist(self, blacklist_config: Dict[str, Any]) -> List[BlacklistMatch]:

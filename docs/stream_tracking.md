@@ -106,7 +106,7 @@ When we forward traffic TO a repeater (TX), we create an "assumed stream" to tra
 
 **Scenario:**
 1. We're transmitting to Repeater X slot 1 (TG 1) - assumed stream created
-2. Repeater X starts receiving from a local user on slot 1 (TG 2) - real stream
+2. Repeater X starts receiving from a local user on slot 1 (TG 2) - real stream at virtually the same time
 3. The repeater will ignore our TX packets (hardware busy receiving)
 4. We waste bandwidth sending packets the repeater can't process
 

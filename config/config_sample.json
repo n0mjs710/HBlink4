@@ -1,11 +1,12 @@
 {
     "global": {
-        "path": "./",
-        "ping_time": 5,
         "max_missed": 3,
-        "use_ipv6": false,
-        "bind_ip": "0.0.0.0",
-        "bind_port": 62031,
+        "timeout_duration": 30,
+        "disable_ipv6": false,
+        "bind_ipv4": "0.0.0.0",
+        "bind_ipv6": "::",
+        "port_ipv4": 62031,
+        "port_ipv6": 62031,
         "logging": {
             "file": "logs/hblink.log",
             "console_level": "INFO",
@@ -16,26 +17,23 @@
         "report_stats": true,
         "stream_timeout": 2.0,
         "stream_hang_time": 10.0,
-        "dashboard": {
-            "enabled": true,
-            "transport": "unix",
-            "host": "127.0.0.1",
-            "port": 8765,
-            "unix_socket": "/tmp/hblink4.sock",
-            "ipv6": false,
-            "buffer_size": 65536
-        },
         "user_cache": {
-            "enabled": true,
-            "timeout": 600,
-            "cleanup_interval": 60
+            "timeout": 600
         }
+    },
+    "dashboard": {
+        "enabled": true,
+        "disable_ipv6": false,
+        "transport": "unix",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
+        "port": 8765,
+        "unix_socket": "/tmp/hblink4.sock",
+        "buffer_size": 65536
     },
     "global_alternate_example": {
         "comment": "Alternative configuration showing longer hang time for slower operators",
-        "path": "./",
-        "ping_time": 5,
-        "max_missed": 3,
+        "max_missed": 5,
         "use_ipv6": false,
         "bind_ip": "0.0.0.0",
         "bind_port": 62031,
@@ -45,8 +43,6 @@
             "file_level": "DEBUG",
             "retention_days": 30
         },
-        "stats_interval": 60,
-        "report_stats": true,
         "stream_timeout": 2.0,
         "stream_hang_time": 20.0
     },
@@ -87,12 +83,9 @@
                     "id_ranges": [[312000, 312099]]
                 },
                 "config": {
-                    "enabled": true,
-                    "timeout": 30,
                     "passphrase": "ks-dmr-network-key",
                     "slot1_talkgroups": [8, 9],
-                    "slot2_talkgroups": [3120, 3121, 3122],
-                    "description": "KS-DMR Network Repeater"
+                    "slot2_talkgroups": [3120, 3121, 3122]
                 }
             },
             {
@@ -102,12 +95,9 @@
                     "callsigns": ["WA0EDA*"]
                 },
                 "config": {
-                    "enabled": true,
-                    "timeout": 30,
                     "passphrase": "wa0eda-network-key",
                     "slot1_talkgroups": [8],
-                    "slot2_talkgroups": [31201, 31202],
-                    "description": "WA0EDA Club Repeater"
+                    "slot2_talkgroups": [31201, 31202]
                 }
             },
             {
@@ -117,22 +107,16 @@
                     "ids": [312100, 312101, 312102]
                 },
                 "config": {
-                    "enabled": true,
-                    "timeout": 30,
                     "passphrase": "club-network-key",
                     "slot1_talkgroups": [8],
-                    "slot2_talkgroups": [3100, 3101, 3102],
-                    "description": "Club Network Repeater"
+                    "slot2_talkgroups": [3100, 3101, 3102]
                 }
             }
         ],
         "default": {
-            "enabled": true,
-            "timeout": 30,
             "passphrase": "passw0rd",
-            "slot1_talkgroups": [8],
-            "slot2_talkgroups": [9],
-            "description": "Default Repeater Configuration"
+            "slot1_talkgroups": [1],
+            "slot2_talkgroups": [2]
         }
     },
     "talkgroups": {

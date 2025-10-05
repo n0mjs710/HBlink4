@@ -31,16 +31,15 @@ Both HBlink and the Dashboard must be configured to use the **same transport**.
 
 ```json
 {
-    "global": {
-        "dashboard": {
-            "enabled": true,
-            "transport": "unix",
-            "host": "127.0.0.1",
-            "port": 8765,
-            "unix_socket": "/tmp/hblink4.sock",
-            "ipv6": false,
-            "buffer_size": 65536
-        }
+    "dashboard": {
+        "enabled": true,
+        "disable_ipv6": false,
+        "transport": "unix",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
+        "port": 8765,
+        "unix_socket": "/tmp/hblink4.sock",
+        "buffer_size": 65536
     }
 }
 ```
@@ -50,11 +49,12 @@ Both HBlink and the Dashboard must be configured to use the **same transport**.
 ```json
 {
     "event_receiver": {
+        "disable_ipv6": false,
         "transport": "unix",
-        "host": "127.0.0.1",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
         "port": 8765,
         "unix_socket": "/tmp/hblink4.sock",
-        "ipv6": false,
         "buffer_size": 65536
     }
 }
@@ -100,15 +100,15 @@ Both HBlink and the Dashboard must be configured to use the **same transport**.
 - ✅ Reliable (guaranteed delivery, ordered)
 - ✅ Automatic reconnection
 - ✅ Connection state tracking
-- ✅ IPv4 and IPv6 support
+- ✅ IPv4 and IPv6 support (dual-stack)
 
 **Configuration (IPv4)**:
 ```json
 {
     "transport": "tcp",
-    "host": "192.168.1.100",
+    "host_ipv4": "192.168.1.100",
     "port": 8765,
-    "ipv6": false
+    "disable_ipv6": true
 }
 ```
 
@@ -116,9 +116,19 @@ Both HBlink and the Dashboard must be configured to use the **same transport**.
 ```json
 {
     "transport": "tcp",
-    "host": "2001:db8::1",
+    "host_ipv6": "2001:db8::1",
+    "port": 8765
+}
+```
+
+**Configuration (Dual-stack)**:
+```json
+{
+    "transport": "tcp",
+    "host_ipv4": "192.168.1.100",
+    "host_ipv6": "2001:db8::1",
     "port": 8765,
-    "ipv6": true
+    "disable_ipv6": false
 }
 ```
 
@@ -130,8 +140,6 @@ sudo ufw allow from 127.0.0.1 to any port 8765
 # Allow specific IP
 sudo ufw allow from 192.168.1.50 to any port 8765
 ```
-
-**Future**: TLS/SSL encryption support planned for secure remote dashboards.
 ---
 
 ## Connection State Awareness
@@ -158,7 +166,7 @@ sudo ufw allow from 192.168.1.50 to any port 8765
 **Use Unix socket for best performance**:
 
 ```json
-// HBlink config
+// HBlink config (config/config.json)
 {
     "dashboard": {
         "enabled": true,
@@ -167,7 +175,7 @@ sudo ufw allow from 192.168.1.50 to any port 8765
     }
 }
 
-// Dashboard config
+// Dashboard config (dashboard/config.json)
 {
     "event_receiver": {
         "transport": "unix",
@@ -185,21 +193,21 @@ sudo ufw allow from 192.168.1.50 to any port 8765
 **Use TCP for remote access**:
 
 ```json
-// HBlink config (on server A: 192.168.1.100)
+// HBlink config (config/config.json) on server A: 192.168.1.100
 {
     "dashboard": {
         "enabled": true,
         "transport": "tcp",
-        "host": "192.168.1.200",  // Dashboard server IP
+        "host_ipv4": "192.168.1.200",  // Dashboard server IP
         "port": 8765
     }
 }
 
-// Dashboard config (on server B: 192.168.1.200)
+// Dashboard config (dashboard/config.json) on server B: 192.168.1.200
 {
     "event_receiver": {
         "transport": "tcp",
-        "host": "0.0.0.0",  // Listen on all interfaces
+        "host_ipv4": "0.0.0.0",  // Listen on all interfaces
         "port": 8765
     }
 }
@@ -217,21 +225,21 @@ sudo ufw allow 8765/tcp
 **Use TCP** (Unix socket supports only one client):
 
 ```json
-// Dashboard config (one instance)
+// Dashboard config (dashboard/config.json) - one instance
 {
     "event_receiver": {
         "transport": "tcp",
-        "host": "0.0.0.0",
+        "host_ipv4": "0.0.0.0",
         "port": 8765
     }
 }
 
-// HBlink config (multiple instances, same transport)
+// HBlink config (config/config.json) - multiple instances
 {
     "dashboard": {
         "enabled": true,
         "transport": "tcp",
-        "host": "127.0.0.1",  // Or remote dashboard IP
+        "host_ipv4": "127.0.0.1",  // Or remote dashboard IP
         "port": 8765
     }
 }
@@ -241,9 +249,9 @@ sudo ufw allow 8765/tcp
 
 ---
 
-## Troubleshooting
+### Troubleshooting
 
-### "Connection refused" errors
+#### "Connection refused" errors
 
 **Symptoms**: HBlink logs show "Dashboard not available yet" or "Connection refused"
 
@@ -259,27 +267,22 @@ sudo ufw allow 8765/tcp
 # Check dashboard is running
 ps aux | grep dashboard
 
-# Check dashboard is listening
-netstat -tlnp | grep 8765  # TCP
-netstat -xlnp | grep hblink4  # Unix socket
+# Check dashboard is listening (TCP)
+netstat -tlnp | grep 8765
 
-# Check HBlink config matches dashboard config
-diff <(jq .global.dashboard config/config.json) \
-     <(jq .event_receiver dashboard/config.json)
+# Check dashboard is listening (Unix socket)
+ls -l /tmp/hblink4.sock
 
 # Check firewall (TCP)
 sudo ufw status
-
-# Check socket permissions (Unix)
-ls -l /tmp/hblink4.sock
 ```
 
-### Dashboard shows stale data
+#### Dashboard shows stale data
 
 **Symptoms**: Active calls shown after they ended, repeaters shown as connected after disconnect
 
 **Causes**:
-1. Dashboard lost connection to HBlink (TCP/Unix only)
+1. Dashboard lost connection to HBlink
 2. HBlink crashed but dashboard still running
 
 **Solution**:
@@ -287,23 +290,7 @@ ls -l /tmp/hblink4.sock
 - Check HBlink is running: `ps aux | grep hblink`
 - Check connection state in dashboard logs
 
-### High CPU usage
-
-**Symptoms**: HBlink or Dashboard consuming high CPU
-
-**Causes**:
-1. Rapid reconnection attempts (TCP/Unix)
-2. Large buffer_size causing memory thrashing
-3. Event processing bottleneck
-
-**Solution**:
-```json
-{
-    "buffer_size": 32768  // Reduce from 65536
-}
-```
-
-### Socket file exists on dashboard startup
+#### Socket file exists on dashboard startup
 
 **Symptoms**: Dashboard fails to start with "Address already in use"
 
@@ -331,10 +318,10 @@ The dashboard automatically removes stale socket files, but manual cleanup may b
 
 Both transports are **fast enough** for real-time DMR monitoring (60ms packet spacing).
 
-### Reconnection Behavior (TCP/Unix)
+### Reconnection Behavior
 - Retry interval: 10 seconds
 - No event queuing during disconnect (events are dropped)
-- Dashboard resyncs on reconnect via state snapshots
+- Dashboard resyncs on reconnect via initial state
 
 ---
 
@@ -342,19 +329,19 @@ Both transports are **fast enough** for real-time DMR monitoring (60ms packet sp
 
 ### Unix Socket
 - ✅ **Safest**: Cannot be accessed over network
-- ✅ Filesystem permissions control access
+- ✅ Filesystem permissions control access (0660)
 - ✅ Recommended for production local deployments
 
 ### TCP (Localhost Only)
 - ⚠️ Exposed on network interface
 - ⚠️ No encryption (plaintext JSON)
-- ⚠️ Use firewall to restrict to localhost
+- ✅ Use firewall to restrict to localhost
 
 ### TCP (Remote Dashboard)
 - ⚠️ **Risk**: Network traffic is unencrypted
 - ⚠️ **Risk**: Anyone on network can see DMR activity
-- ⚠️ Use VPN or SSH tunnel for production
-- ⚠️ TLS support planned for future release
+- ✅ Use VPN or SSH tunnel for production
+- ℹ️ TLS support planned for future release
 
 **Recommended remote setup** (secure):
 ```bash
@@ -372,7 +359,7 @@ ssh -L 8765:localhost:8765 hblink-server
 ### Custom Buffer Size
 ```json
 {
-    "buffer_size": 32768  // Smaller = more aggressive event dropping
+    "buffer_size": 32768  // Smaller = less buffering
                           // Larger = more buffering (uses more memory)
 }
 ```
@@ -383,9 +370,10 @@ ssh -L 8765:localhost:8765 hblink-server
 ```json
 {
     "transport": "tcp",
-    "host": "::1",  // IPv6 localhost
+    "host_ipv4": "127.0.0.1",
+    "host_ipv6": "::1",
     "port": 8765,
-    "ipv6": true
+    "disable_ipv6": false
 }
 ```
 
@@ -393,25 +381,10 @@ ssh -L 8765:localhost:8765 hblink-server
 ```json
 {
     "dashboard": {
-        "enabled": false  // Zero overhead, no socket created
+        "enabled": false  // Zero overhead, no events emitted
     }
 }
 ```
-
----
-
-## Logging
-
-### HBlink Logs
-```
-📡 TCP event emitter initialized for 192.168.1.200:8765
-✅ Connected to dashboard (tcp)
-⚠️ Dashboard connection lost: Connection reset by peer
-```
-
-### Dashboard Logs
-```
-📡 Listening for HBlink4 events via Unix socket at /tmp/hblink4.sock
 ✅ HBlink4 connected via Unix socket
 ⚠️ HBlink4 Unix socket connection lost
 ```

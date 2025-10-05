@@ -88,16 +88,15 @@
 **`config/config.json`** (HBlink side):
 ```json
 {
-    "global": {
-        "dashboard": {
-            "enabled": true,
-            "transport": "unix",
-            "host": "127.0.0.1",
-            "port": 8765,
-            "unix_socket": "/tmp/hblink4.sock",
-            "ipv6": false,
-            "buffer_size": 65536
-        }
+    "dashboard": {
+        "enabled": true,
+        "transport": "unix",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
+        "port": 8765,
+        "unix_socket": "/tmp/hblink4.sock",
+        "disable_ipv6": false,
+        "buffer_size": 65536
     }
 }
 ```
@@ -107,10 +106,11 @@
 {
     "event_receiver": {
         "transport": "unix",
-        "host": "127.0.0.1",
+        "host_ipv4": "127.0.0.1",
+        "host_ipv6": "::1",
         "port": 8765,
         "unix_socket": "/tmp/hblink4.sock",
-        "ipv6": false,
+        "disable_ipv6": false,
         "buffer_size": 65536
     }
 }
@@ -121,14 +121,12 @@
 **`config/config.json`** (HBlink on server A):
 ```json
 {
-    "global": {
-        "dashboard": {
-            "enabled": true,
-            "transport": "tcp",
-            "host": "192.168.1.200",
-            "port": 8765,
-            "ipv6": false
-        }
+    "dashboard": {
+        "enabled": true,
+        "transport": "tcp",
+        "host_ipv4": "192.168.1.200",
+        "port": 8765,
+        "disable_ipv6": true
     }
 }
 ```
@@ -138,9 +136,9 @@
 {
     "event_receiver": {
         "transport": "tcp",
-        "host": "0.0.0.0",
+        "host_ipv4": "0.0.0.0",
         "port": 8765,
-        "ipv6": false
+        "disable_ipv6": true
     }
 }
 ```
@@ -247,8 +245,8 @@
 - [ ] Restart HBlink and verify automatic reconnection
 
 ### Remote Deployment (TCP)
-- [ ] Update HBlink config: `"transport": "tcp"`, `"host": "DASHBOARD_IP"`
-- [ ] Update Dashboard config: `"transport": "tcp"`, `"host": "0.0.0.0"`
+- [ ] Update HBlink config: `"transport": "tcp"`, `"host_ipv4": "DASHBOARD_IP"`
+- [ ] Update Dashboard config: `"transport": "tcp"`, `"host_ipv4": "0.0.0.0"`
 - [ ] Configure firewall: `sudo ufw allow 8765/tcp`
 - [ ] Start dashboard first on remote server
 - [ ] Start HBlink on DMR server

@@ -154,12 +154,22 @@ class MyDMRApplication:
         signal.signal(signal.SIGINT, self.handle_shutdown)
         signal.signal(signal.SIGTERM, self.handle_shutdown)
         
-        # Set up UDP listener
-        self.port = reactor.listenUDP(
-            CONFIG['global']['bind_port'],
-            self.protocol,
-            interface=CONFIG['global']['bind_ip']
-        )
+        # Set up UDP listeners (dual-stack)
+        # IPv4 listener
+        if CONFIG['global'].get('bind_ipv4'):
+            self.port_v4 = reactor.listenUDP(
+                CONFIG['global']['port_ipv4'],
+                self.protocol,
+                interface=CONFIG['global']['bind_ipv4']
+            )
+        
+        # IPv6 listener
+        if CONFIG['global'].get('bind_ipv6') and not CONFIG['global'].get('disable_ipv6', False):
+            self.port_v6 = reactor.listenUDP(
+                CONFIG['global']['port_ipv6'],
+                self.protocol,
+                interface=CONFIG['global']['bind_ipv6']
+            )
         
         # Set up periodic status check
         reactor.callLater(60, self.check_repeater_status)
@@ -185,7 +195,12 @@ class MyDMRApplication:
     
     def start(self):
         """Start the application"""
-        print(f"Starting application on {CONFIG['global']['bind_ip']}:{CONFIG['global']['bind_port']}")
+        bind_info = []
+        if CONFIG['global'].get('bind_ipv4'):
+            bind_info.append(f"{CONFIG['global']['bind_ipv4']}:{CONFIG['global']['port_ipv4']}")
+        if CONFIG['global'].get('bind_ipv6') and not CONFIG['global'].get('disable_ipv6', False):
+            bind_info.append(f"[{CONFIG['global']['bind_ipv6']}]:{CONFIG['global']['port_ipv6']}")
+        print(f"Starting application on {', '.join(bind_info)}")
         # Start the Twisted reactor
         reactor.run()
 
@@ -212,11 +227,11 @@ class MyDMRApplication:
         # Initialize HBlink4
         self.protocol = HBProtocol()
         
-        # Set up UDP listener
+        # Set up dual-stack UDP listeners
         reactor.listenUDP(
-            CONFIG['global']['bind_port'],
+            CONFIG['global']['port_ipv4'],
             self.protocol,
-            interface=CONFIG['global']['bind_ip']
+            interface=CONFIG['global']['bind_ipv4']
         )
         
         # Set up periodic status check
