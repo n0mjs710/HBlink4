@@ -102,13 +102,17 @@
             margin-bottom: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
             display: flex;
+            flex-wrap: wrap; /* Allow wrapping when too narrow */
             justify-content: space-between;
             align-items: stretch;
+            overflow: hidden; /* Prevent children from overflowing */
+            min-width: 0; /* Allow shrinking */
         }
         
         .repeater-info {
-            flex: 1;
+            flex: 0 0 auto; /* Don't grow, don't shrink, auto width */
             padding: 8px;
+            min-width: 200px; /* Minimum width before wrapping */
         }
         
         .repeater-header {
@@ -131,7 +135,16 @@
                 gap: 4px 20px;
                 font-size: 0.85em;
                 margin-top: 4px;
-            }        .repeater-meta-item {
+            }
+        
+        /* Hide metadata by default on medium/small screens - only show on large or when explicitly stacked */
+        @media (max-width: 1024px) {
+            .repeater-meta {
+                display: none; /* Hide by default when wrapping might occur */
+            }
+        }
+        
+        .repeater-meta-item {
             display: flex;
             align-items: center;
             gap: 5px;
@@ -152,8 +165,9 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
-            min-width: 500px;
             padding: 8px;
+            flex: 1 1 auto; /* Grow to fill, shrink if needed */
+            min-width: 300px; /* Minimum width to display slots properly */
         }
         
         .slot {
@@ -166,6 +180,7 @@
             gap: 12px;
             align-items: center;
             font-size: 13px;
+            min-width: 0; /* Allow grid items to shrink */
         }
         
         .slot.idle {
@@ -311,6 +326,150 @@
         .tg-list { 
             color: #64748b; 
             font-size: 12px; 
+        }
+        
+        /* Responsive Design for Mobile/Tablet */
+        
+        /* Container query simulation: when slots wrap below repeater info */
+        @media (max-width: 800px) {
+            /* At this width, slots will wrap below - hide metadata */
+            .repeater-card {
+                flex-direction: column; /* Force vertical stacking */
+            }
+            
+            .repeater-info {
+                border-bottom: 2px solid #0f172a;
+                min-width: 100%; /* Full width when stacked */
+            }
+            
+            .slots-container {
+                min-width: 100%; /* Full width when stacked */
+            }
+            
+            /* Hide metadata when wrapped, keep only identifier */
+            .repeater-meta {
+                display: none;
+            }
+            
+            .repeater-header {
+                font-size: 14px;
+                margin-bottom: 4px;
+            }
+            
+            /* Compact slot display */
+            .slot {
+                grid-template-columns: 50px 70px 80px 90px 70px 1fr;
+                gap: 8px;
+                font-size: 12px;
+            }
+        }
+        
+        @media (min-width: 801px) and (max-width: 1024px) {
+            /* Tablets: only show metadata when we're in proper vertical stack mode */
+            .repeater-card {
+                flex-direction: column; /* Force vertical stacking */
+            }
+            
+            .repeater-info {
+                border-bottom: 2px solid #0f172a;
+            }
+            
+            .slots-container {
+                min-width: 100%;
+            }
+            
+            /* Adjust slot grid for tablets */
+            .slot {
+                grid-template-columns: 60px 80px 80px 100px 80px 1fr;
+                gap: 8px;
+                font-size: 12px;
+            }
+            
+            /* Show metadata ONLY when forced to column layout (not wrapped) */
+            .repeater-meta {
+                display: grid !important; /* Override the hide rule - safe here because flex-direction: column */
+                grid-template-columns: 1fr 1fr;
+                gap: 8px 12px;
+            }
+        }
+        
+        /* Wide screens: metadata visible side-by-side */
+        @media (min-width: 1025px) {
+            .repeater-meta {
+                display: grid !important; /* Show on wide screens */
+            }
+        }
+        
+        @media (max-width: 600px) {
+            /* Small phones: further compaction */
+            body {
+                padding: 8px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+            
+            .logo {
+                height: 48px;
+            }
+            
+            .stats-bar {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 8px;
+            }
+            
+            .stat-card {
+                padding: 8px;
+            }
+            
+            .stat-value {
+                font-size: 20px;
+            }
+            
+            /* Even more compact slot display */
+            .slot {
+                grid-template-columns: 45px 70px 75px 80px 1fr;
+                gap: 6px;
+                font-size: 11px;
+                padding: 6px 8px;
+            }
+            
+            .slot-col-label {
+                font-size: 9px;
+            }
+            
+            .slot-col-value {
+                font-size: 11px;
+            }
+            
+            .repeater-info {
+                padding: 6px 8px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            /* Very small phones: ultra-compact, hide non-essential columns */
+            .slot {
+                grid-template-columns: 45px 1fr 70px 55px;
+                gap: 4px;
+                font-size: 10px;
+                padding: 6px;
+            }
+            
+            /* Hide destination and duration columns on tiny screens */
+            .slot .slot-col:nth-child(3),
+            .slot .slot-col:nth-child(4) {
+                display: none;
+            }
+            
+            .stats-bar {
+                grid-template-columns: 1fr;
+            }
+            
+            .section-header {
+                font-size: 14px;
+            }
         }
     </style>
 </head>
