@@ -131,9 +131,9 @@
         
             .repeater-meta {
                 display: grid;
-                grid-template-columns: 180px auto 1fr;
+                grid-template-columns: 140px auto 1fr;
                 grid-template-rows: auto auto;
-                gap: 4px 20px;
+                gap: 4px 12px;
                 font-size: 0.85em;
                 margin-top: 4px;
             }
@@ -650,10 +650,21 @@
         }
         
         function formatDuration(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
-            return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            if (seconds >= 31536000) {  // 365 days
+                const years = Math.floor(seconds / 31536000);
+                const days = Math.floor((seconds % 31536000) / 86400);
+                return `${years}y ${days}d`;
+            } else if (seconds >= 86400) {  // 24 hours
+                const days = Math.floor(seconds / 86400);
+                const hours = Math.floor((seconds % 86400) / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                return `${days}d ${hours}:${minutes.toString().padStart(2, '0')}`;
+            } else {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            }
         }
         
         function updateConnectionStatus(connected) {
