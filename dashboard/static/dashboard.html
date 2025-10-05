@@ -113,6 +113,7 @@
             flex: 0 0 auto; /* Don't grow, don't shrink, auto width */
             padding: 8px;
             min-width: 200px; /* Minimum width before wrapping */
+            max-width: 400px; /* Don't let metadata section get too wide */
         }
         
         .repeater-header {
@@ -166,8 +167,11 @@
             flex-direction: column;
             gap: 6px;
             padding: 8px;
-            flex: 1 1 auto; /* Grow to fill, shrink if needed */
-            min-width: 300px; /* Minimum width to display slots properly */
+            flex: 0 1 auto; /* Don't grow, allow shrink, auto width */
+            min-width: min-content; /* Shrink to fit content */
+            max-width: 100%; /* Don't exceed container */
+            align-self: flex-end; /* Align to right side */
+            margin-left: auto; /* Push to right */
         }
         
         .slot {
@@ -176,11 +180,12 @@
             padding: 8px 12px;
             border-left: 3px solid #334155;
             display: grid;
-            grid-template-columns: 70px 90px 90px 120px 100px 1fr;
+            grid-template-columns: 55px 70px 75px 110px 55px 70px; /* Fixed optimal widths with padding */
             gap: 12px;
             align-items: center;
             font-size: 13px;
             min-width: 0; /* Allow grid items to shrink */
+            width: max-content; /* Shrink to fit content */
         }
         
         .slot.idle {
@@ -344,6 +349,9 @@
             
             .slots-container {
                 min-width: 100%; /* Full width when stacked */
+                max-width: 100%;
+                align-self: stretch; /* Take full width */
+                margin-left: 0; /* Reset right alignment */
             }
             
             /* Hide metadata when wrapped, keep only identifier */
@@ -356,11 +364,12 @@
                 margin-bottom: 4px;
             }
             
-            /* Compact slot display */
+            /* Compact slot display - optimized fixed widths */
             .slot {
-                grid-template-columns: 50px 70px 80px 90px 70px 1fr;
+                grid-template-columns: 50px 65px 70px 100px 50px 65px;
                 gap: 8px;
                 font-size: 12px;
+                width: 100%; /* Take full width on mobile */
             }
         }
         
@@ -376,13 +385,17 @@
             
             .slots-container {
                 min-width: 100%;
+                max-width: 100%;
+                align-self: stretch; /* Take full width */
+                margin-left: 0; /* Reset right alignment */
             }
             
-            /* Adjust slot grid for tablets */
+            /* Adjust slot grid for tablets - optimized fixed widths */
             .slot {
-                grid-template-columns: 60px 80px 80px 100px 80px 1fr;
+                grid-template-columns: 52px 68px 72px 105px 52px 68px;
                 gap: 8px;
                 font-size: 12px;
+                width: 100%; /* Take full width on tablet */
             }
             
             /* Show metadata ONLY when forced to column layout (not wrapped) */
@@ -427,12 +440,13 @@
                 font-size: 20px;
             }
             
-            /* Even more compact slot display */
+            /* Even more compact slot display - 5 columns */
             .slot {
-                grid-template-columns: 45px 70px 75px 80px 1fr;
+                grid-template-columns: 45px 60px 65px 95px 55px;
                 gap: 6px;
                 font-size: 11px;
                 padding: 6px 8px;
+                width: 100%; /* Take full width */
             }
             
             .slot-col-label {
@@ -449,12 +463,13 @@
         }
         
         @media (max-width: 480px) {
-            /* Very small phones: ultra-compact, hide non-essential columns */
+            /* Very small phones: ultra-compact, 4 columns (hides columns 3,4) */
             .slot {
-                grid-template-columns: 45px 1fr 70px 55px;
+                grid-template-columns: 42px 58px 62px 55px;
                 gap: 4px;
                 font-size: 10px;
                 padding: 6px;
+                width: 100%; /* Take full width */
             }
             
             /* Hide destination and duration columns on tiny screens */
