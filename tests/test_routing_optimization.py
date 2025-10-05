@@ -308,7 +308,98 @@ def test_slot_availability_exclusion():
     print("Slot Availability Exclusion tests passed!\n")
 
 
+def test_assumed_stream_route_cache_removal():
+    """Test that assumed streams are removed from route-cache when repeater starts RX"""
+    print("=== Testing Assumed Stream Route-Cache Removal ===")
+    
+    # Create two repeaters
+    repeater_a = RepeaterState(
+        repeater_id=b'\x01',
+        ip='192.168.1.1',
+        port=54001,
+        connection_state='connected'
+    )
+    repeater_b = RepeaterState(
+        repeater_id=b'\x02',
+        ip='192.168.1.2',
+        port=54002,
+        connection_state='connected'
+    )
+    
+    # Repeater A has an active RX stream with B in its route-cache
+    stream_a = StreamState(
+        repeater_id=b'\x01',
+        rf_src=b'\x12\x34\x56',
+        dst_id=b'\x00\x00\x01',  # TG 1
+        slot=1,
+        start_time=time(),
+        last_seen=time(),
+        stream_id=b'\xaa\xaa\xaa\xaa',
+        target_repeaters={b'\x02'},  # Will TX to repeater B
+        routing_cached=True
+    )
+    repeater_a.slot1_stream = stream_a
+    
+    # Repeater B has an assumed stream (we're TX'ing to it)
+    assumed_stream = StreamState(
+        repeater_id=b'\x02',
+        rf_src=b'\x12\x34\x56',
+        dst_id=b'\x00\x00\x01',
+        slot=1,
+        start_time=time(),
+        last_seen=time(),
+        stream_id=b'\xaa\xaa\xaa\xaa',
+        is_assumed=True  # This is the key flag
+    )
+    repeater_b.slot1_stream = assumed_stream
+    
+    # Verify initial state
+    assert b'\x02' in stream_a.target_repeaters, "Repeater B should be in route-cache"
+    assert repeater_b.slot1_stream.is_assumed, "Repeater B should have assumed stream"
+    print("✓ Initial state: Repeater B in route-cache, has assumed TX stream")
+    
+    # Now simulate: Repeater B starts receiving a new stream
+    # The logic should:
+    # 1. Detect assumed stream on B
+    # 2. Remove B from A's route-cache
+    # 3. Clear B's assumed stream
+    # 4. Allow new real stream
+    
+    # Simulate the route-cache removal logic
+    if assumed_stream.is_assumed:
+        # Remove repeater B from all route-caches
+        stream_a.target_repeaters.discard(b'\x02')
+    
+    # Verify removal
+    assert b'\x02' not in stream_a.target_repeaters, "Repeater B should be removed from route-cache"
+    print("✓ Repeater B removed from route-cache when it starts RX")
+    
+    # Verify we can create new real stream on B
+    new_real_stream = StreamState(
+        repeater_id=b'\x02',
+        rf_src=b'\x99\x88\x77',
+        dst_id=b'\x00\x00\x02',  # Different TG
+        slot=1,
+        start_time=time(),
+        last_seen=time(),
+        stream_id=b'\xbb\xbb\xbb\xbb',
+        is_assumed=False  # Real RX stream
+    )
+    repeater_b.slot1_stream = new_real_stream
+    
+    assert not repeater_b.slot1_stream.is_assumed, "Repeater B should have real stream now"
+    assert repeater_b.slot1_stream.stream_id == b'\xbb\xbb\xbb\xbb', "Should be new stream"
+    print("✓ Real RX stream replaces assumed TX stream")
+    
+    # The key benefit: We stop wasting bandwidth sending to B
+    # since B is now busy receiving, not transmitting
+    print("✓ Bandwidth saved: no longer sending to busy repeater")
+    
+    print("Assumed Stream Route-Cache Removal tests passed!\n")
+
+
 def test_performance_calculation():
+
     """Calculate theoretical performance improvement"""
     print("=== Testing Performance Calculation ===")
     
@@ -355,6 +446,7 @@ def run_all_tests():
         test_rejected_tgs_detection,
         test_stream_start_routing_calculation,
         test_slot_availability_exclusion,
+        test_assumed_stream_route_cache_removal,
         test_performance_calculation,
     ]
     

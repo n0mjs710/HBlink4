@@ -347,3 +347,156 @@ Decision Process:
 4. If available, create/update stream on target
 5. Forward packet to target repeater
 ```
+
+## RX/TX Contention: Assumed Stream Route-Cache Removal
+
+### Scenario: Repeater Starts Receiving While We're Transmitting
+
+```
+Initial State:
++------------------+         Forwarding (TX)        +------------------+
+|  Repeater A      |                                |  Repeater B      |
+|  Slot 1: ACTIVE  |  ======================>       |  Slot 1: ASSUMED |
+|  RX from User    |  (Stream ID: aaa)              |  (TX from us)    |
+|  TG 1            |  Route-cache: {B}              |  TG 1            |
+|  is_assumed=False|                                |  is_assumed=True |
++------------------+                                +------------------+
+
+Problem Occurs:
++------------------+                                +------------------+
+|  Repeater B      |  <===== NEW RX STREAM ======  |  Local User      |
+|  Wants Slot 1    |         (Stream ID: bbb)      |  Keys Up         |
+|  RX from User    |         TG 2                  |                  |
+|  TG 2            |                                |                  |
++------------------+                                +------------------+
+
+Contention Detected:
++------------------------------------------------------------------+
+|  _handle_stream_start() on Repeater B Slot 1:                   |
+|                                                                  |
+|  1. Current stream exists? YES (assumed stream, ID: aaa)         |
+|  2. Same stream_id? NO (aaa != bbb)                              |
+|  3. Is current stream assumed? YES (is_assumed=True)             |
+|                                                                  |
+|  Decision: REPEATER WINS (real RX > assumed TX)                  |
++------------------------------------------------------------------+
+
+Route-Cache Removal Process:
++------------------------------------------------------------------+
+|  For each repeater in self._repeaters:                           |
+|    For each slot (1, 2):                                         |
+|      Get active stream                                           |
+|      If stream has routing_cached=True:                          |
+|        If Repeater B in stream.target_repeaters:                 |
+|          ➜ stream.target_repeaters.discard(B)                    |
+|          ✓ Removed B from route-cache                            |
+|          ✓ Stop sending to B immediately                         |
++------------------------------------------------------------------+
+
+Final State:
++------------------+         No longer forwarding   +------------------+
+|  Repeater A      |                                |  Repeater B      |
+|  Slot 1: ACTIVE  |  =====================  ✗      |  Slot 1: ACTIVE  |
+|  RX from User    |  (Stream ID: aaa)              |  RX from User    |
+|  TG 1            |  Route-cache: {} (empty)       |  TG 2            |
+|  is_assumed=False|  ✓ Bandwidth saved             |  is_assumed=False|
++------------------+                                +------------------+
+
+Benefits:
+✓ No wasted bandwidth to busy repeater
+✓ Real stream takes precedence
+✓ Automatic removal from all route-caches
+✓ O(R×S) efficiency (~10-20 operations)
+```
+
+### Detailed Flow Diagram
+
+```
+Packet Arrives from Repeater B
+        |
+        v
++------------------+
+| Current stream   |
+| on slot exists?  |
++--------+---------+
+         |
+         v
++------------------+
+| Same stream_id?  |
++--------+---------+
+         | NO
+         v
++------------------+
+| Is current       |
+| stream assumed?  |
++--------+---------+
+         | YES
+         v
++-----------------------------------+
+| LOG: Repeater starting RX while   |
+|      we have assumed TX stream    |
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+| For each repeater:                |
+|   For each slot:                  |
+|     Get stream with routing cache |
+|     If this repeater in targets:  |
+|       Remove from cache           |
+|       LOG: Removed from cache     |
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+| Clear assumed stream              |
+| Fall through to create real stream|
++-----------------------------------+
+         |
+         v
++-----------------------------------+
+| Create new StreamState            |
+| is_assumed = False                |
+| Process as normal RX stream       |
++-----------------------------------+
+```
+
+### Example Log Output
+
+```
+INFO - Repeater 312100 slot 1 starting RX while we have assumed TX stream - repeater wins, removing from active route-caches
+DEBUG - Removed repeater 312100 from route-cache of stream on repeater 312101 slot 1
+DEBUG - Removed repeater 312100 from route-cache of stream on repeater 312102 slot 2
+INFO - RX stream started on repeater 312100 slot 1: src=312567, dst=3121, stream_id=bbbbbbbb, targets=3
+```
+
+### Performance Analysis
+
+**Operation:** Remove repeater from all route-caches
+
+**Complexity:** O(R×S) where:
+- R = number of repeaters (~10-50 typical)
+- S = slots per repeater (always 2)
+- Result: ~20-100 operations
+
+**Frequency:** Only when contention detected (rare)
+
+**Method:** `set.discard()` - O(1) per removal
+
+**Example:**
+```
+10 repeaters × 2 slots = 20 stream checks
+If 5 have routing caches with this repeater:
+  5 × O(1) discard operations
+Total: ~25 operations (< 1ms)
+```
+
+### Real vs Assumed Stream Priority
+
+| Stream Type | Source | Priority | Can be Overridden | Use Case |
+|-------------|--------|----------|-------------------|----------|
+| **Real** | RX from repeater | **HIGH** | Only by real stream | Actual RF activity |
+| **Assumed** | TX to repeater | LOW | By any real stream | Tracking what we send |
+
+**Rule:** Real always wins over Assumed
+

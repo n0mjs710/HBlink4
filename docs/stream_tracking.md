@@ -96,6 +96,111 @@ Checked every second by `_check_stream_timeouts()`:
 4. **Summary Logging**: Log stream duration and total packet count
 5. **Slot Release**: Slot is now available for new streams from any source
 
+## Assumed Streams and RX/TX Contention
+
+### Overview
+
+When we forward traffic TO a repeater (TX), we create an "assumed stream" to track what we're sending. However, repeaters have their own local users and may start receiving (RX) at any time. This creates a potential contention scenario.
+
+### The Problem
+
+**Scenario:**
+1. We're transmitting to Repeater X slot 1 (TG 1) - assumed stream created
+2. Repeater X starts receiving from a local user on slot 1 (TG 2) - real stream
+3. The repeater will ignore our TX packets (hardware busy receiving)
+4. We waste bandwidth sending packets the repeater can't process
+
+### The Solution: Route-Cache Removal
+
+When a repeater starts receiving (real stream) while we have an assumed stream to it:
+
+1. **Detection**: Check if current slot stream has `is_assumed=True`
+2. **Route-Cache Removal**: Remove this repeater from ALL active streams' `target_repeaters` caches
+3. **Stop Transmission**: We immediately stop sending to that repeater
+4. **Allow Real Stream**: Clear assumed stream and process real stream normally
+5. **Bandwidth Saved**: No wasted packets to busy repeater
+
+### Implementation in `_handle_stream_start()`
+
+```python
+if current_stream:
+    # Same stream continuing
+    if current_stream.stream_id == stream_id:
+        return True
+    
+    # Special case: Assumed stream (we're TX'ing) vs real stream (repeater RX'ing)
+    if current_stream.is_assumed:
+        LOGGER.info(f'Repeater {repeater_id} slot {slot} starting RX '
+                   f'while we have assumed TX stream - repeater wins')
+        
+        # Remove from all active route-caches
+        for other_repeater in self._repeaters.values():
+            for other_slot in [1, 2]:
+                other_stream = other_repeater.get_slot_stream(other_slot)
+                if (other_stream and other_stream.routing_cached and 
+                    other_stream.target_repeaters and
+                    repeater.repeater_id in other_stream.target_repeaters):
+                    other_stream.target_repeaters.discard(repeater.repeater_id)
+        
+        # Clear assumed stream, fall through to create real stream
+    # ... rest of contention logic ...
+```
+
+### Performance
+
+**Efficiency:** O(R×S) where R = repeaters, S = 2 slots
+- Typical: ~10-20 operations when contention detected
+- Only runs when repeater starts RX with assumed stream present
+- Uses set `discard()` for O(1) removal per cache
+
+**Benefit:**
+- Immediate bandwidth savings
+- No wasted packets to busy repeater
+- Real streams always take precedence over assumed streams
+
+### Real vs Assumed Streams
+
+**Real Stream (`is_assumed=False`):**
+- Received FROM a repeater (RX)
+- Represents actual RF activity
+- Always takes precedence
+- Created in `_handle_stream_start()`
+
+**Assumed Stream (`is_assumed=True`):**
+- Sent TO a repeater (TX)
+- Represents what we're forwarding
+- Can be overridden by real streams
+- Created in `_track_assumed_stream()`
+
+### Logging
+
+```
+INFO - Repeater 312100 slot 1 starting RX while we have assumed TX stream - repeater wins, removing from active route-caches
+DEBUG - Removed repeater 312100 from route-cache of stream on repeater 312101 slot 1
+```
+
+### Design Rationale
+
+**Why repeater wins:**
+- Repeaters have their own local users and hang time management
+- We can't control when local users key up
+- Repeater hardware can't TX and RX simultaneously on same slot
+- Repeater will ignore our TX packets anyway when receiving
+
+**Why remove from route-cache:**
+- Stop wasting bandwidth immediately
+- Efficient O(1) removal per cache using set operations
+- Only affects streams targeting this specific repeater
+- Automatic - no manual intervention needed
+
+### Testing
+
+Test coverage in `test_routing_optimization.py`:
+- `test_assumed_stream_route_cache_removal()` validates the removal logic
+- Verifies repeater is removed from route-caches
+- Confirms real stream replaces assumed stream
+- Validates bandwidth savings
+
 ## Key Methods
 
 ### `_is_dmr_terminator(data: bytes, frame_type: int) -> bool`

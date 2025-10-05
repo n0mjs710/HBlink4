@@ -713,8 +713,31 @@ class HBProtocol(DatagramProtocol):
             if current_stream.stream_id == stream_id:
                 return True
             
+            # Special case: If current stream is an assumed (TX) stream and we're receiving
+            # a real (RX) stream from the same repeater, the repeater wins.
+            # Remove this repeater from any active route-caches to stop wasting bandwidth.
+            if current_stream.is_assumed:
+                LOGGER.info(f'Repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
+                           f'starting RX while we have assumed TX stream - repeater wins, '
+                           f'removing from active route-caches')
+                
+                # Remove this repeater from all active stream route-caches
+                for other_repeater in self._repeaters.values():
+                    for other_slot in [1, 2]:
+                        other_stream = other_repeater.get_slot_stream(other_slot)
+                        if (other_stream and 
+                            other_stream.routing_cached and 
+                            other_stream.target_repeaters and
+                            repeater.repeater_id in other_stream.target_repeaters):
+                            other_stream.target_repeaters.discard(repeater.repeater_id)
+                            LOGGER.debug(f'Removed repeater {int.from_bytes(repeater.repeater_id, "big")} '
+                                       f'from route-cache of stream on repeater '
+                                       f'{int.from_bytes(other_repeater.repeater_id, "big")} slot {other_slot}')
+                
+                # Clear the assumed stream - real stream takes precedence
+                # Fall through to create new real stream
             # Check if stream is in hang time
-            if current_stream.ended:
+            elif current_stream.ended:
                 # Stream has ended but is in hang time
                 # Hang time protects the TALKGROUP conversation from being hijacked
                 # Allow: 1) Any user continuing same talkgroup conversation
