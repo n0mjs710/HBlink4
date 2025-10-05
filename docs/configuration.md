@@ -372,28 +372,6 @@ The `talkgroups` section defines available talkgroups and their properties.
 | `name` | string | Human-readable name for the talkgroup |
 | `bridge` | boolean | Whether to bridge this talkgroup between repeaters |
 
-## Configuration Tips
-
-1. **Security**:
-   - Use strong passphrases for repeater authentication
-   - Restrict talkgroups appropriately for each repeater group
-   - Use blacklisting to prevent unauthorized access
-
-2. **Organization**:
-   - Give patterns clear, descriptive names
-   - Document the purpose of each pattern in its description
-   - Group related repeaters under common patterns
-
-3. **Maintenance**:
-   - Keep the default configuration restrictive
-   - Document blacklist reasons for future reference
-   - Use meaningful talkgroup names
-
-4. **Validation**:
-   - Ensure no pattern has multiple match types
-   - Verify talkgroup IDs exist in the talkgroups section
-   - Check for overlapping ID ranges
-
 ## Example Configuration
 
 See the `config/hblink.json` file in the repository for a complete example configuration with multiple patterns and talkgroups.
