@@ -15,10 +15,6 @@ This document summarizes the major features implemented in the recent developmen
 - Stream ID-based contention detection
 - Packet counting and timing
 
-**Files Modified**:
-- `hblink4/hblink.py`: Core stream tracking logic
-- `tests/test_stream_tracking.py`: Comprehensive test suite
-
 ### 2. Hang Time Feature ✅
 
 **Purpose**: Prevent slot hijacking during multi-transmission conversations.
@@ -28,26 +24,6 @@ This document summarizes the major features implemented in the recent developmen
 - Configurable duration (10-20 seconds typical)
 - Other sources are rejected during hang time
 - Same source can immediately resume
-
-**Configuration**:
-```json
-{
-  "global": {
-    "stream_hang_time": 10.0
-  },
-  "repeaters": {
-    "312000": {
-      "stream_hang_time": 20.0
-    }
-  }
-}
-```
-
-**Files Modified**:
-- `hblink4/hblink.py`: Hang time logic
-- `config/config_sample.json`: Configuration examples
-- `docs/hang_time.md`: Complete documentation (375 lines)
-- `tests/test_hang_time.py`: Test suite
 
 ### 3. Stream End Detection ✅ **FULLY IMPLEMENTED**
 
@@ -80,20 +56,6 @@ This document summarizes the major features implemented in the recent developmen
 - ✅ Production-ready with live repeater testing confirmed
 - ✅ HBlink3-compatible implementation
 
-### 4. Comprehensive Documentation ✅
-
-**Documents Created/Updated**:
-- `docs/stream_tracking.md` (292 lines)
-- `docs/stream_tracking_diagrams.md` (364 lines, ASCII diagrams)
-- `docs/hang_time.md` (375 lines)
-- `docs/protocol.md` (enhanced with DMRD packet structure)
-- `readme.md` (updated with new features)
-
-**Diagram Quality**:
-- All ASCII characters (perfect alignment)
-- 19 boxes perfectly aligned
-- Compatible with all terminals
-
 ### 5. Test Coverage ✅
 
 **Test Suites**:
@@ -103,68 +65,12 @@ This document summarizes the major features implemented in the recent developmen
 - `tests/test_access_control.py`: Access control validation (9 tests)
 - `tests/test_user_cache.py`: User cache management
 
-**Status**: All tests passing ✅
-
-## Configuration Parameters
-
-### Global Configuration
-
-```json
-{
-  "global": {
-    "disable_ipv6": false,
-    "bind_ipv4": "0.0.0.0",
-    "bind_ipv6": "::",
-    "port_ipv4": 62031,
-    "port_ipv6": 62031,
-    "stream_timeout": 2.0,
-    "stream_hang_time": 10.0,
-    "user_cache": {
-      "timeout": 600
-    }
-  },
-  "dashboard": {
-    "enabled": true,
-    "transport": "unix",
-    "unix_socket": "/tmp/hblink4.sock"
-  }
-}
-```
-
-### Per-Repeater Configuration
-
-```json
-{
-  "repeater_configurations": {
-    "patterns": [
-      {
-        "name": "My Network",
-        "match": {
-          "ids": [312000, 312001]
-        },
-        "config": {
-          "passphrase": "s3cr3t",
-          "slot1_talkgroups": [9, 91],
-          "slot2_talkgroups": [311, 3100]
-        }
-      }
-    ]
-  }
-}
-```
-
 ## Architecture Decisions
 
 ### Dual-Stack IPv6
 - Native dual-stack support with separate IPv4 and IPv6 listeners
 - Automatic address family detection
 - Optional IPv6 disable for networks with broken IPv6
-
-### Stream Tracking
-- **Per-slot, per-repeater** design for DMR's dual timeslot nature
-- Stream ID-based tracking (not just RF source)
-- Separate hang time per slot
-- User cache for efficient private call routing
 
 ### Dashboard Integration
 - Separate process architecture for isolation
@@ -179,69 +85,3 @@ This document summarizes the major features implemented in the recent developmen
 3. **User Cache**: O(1) lookup for private call routing
 4. **Dashboard Events**: Non-blocking emission (<1μs overhead)
 5. **Logging**: Debug-level for packet details, INFO for significant events
-
-## Known Limitations
-
-1. **Stream Forwarding**: Not yet implemented (next major milestone - see docs/TODO.md #1)
-2. **Advanced Access Control**: Per-talkgroup permissions not yet implemented (see docs/TODO.md #2)
-
-## Next Steps
-
-See **[docs/TODO.md](TODO.md)** for the complete prioritized TODO list.
-
-### Immediate Priorities
-
-1. **Stream Forwarding/Bridging** (docs/TODO.md #1)
-   - Bridge configuration
-   - Target repeater selection
-   - Packet forwarding between repeaters
-
-2. **Enhanced Access Control** (docs/TODO.md #2)
-   - Per-talkgroup permissions
-   - Time-based restrictions
-   - Emergency call prioritization
-
-3. **Dashboard Enhancements** (docs/TODO.md #3)
-   - Stream history view
-   - Statistics graphs
-   - Map view
-
-See **[docs/TODO.md](TODO.md)** for all items with full descriptions.
-
-## Git History
-
-**Commit**: 114f2f2
-**Date**: October 1, 2025
-**Summary**: Stream tracking, hang time, routing, comprehensive documentation
-**Stats**: 10 files changed, 1,686 insertions(+)
-
-## Testing Status
-
-| Feature | Unit Tests | Integration Tests | Status |
-|---------|------------|-------------------|--------|
-| Stream Tracking | ✅ Pass | ✅ Manual | ✅ Production Ready |
-| Hang Time | ✅ Pass | ✅ Manual | ✅ Production Ready |
-| Terminator Detection | ✅ Pass (5/5) | ✅ Live Tested | ✅ Production Ready |
-| Access Control | ✅ Pass (9/9) | ✅ Manual | ✅ Production Ready |
-| User Cache | ✅ Pass | ✅ Manual | ✅ Production Ready |
-
-## Code Statistics
-
-- **Core Logic**: Stream tracking, hang time, routing in hblink.py
-- **Test Coverage**: Comprehensive test suites for all major features
-- **Documentation**: Complete documentation with diagrams
-
-## Conclusion
-
-This development successfully implemented the core stream management infrastructure for HBlink4:
-
-✅ **Robust stream tracking** with per-slot management  
-✅ **Hang time** to prevent slot hijacking  
-✅ **Immediate terminator detection** (60ms via packet header flags)  
-✅ **Real-time duration counter** with 1-second updates  
-✅ **Smart optimizations** to minimize overhead  
-✅ **Comprehensive documentation** for maintainability  
-✅ **Full test coverage** for reliability  
-✅ **Live repeater testing** confirming production readiness  
-
-The system is production-ready for stream tracking and immediate terminator detection. Future enhancements (stream forwarding, enhanced access control) are documented in docs/TODO.md with clear rationale and priorities.
