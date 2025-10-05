@@ -110,6 +110,7 @@ class DashboardState:
         self.last_heard: List[dict] = []  # Last heard users
         self.last_heard_stats: dict = {}  # User cache statistics
         self.websocket_clients: Set[WebSocket] = set()
+        self.hblink_connected: bool = False  # Track HBlink4 connection status
         self.stats = {
             'total_streams_today': 0,
             'total_duration_today': 0.0,  # Total duration in seconds
@@ -130,6 +131,30 @@ class DashboardState:
 state = DashboardState()
 
 
+async def broadcast_hblink_status(connected: bool):
+    """Broadcast HBlink4 connection status to all WebSocket clients"""
+    state.hblink_connected = connected
+    message = {
+        'type': 'hblink_status',
+        'data': {
+            'connected': connected,
+            'timestamp': datetime.now().isoformat()
+        }
+    }
+    
+    # Broadcast to all connected clients
+    disconnected_clients = set()
+    for client in state.websocket_clients:
+        try:
+            await client.send_json(message)
+        except Exception as e:
+            logger.debug(f"Failed to send status to client: {e}")
+            disconnected_clients.add(client)
+    
+    # Clean up disconnected clients
+    state.websocket_clients -= disconnected_clients
+
+
 class TCPProtocol(asyncio.Protocol):
     """TCP protocol handler for receiving events from hblink4"""
     
@@ -143,6 +168,15 @@ class TCPProtocol(asyncio.Protocol):
         peername = transport.get_extra_info('peername')
         logger.info(f"✅ HBlink4 connected via TCP from {peername}")
         self.transport = transport
+        
+        # Clear dashboard state on reconnect
+        # HBlink4 will re-send all current repeaters via repeater_connected events
+        logger.info("🔄 Clearing dashboard state - HBlink4 will resync current state")
+        state.repeaters.clear()
+        state.streams.clear()
+        
+        # Notify all browser clients that HBlink4 is connected
+        asyncio.create_task(broadcast_hblink_status(True))
     
     def data_received(self, data):
         """Called when TCP data received (handles framing)"""
@@ -170,6 +204,9 @@ class TCPProtocol(asyncio.Protocol):
             logger.warning(f"⚠️ HBlink4 TCP connection lost: {exc}")
         else:
             logger.info("HBlink4 TCP connection closed")
+        
+        # Notify all browser clients that HBlink4 is disconnected
+        asyncio.create_task(broadcast_hblink_status(False))
 
 
 class UnixProtocol(asyncio.Protocol):
@@ -184,6 +221,15 @@ class UnixProtocol(asyncio.Protocol):
         """Called when Unix socket connection established"""
         logger.info(f"✅ HBlink4 connected via Unix socket")
         self.transport = transport
+        
+        # Clear dashboard state on reconnect
+        # HBlink4 will re-send all current repeaters via repeater_connected events
+        logger.info("🔄 Clearing dashboard state - HBlink4 will resync current state")
+        state.repeaters.clear()
+        state.streams.clear()
+        
+        # Notify all browser clients that HBlink4 is connected
+        asyncio.create_task(broadcast_hblink_status(True))
     
     def data_received(self, data):
         """Called when data received (handles framing)"""
@@ -211,6 +257,9 @@ class UnixProtocol(asyncio.Protocol):
             logger.warning(f"⚠️ HBlink4 Unix socket connection lost: {exc}")
         else:
             logger.info("HBlink4 Unix socket connection closed")
+        
+        # Notify all browser clients that HBlink4 is disconnected
+        asyncio.create_task(broadcast_hblink_status(False))
 
 
 class EventReceiver:
@@ -335,8 +384,9 @@ class EventReceiver:
         
         elif event_type == 'repeater_disconnected':
             if data['repeater_id'] in state.repeaters:
-                state.repeaters[data['repeater_id']]['status'] = 'disconnected'
-                logger.info(f"Repeater disconnected: {data['repeater_id']}")
+                # Remove repeater from state immediately
+                del state.repeaters[data['repeater_id']]
+                logger.info(f"Repeater disconnected: {data['repeater_id']} ({data.get('callsign', 'UNKNOWN')}) - reason: {data.get('reason', 'unknown')}")
         
         elif event_type == 'repeater_options_updated':
             # RPTO received - update TG lists in real-time
@@ -513,7 +563,8 @@ async def websocket_endpoint(websocket: WebSocket):
             'streams': list(state.streams.values()),
             'events': list(state.events)[-50:],
             'stats': state.stats,
-            'last_heard': state.last_heard
+            'last_heard': state.last_heard,
+            'hblink_connected': state.hblink_connected
         }
     })
     

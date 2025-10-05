@@ -51,7 +51,16 @@
         }
         
         .connection-status.connected { background: #10b981; color: white; }
-        .connection-status.disconnected { background: #ef4444; color: white; }
+        .connection-status.disconnected { 
+            background: #ef4444; 
+            color: white; 
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
         
         .stats-bar {
             display: grid;
@@ -94,13 +103,14 @@
             font-weight: 600;
         }
         
-        /* Repeater Card Layout */
+        /* Repeater Card Layout - Compact Version */
+        /* ORIGINAL VALUES FOR REVERT: padding: 2px, margin-bottom: 10px, border-radius: 8px */
         .repeater-card {
             background: #1e293b;
-            border-radius: 8px;
-            padding: 2px;
-            margin-bottom: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border-radius: 6px;
+            padding: 1px;
+            margin-bottom: 6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
             display: flex;
             flex-wrap: wrap; /* Allow wrapping when too narrow */
             justify-content: space-between;
@@ -111,16 +121,16 @@
         
         .repeater-info {
             flex: 0 0 auto; /* Don't grow, don't shrink, auto width */
-            padding: 8px;
+            padding: 6px;
             min-width: 200px; /* Minimum width before wrapping */
             max-width: 400px; /* Don't let metadata section get too wide */
         }
         
         .repeater-header {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 600;
             color: #38bdf8;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
         
         .repeater-location {
@@ -133,9 +143,9 @@
                 display: grid;
                 grid-template-columns: 140px auto 1fr;
                 grid-template-rows: auto auto;
-                gap: 4px 12px;
+                gap: 2px 10px;
                 font-size: 0.85em;
-                margin-top: 4px;
+                margin-top: 2px;
             }
         
         /* Hide metadata by default on medium/small screens - only show on large or when explicitly stacked */
@@ -165,8 +175,8 @@
         .slots-container {
             display: flex;
             flex-direction: column;
-            gap: 6px;
-            padding: 8px;
+            gap: 4px;
+            padding: 6px;
             flex: 0 1 auto; /* Don't grow, allow shrink, auto width */
             min-width: min-content; /* Shrink to fit content */
             max-width: 100%; /* Don't exceed container */
@@ -177,13 +187,13 @@
         .slot {
             background: #0f172a;
             border-radius: 4px;
-            padding: 8px 12px;
+            padding: 6px 10px;
             border-left: 3px solid #334155;
             display: grid;
             grid-template-columns: 55px 70px 75px 110px 55px 70px; /* Fixed optimal widths with padding */
-            gap: 12px;
+            gap: 10px;
             align-items: center;
-            font-size: 13px;
+            font-size: 12px;
             min-width: 0; /* Allow grid items to shrink */
             width: max-content; /* Shrink to fit content */
         }
@@ -210,12 +220,12 @@
         .slot-col {
             display: flex;
             flex-direction: column;
-            gap: 2px;
+            gap: 1px;
         }
         
         .slot-col-label {
             color: #64748b;
-            font-size: 10px;
+            font-size: 9px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -237,9 +247,9 @@
         }
         
         .slot-status-badge {
-            padding: 3px 8px;
-            border-radius: 8px;
-            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 8px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -607,11 +617,12 @@
             
             ws.onopen = () => {
                 console.log('WebSocket connected');
-                updateConnectionStatus(true);
+                // Don't update connection status here - wait for HBlink status from server
             };
             
             ws.onclose = () => {
                 console.log('WebSocket disconnected');
+                // When we lose connection to dashboard server, we're definitely not connected to HBlink
                 updateConnectionStatus(false);
                 // Reconnect after 3 seconds
                 reconnectTimeout = setTimeout(connectWebSocket, 3000);
@@ -631,11 +642,18 @@
                     state.stats = data.data.stats;
                     state.last_heard = data.data.last_heard || [];
                     
+                    // Update HBlink connection status
+                    updateConnectionStatus(data.data.hblink_connected || false);
+                    
                     updateRepeaters(state.repeaters);
                     updateStreams(state.streams);
                     updateEvents(state.events);
                     updateStats(state.stats, state.repeaters, state.streams);
                     updateLastHeard(state.last_heard);
+                } else if (data.type === 'hblink_status') {
+                    // HBlink4 connection status changed
+                    console.log('HBlink4 connection status:', data.data.connected ? 'connected' : 'disconnected');
+                    updateConnectionStatus(data.data.connected);
                 } else if (data.type === 'stats_reset') {
                     // Midnight reset - update stats immediately
                     state.stats = data.data;
@@ -669,9 +687,43 @@
         
         function updateConnectionStatus(connected) {
             const el = document.getElementById('connectionStatus');
-            el.textContent = connected ? 'Connected' : '🔄 Click to Reconnect';
-            el.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
-            el.title = connected ? 'Click to reload page' : 'Reconnect to server';
+            
+            if (connected) {
+                el.textContent = 'HBlink4 Connected';
+                el.className = 'connection-status connected';
+                el.title = 'Dashboard connected to HBlink4 - Click to reload page';
+            } else {
+                el.textContent = '⚠️ HBlink4 Disconnected';
+                el.className = 'connection-status disconnected';
+                el.title = 'Dashboard not connected to HBlink4 server';
+                
+                // Clear stale data from display
+                console.log('🧹 Clearing stale data - HBlink4 disconnected');
+                state.repeaters = {};
+                state.streams = [];
+                
+                // Clear repeaters display
+                const repeatersList = document.getElementById('repeatersList');
+                if (repeatersList) {
+                    repeatersList.innerHTML = '<div style="color: #94a3b8; padding: 20px; text-align: center;">Dashboard not connected to HBlink4</div>';
+                }
+                
+                // Clear events display
+                const eventsList = document.getElementById('eventsList');
+                if (eventsList) {
+                    eventsList.innerHTML = '<div class="event-item">Waiting for HBlink4 connection...</div>';
+                }
+                
+                // Clear last heard display
+                const lastHeardList = document.getElementById('lastHeardList');
+                if (lastHeardList) {
+                    lastHeardList.innerHTML = '<div style="color: #94a3b8; padding: 10px; text-align: center;">No data</div>';
+                }
+                
+                // Reset stats to zero
+                document.getElementById('statRepeaters').textContent = '0';
+                document.getElementById('statStreams').textContent = '0';
+            }
         }
         
         function updateStats(stats, repeaters, streams) {
@@ -1057,6 +1109,22 @@
                     state.stats.total_calls_today = data.total_calls_today || 0;
                     updateStats(state.stats);
                     break;
+                    
+                case 'repeater_disconnected':
+                    // Remove repeater from state immediately
+                    if (state.repeaters && state.repeaters[data.repeater_id]) {
+                        delete state.repeaters[data.repeater_id];
+                        // Remove from DOM immediately
+                        const repeaterCard = document.querySelector(`[data-repeater-id="${data.repeater_id}"]`);
+                        if (repeaterCard) {
+                            repeaterCard.remove();
+                        }
+                        // Also clean up any streams from this repeater
+                        state.streams = state.streams.filter(s => s.repeater_id != data.repeater_id);
+                        // Update stats
+                        updateStats(state.stats, state.repeaters, state.streams);
+                    }
+                    break;
             }
         }
         
@@ -1064,6 +1132,8 @@
             switch(type) {
                 case 'repeater_connected':
                     return `Repeater ${data.radio_id} (${data.callsign || 'UNKNOWN'}) connected from ${data.address}`;
+                case 'repeater_disconnected':
+                    return `Repeater ${data.repeater_id} (${data.callsign || 'UNKNOWN'}) disconnected - ${data.reason || 'unknown reason'}`;
                 case 'stream_start':
                     return `Stream started: ${data.src_id} → TG ${data.dst_id} on repeater ${data.repeater_id} slot ${data.slot}`;
                 case 'stream_update':
@@ -1144,6 +1214,7 @@
         
         // Add click handler to connection status badge
         document.getElementById('connectionStatus').addEventListener('click', () => {
+            // Just reload the page - connection status is managed server-side
             location.reload();
         });
         

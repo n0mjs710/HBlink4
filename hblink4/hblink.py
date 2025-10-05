@@ -915,6 +915,13 @@ class HBProtocol(DatagramProtocol):
             # Log current state before removal
             LOGGER.debug(f'Removing repeater {int.from_bytes(repeater_id, "big")}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
+            # Emit event before removing so dashboard can update
+            self._events.emit('repeater_disconnected', {
+                'repeater_id': int.from_bytes(repeater_id, 'big'),
+                'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'Unknown',
+                'reason': reason
+            })
+            
             # Remove from active repeaters
             del self._repeaters[repeater_id]
             
