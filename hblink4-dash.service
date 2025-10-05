@@ -1,0 +1,25 @@
+[Unit]
+Description=HBlink4 Dashboard
+After=network.target hblink4.service
+Wants=hblink4.service
+
+[Service]
+Type=simple
+User=cort
+Group=cort
+WorkingDirectory=/home/cort/hblink4/dashboard
+ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/run_dashboard.py
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hblink4-dash
+
+[Install]
+WantedBy=multi-user.target

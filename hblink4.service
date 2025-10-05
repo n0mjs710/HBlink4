@@ -1,0 +1,24 @@
+[Unit]
+Description=HBlink4 DMR Server
+After=network.target
+
+[Service]
+Type=simple
+User=cort
+Group=cort
+WorkingDirectory=/home/cort/hblink4
+ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/run.py
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hblink4
+
+[Install]
+WantedBy=multi-user.target
