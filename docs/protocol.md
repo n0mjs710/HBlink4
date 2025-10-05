@@ -72,7 +72,36 @@ A server will, at a minimum, need to track a repeater in the following states:
    
    Note: All string fields are fixed length and should be null-padded if shorter than their allocated length.
 
-5. **RPTCL (Repeater Close)**
+5. **RPTO (Repeater Options)**
+   - Direction: Repeater → Server
+   - Format: `RPTO` + `radio_id[4 bytes]` + `options_string`
+   - Purpose: Send talkgroup configuration for each timeslot
+   - State: Must be in `connected` state
+   - Server Response: `RPTACK` + `radio_id[4 bytes]`
+   
+   **Options String Format:**
+   ```
+   TS1=tg1,tg2,tg3;TS2=tg4,tg5,tg6
+   ```
+   
+   **Behavior:**
+   - Repeater sends list of desired talkgroups for TS1 and TS2
+   - Server performs intersection with configured allowed talkgroups
+   - Only talkgroups present in both repeater request AND server config are accepted
+   - Server has final authority (config is master allow list)
+   - Updates repeater's active talkgroup lists
+   - Can be sent at any time after connection established
+   - Useful for dynamic talkgroup subscriptions
+   
+   **Example:**
+   ```
+   RPTO + [radio_id] + "TS1=1,2,3,91;TS2=10,99"
+   ```
+   
+   If server config allows: TS1=[1,2,3,4,5] and TS2=[10,20,30]  
+   Result: TS1=[1,2,3] (91 rejected), TS2=[10] (99 rejected)
+
+6. **RPTCL (Repeater Close)**
    - Direction: Repeater → Server
    - Format: `RPTCL` + `radio_id[4 bytes]`
    - Purpose: Graceful connection termination
