@@ -1,6 +1,6 @@
 # HomeBrew DMR Protocol Specification
 
-This document describes the HomeBrew DMR protocol used for communication between DMR repeaters and servers. The protocol is based on UDP packets and implements a quasi connection-oriented approach with authentication and keepalive mechanisms.
+This document describes the HomeBrew DMR protocol used for communication between DMR repeaters and servers *as implmented by this application*. There are extensions to HBP that are not used, and thus not documented. The primary source for information on HBP should be the MMDVMHost and DMRGateway code. While this code is poory commented and undocumented, it must still be considered primary. The protocol is based on UDP packets and implements a quasi connection-oriented approach with authentication and keepalive mechanisms.
 
 > **Important Note**: The protocol specification at wiki.brandmeister.network contains errors in the keepalive/ping mechanism. Specifically, it reverses the command prefixes, incorrectly stating that MSTPING is sent from repeater to server and RPTPONG is sent back. The correct flow is: repeater sends RPTPING and server responds with MSTPONG. This document provides the correct implementation.
 
@@ -51,24 +51,24 @@ A server will, at a minimum, need to track a repeater in the following states:
    - Total Length: 302 bytes
    
    Configuration Data Fields (all fields are fixed length):
-   | Field         | Offset | Length | Description |
-   |---------------|--------|--------|-------------|
-   | Command       | 0      | 4      | 'RPTC' |
-   | Radio ID      | 4      | 4      | 32-bit DMR ID |
-   | Callsign      | 8      | 8      | Station callsign |
-   | RX Frequency  | 16     | 9      | Receive frequency |
-   | TX Frequency  | 25     | 9      | Transmit frequency |
-   | TX Power      | 34     | 2      | Transmit power |
-   | Color Code    | 36     | 2      | DMR color code (RF air interface only, not used by server) |
-   | Latitude      | 38     | 8      | Station latitude |
-   | Longitude     | 46     | 9      | Station longitude |
-   | Height        | 55     | 3      | Antenna height |
+   | Field         | Offset | Length | Description                  |
+   |---------------|--------|--------|------------------------------|
+   | Command       | 0      | 4      | 'RPTC'                       |
+   | Radio ID      | 4      | 4      | 32-bit DMR ID                |
+   | Callsign      | 8      | 8      | Station callsign             |
+   | RX Frequency  | 16     | 9      | Receive frequency            |
+   | TX Frequency  | 25     | 9      | Transmit frequency           |
+   | TX Power      | 34     | 2      | Transmit power               |
+   | Color Code    | 36     | 2      | DMR color code               |
+   | Latitude      | 38     | 8      | Station latitude             |
+   | Longitude     | 46     | 9      | Station longitude            |
+   | Height        | 55     | 3      | Antenna height               |
    | Location      | 58     | 20     | Station location description |
-   | Description   | 78     | 19     | Station description |
-   | Slots         | 97     | 1      | Enabled timeslots |
-   | URL           | 98     | 124    | Station URL |
-   | Software ID   | 222    | 40     | Software identifier |
-   | Package ID    | 262    | 40     | Package identifier |
+   | Description   | 78     | 19     | Station description          |
+   | Slots         | 97     | 1      | Enabled timeslots            |
+   | URL           | 98     | 124    | Station URL                  |
+   | Software ID   | 222    | 40     | Software identifier          |
+   | Package ID    | 262    | 40     | Package identifier           |
    
    Note: All string fields are fixed length and should be null-padded if shorter than their allocated length.
 
@@ -154,16 +154,16 @@ A server will, at a minimum, need to track a repeater in the following states:
 
    **DMRD Packet Structure:**
    
-   | Field       | Offset | Length | Description |
-   |-------------|--------|--------|-------------|
-   | Command     | 0      | 4      | 'DMRD' |
-   | Sequence    | 4      | 1      | Packet sequence number (0-255) |
-   | RF Source   | 5      | 3      | Source radio ID (24-bit) |
+   | Field       | Offset | Length | Description                       |
+   |-------------|--------|--------|-----------------------------------|
+   | Command     | 0      | 4      | 'DMRD'                            |
+   | Sequence    | 4      | 1      | Packet sequence number (0-255)    |
+   | RF Source   | 5      | 3      | Source radio ID (24-bit)          |
    | Destination | 8      | 3      | Destination talkgroup/ID (24-bit) |
-   | Radio ID    | 11     | 4      | Repeater ID (32-bit) |
-   | _bits       | 15     | 1      | Control bits (see below) |
-   | Stream ID   | 16     | 4      | Unique stream identifier |
-   | Payload     | 20     | 33     | DMR voice/data payload |
+   | Radio ID    | 11     | 4      | Repeater ID (32-bit)              |
+   | _bits       | 15     | 1      | Control bits (see below)          |
+   | Stream ID   | 16     | 4      | Unique stream identifier          |
+   | Payload     | 20     | 33     | DMR voice/data payload            |
 
    **_bits Field (byte 15):**
    - Bit 7: Timeslot (0=Slot 1, 1=Slot 2)
@@ -176,20 +176,6 @@ A server will, at a minimum, need to track a repeater in the following states:
    - Bits 0-3: Reserved
 
    **DMR Stream Terminator Detection:**
-   
-   ⚠️ **NOT YET IMPLEMENTED**: Sync pattern-based terminator detection not working yet.
-   
-   Real-world testing shows that sync patterns extracted from Homebrew packets 
-   (e.g., `037105f00fac`, `b9e881526173`) do not match the documented ETSI standard 
-   patterns shown below. This may be due to FEC encoding, protocol differences, or 
-   other factors that need investigation.
-   
-   **Current Implementation: Fast Terminator Detection (200ms threshold)**
-   - When a new stream attempts to start on an occupied slot
-   - Immediate detection via packet header flags (~60ms) ✅
-   - Fallback to 2.0s timeout if terminator packet lost
-   
-   **Immediate Terminator Detection** (IMPLEMENTED)
    
    In the Homebrew protocol, terminator frames are indicated in byte 15:
    - Bits 4-5 (frame type): Must be 0x2 (HBPF_DATA_SYNC)
@@ -211,16 +197,16 @@ A server will, at a minimum, need to track a repeater in the following states:
 
 1. **Initial Connection**
    ```
-   Repeater                    Server
-      |                          |
+   Repeater                   Server
+      |                         |
       |---------- RPTL -------->| (Login Request)
-      |                          |
+      |                         |
       |<-------- MSTCL ---------|
-      |                          |
+      |                         |
       |---------- RPTK -------->| (Authentication)
-      |                          |
+      |                         |
       |---------- RPTC -------->| (Configuration)
-      |                          |
+      |                         |
       |<-------- RPTA ---------|| (Accept)
    ```
 
