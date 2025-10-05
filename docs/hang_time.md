@@ -147,65 +147,6 @@ A stream progresses through three states:
 | slot=None     | <--- Any source can use slot
 +---------------+
 ```
-
-## Code Implementation
-
-### StreamState Changes
-
-Added two new elements to `StreamState`:
-
-```python
-@dataclass
-class StreamState:
-    # ... existing fields ...
-    ended: bool = False      # True when stream has timed out
-    
-    def is_in_hang_time(self, timeout: float, hang_time: float) -> bool:
-        """Check if stream is in hang time period"""
-        if not self.ended:
-            return False
-        time_since_last = time() - self.last_seen
-        return timeout <= time_since_last < (timeout + hang_time)
-```
-
-### Timeout Checking
-
-Modified `_check_stream_timeouts()` to implement two-phase cleanup:
-
-```python
-def _check_stream_timeouts(self):
-    stream_timeout = CONFIG.get('global', {}).get('stream_timeout', 2.0)
-    hang_time = CONFIG.get('global', {}).get('stream_hang_time', 3.0)
-    
-    for stream in active_streams:
-        if not stream.is_active(stream_timeout):
-            if not stream.ended:
-                # Phase 1: Mark as ended, enter hang time
-                stream.ended = True
-                log("entering hang time")
-            elif not stream.is_in_hang_time(stream_timeout, hang_time):
-                # Phase 2: Hang time expired, clear slot
-                clear_slot()
-```
-
-### Stream Start Logic
-
-Modified `_handle_stream_start()` to check hang time:
-
-```python
-def _handle_stream_start(self, repeater, rf_src, dst_id, slot, stream_id):
-    current_stream = repeater.get_slot_stream(slot)
-    
-    if current_stream and current_stream.ended:
-        # Slot is in hang time
-        if current_stream.rf_src == rf_src:
-            # Same source - ALLOW continuation
-            # Fall through to create new stream
-        else:
-            # Different source - DENY
-            return False
-```
-
 ## Logging
 
 ### Stream End via Terminator (Primary Method)
@@ -322,45 +263,12 @@ The primary method detects explicit DMR terminator frames:
 - Frame type and dtype_vseq indicate terminator
 - When detected: Immediately ends stream and starts hang time
 
-**Implementation**:
-```python
-def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
-    """Check if a DMR packet is a stream terminator."""
-    # Extract the data type / voice sequence from bits 0-3 of byte 15
-    _bits = data[15]
-    _dtype_vseq = _bits & 0xF
-    
-    # Terminator: frame_type == 2 (DATA_SYNC) and dtype_vseq == 2 (SLT_VTERM)
-    return frame_type == 0x2 and _dtype_vseq == 0x2
-
-# In packet handler:
-if _is_terminator and current_stream and not current_stream.ended:
-    current_stream.ended = True  # End immediately
-    # Start hang time countdown
-```
-
 **Benefits**:
 - ✅ Immediate stream end (~60ms after PTT release)
 - ✅ Fast slot turnaround for new conversations
 - ✅ Accurate hang time start
 - ✅ Better slot utilization
 - ✅ 3x faster than timeout-based detection
-
-**Current Status**: ✅ Fully implemented and tested with live repeater traffic.
-
-### Tier 2: Timeout Detection (Fallback)
-
-The fallback method detects stream end by monitoring packet arrival:
-- If no packets received for `stream_timeout` (2.0s default)
-- Stream is marked as ended and hang time begins
-- Used only when terminator packet is lost or sync decoding not yet implemented
-
-**Why Two Tiers?**:
-- Primary (terminator): Fast detection under normal conditions
-- Fallback (timeout): Ensures cleanup when terminator packet is lost
-- Reliable: System works even if terminator detection is incomplete
-
-**Timeout Value**: Set to 2.0 seconds (default) to handle worst-case packet loss while providing reasonable cleanup delay.
 
 ## Testing
 
@@ -372,13 +280,3 @@ Comprehensive tests in `tests/test_hang_time.py`:
 - ✅ Same source can resume during hang time
 - ✅ Different source is denied during hang time
 - ✅ Edge cases (boundaries, zero hang time, etc.)
-
-## Future Enhancements
-
-Possible improvements:
-
-1. **Priority Sources**: Allow certain sources to override hang time
-2. **Talkgroup-Specific**: Different hang times per talkgroup
-3. **Load-Based**: Reduce hang time when slots are congested
-4. **Voice Activity**: Use DMR voice frames to detect actual speech
-5. **Statistics**: Track hang time effectiveness and collisions
