@@ -143,6 +143,10 @@
             font-weight: 500;
         }
         
+        .repeater-meta-label.rpto-tgs {
+            color: #60a5fa;
+        }
+        
         /* Slot Display */
         .slots-container {
             display: flex;
@@ -551,8 +555,8 @@
                                     </div>
                                     ` : '<div></div>'}
                                     ${r.slot1_talkgroups && r.slot1_talkgroups.length > 0 ? `
-                                    <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">TS1 TGs:</span>
+                                    <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
+                                        <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS1 TGs:</span>
                                         <span>${r.slot1_talkgroups.join(', ')}</span>
                                     </div>
                                     ` : '<div></div>'}
@@ -569,8 +573,8 @@
                                     </div>
                                     ` : '<div></div>'}
                                     ${r.slot2_talkgroups && r.slot2_talkgroups.length > 0 ? `
-                                    <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">TS2 TGs:</span>
+                                    <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
+                                        <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS2 TGs:</span>
                                         <span>${r.slot2_talkgroups.join(', ')}</span>
                                     </div>
                                     ` : '<div></div>'}

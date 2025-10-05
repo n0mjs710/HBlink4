@@ -315,6 +315,14 @@ class EventReceiver:
                 state.repeaters[data['repeater_id']]['status'] = 'disconnected'
                 logger.info(f"Repeater disconnected: {data['repeater_id']}")
         
+        elif event_type == 'repeater_options_updated':
+            # RPTO received - update TG lists in real-time
+            if data['repeater_id'] in state.repeaters:
+                state.repeaters[data['repeater_id']]['slot1_talkgroups'] = data.get('slot1_talkgroups', [])
+                state.repeaters[data['repeater_id']]['slot2_talkgroups'] = data.get('slot2_talkgroups', [])
+                state.repeaters[data['repeater_id']]['rpto_received'] = data.get('rpto_received', False)
+                logger.info(f"Repeater options updated via RPTO: {data['repeater_id']}")
+        
         elif event_type == 'stream_start':
             key = f"{data['repeater_id']}.{data['slot']}"
             
