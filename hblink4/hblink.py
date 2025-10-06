@@ -946,8 +946,21 @@ class HBProtocol(DatagramProtocol):
                 # Same repeater reconnecting from same IP:port
                 old_state = repeater.connection_state
                 LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} reconnecting while in state {old_state}')
+                # Preserve existing salt on login retry
+                if old_state == 'login':
+                    existing_salt = repeater.salt
+                    repeater = RepeaterState(repeater_id=repeater_id, ip=ip, port=port)
+                    repeater.salt = existing_salt  # Reuse same salt
+                    repeater.connection_state = 'login'
+                    self._repeaters[repeater_id] = repeater
+                    
+                    # Send login ACK with same salt
+                    salt_bytes = repeater.salt.to_bytes(4, 'big')
+                    self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
+                    LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} login retry from {ip}:{port}, resending same salt: {repeater.salt}')
+                    return
                 
-        # Create or update repeater state
+        # Create or update repeater state (fresh login)
         repeater = RepeaterState(repeater_id=repeater_id, ip=ip, port=port)
         repeater.connection_state = 'login'
         self._repeaters[repeater_id] = repeater
