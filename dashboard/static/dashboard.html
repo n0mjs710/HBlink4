@@ -603,7 +603,7 @@
         </div>
         
         <!-- Repeaters with Inline Slot Status -->
-        <h2 class="section-header">Repeaters</h2>
+        <h2 class="section-header">Repeaters <span id="repeaterCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
         <div class="card">
             <div id="repeatersContainer"></div>
         </div>
@@ -808,6 +808,13 @@
         
         function updateRepeaters(repeaters) {
             const container = document.getElementById('repeatersContainer');
+            const countElement = document.getElementById('repeaterCount');
+            
+            // Update the count in the header
+            const connectedCount = repeaters.filter(r => r.status === 'connected').length;
+            if (countElement) {
+                countElement.textContent = connectedCount > 0 ? `(${connectedCount})` : '';
+            }
             
             if (repeaters.length === 0) {
                 container.innerHTML = '<p style="color: #64748b; text-align: center; padding: 20px;">No repeaters connected</p>';
