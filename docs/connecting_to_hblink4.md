@@ -66,9 +66,11 @@ If you're hosting an HBlink4 server, you need to configure your firewall and rou
 **HBlink4 Server:**
 - **UDP 62031** - IPv4 repeater connections (default)
 - **UDP 62032** - IPv6 repeater connections (default, if IPv6 enabled)
+  - Note: Most firewalls don't require separate IPv4/IPv6 rules per port
+  - If using same port for both (e.g., 62031), one rule typically covers both protocols
 
 **Dashboard (optional, for remote access):**
-- **TCP 8080** - Web dashboard HTTP (default)
+- **TCP 8080** - Web dashboard HTTP (default, both IPv4 and IPv6)
 - Or use a reverse proxy (nginx/apache) on port 80/443
 
 #### Firewall Configuration
@@ -76,10 +78,15 @@ If you're hosting an HBlink4 server, you need to configure your firewall and rou
 Configure your firewall to allow the following inbound traffic:
 
 ```
-ALLOW: Protocol=UDP, Port=62031, Direction=INBOUND  # HBlink4 IPv4
-ALLOW: Protocol=UDP, Port=62032, Direction=INBOUND  # HBlink4 IPv6 (optional)
-ALLOW: Protocol=TCP, Port=8080, Direction=INBOUND   # Dashboard (optional)
+# HBlink4 repeater ports (applies to both IPv4 and IPv6)
+ALLOW: Protocol=UDP, Port=62031, Direction=INBOUND  # IPv4 repeaters
+ALLOW: Protocol=UDP, Port=62032, Direction=INBOUND  # IPv6 repeaters (if enabled)
+
+# Dashboard web interface (applies to both IPv4 and IPv6)
+ALLOW: Protocol=TCP, Port=8080, Direction=INBOUND   # Dashboard HTTP/WebSocket
 ```
+
+**Note:** Most modern firewalls automatically handle both IPv4 and IPv6 with a single rule per port. If your firewall requires separate rules for each protocol, you may need to duplicate rules for IPv4 and IPv6.
 
 Apply these rules using your firewall management tool (iptables, firewalld, ufw, Windows Firewall, cloud security groups, etc.).
 
