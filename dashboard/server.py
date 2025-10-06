@@ -484,8 +484,11 @@ class EventReceiver:
         
         # Add to event log (only for user-facing on-air activity events)
         # Skip system events like repeater_connected, repeater_disconnected, hang_time_expired, repeater_keepalive
+        # Skip TX/assumed streams from the events log (but they're still tracked in state.streams for repeater cards)
         if event_type in ['stream_start', 'stream_end']:
-            state.events.append(event)
+            # Only add RX streams to the events log (TX streams have is_assumed=True)
+            if not data.get('is_assumed', False):
+                state.events.append(event)
         
         # For stream events, include updated last_heard list in the event
         if event_type in ['stream_start', 'stream_end', 'hang_time_expired']:

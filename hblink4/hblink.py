@@ -351,19 +351,20 @@ class HBProtocol(DatagramProtocol):
                        f'packets={stream.packet_count}, '
                        f'{reason_text}')
         
-        # Emit stream_end event only for RX streams (not TX/assumed streams)
-        if not stream.is_assumed:
-            self._events.emit('stream_end', {
-                'repeater_id': int.from_bytes(repeater_id, 'big'),
-                'slot': slot,
-                'src_id': int.from_bytes(stream.rf_src, 'big'),
-                'dst_id': int.from_bytes(stream.dst_id, 'big'),
-                'duration': round(duration, 2),
-                'packets': stream.packet_count,
-                'end_reason': end_reason,
-                'hang_time': hang_time,
-                'call_type': stream.call_type
-            })
+        # Emit stream_end event for repeater card display
+        # Dashboard will filter TX streams (is_assumed=True) from Recent Events log
+        self._events.emit('stream_end', {
+            'repeater_id': int.from_bytes(repeater_id, 'big'),
+            'slot': slot,
+            'src_id': int.from_bytes(stream.rf_src, 'big'),
+            'dst_id': int.from_bytes(stream.dst_id, 'big'),
+            'duration': round(duration, 2),
+            'packets': stream.packet_count,
+            'end_reason': end_reason,
+            'hang_time': hang_time,
+            'call_type': stream.call_type,
+            'is_assumed': stream.is_assumed
+        })
         
         # Decrement forwarding stats if this was an assumed (TX) stream
         if stream.is_assumed:
@@ -1441,8 +1442,7 @@ class HBProtocol(DatagramProtocol):
             self._end_stream(current_stream, repeater_id, _slot, time(), 'terminator')
         
         # Emit stream_update every 60 packets (10 superframes = 1 second)
-        # Only for RX streams - TX streams would clutter the dashboard
-        if current_stream and not current_stream.ended and not current_stream.is_assumed and current_stream.packet_count % 60 == 0:
+        if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
             self._events.emit('stream_update', {
                 'repeater_id': int.from_bytes(repeater_id, 'big'),
                 'slot': _slot,
@@ -1575,7 +1575,16 @@ class HBProtocol(DatagramProtocol):
                        f'src={int.from_bytes(rf_src, "big")}, '
                        f'dst={int.from_bytes(dst_id, "big")}')
             
-            # Don't emit stream_start event for TX streams - would clutter dashboard
+            # Emit stream_start event for repeater card display (but marked as assumed)
+            # Dashboard will filter these from Recent Events log
+            self._events.emit('stream_start', {
+                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
+                'slot': slot,
+                'src_id': int.from_bytes(rf_src, 'big'),
+                'dst_id': int.from_bytes(dst_id, 'big'),
+                'call_type': 'group',
+                'is_assumed': True
+            })
             
             # Update forwarding stats
             self._forwarding_stats['active_calls'] += 1
