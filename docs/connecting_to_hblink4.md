@@ -12,13 +12,13 @@ HBlink4 uses the HomeBrew DMR protocol for communication between repeaters/hotsp
 
 ```
 Repeater                    Server
-   |                          |
+   |                         |
    |---------- RPTL -------->| (Login Request)
    |<-------- MSTCL ---------|  (Challenge)
    |---------- RPTK -------->| (Authentication)
    |---------- RPTC -------->| (Configuration)
    |<-------- RPTACK --------|  (Accept)
-   |                          |
+   |                         |
    |-------- RPTPING ------->| (Keepalive)
    |<------- MSTPONG --------|
 ```
@@ -54,6 +54,174 @@ Before connecting, the server administrator must add your repeater to their `con
   }
 }
 ```
+
+## Firewall and NAT Configuration
+
+### For HBlink4 Server Administrators
+
+If you're hosting an HBlink4 server, you need to configure your firewall and router to allow incoming connections.
+
+#### Required Ports
+
+**HBlink4 Server:**
+- **UDP 62031** - IPv4 repeater connections (default)
+- **UDP 62032** - IPv6 repeater connections (default, if IPv6 enabled)
+
+**Dashboard (optional, for remote access):**
+- **TCP 8080** - Web dashboard HTTP (default)
+- Or use a reverse proxy (nginx/apache) on port 80/443
+
+#### Firewall Configuration
+
+Configure your firewall to allow the following inbound traffic:
+
+```
+ALLOW: Protocol=UDP, Port=62031, Direction=INBOUND  # HBlink4 IPv4
+ALLOW: Protocol=UDP, Port=62032, Direction=INBOUND  # HBlink4 IPv6 (optional)
+ALLOW: Protocol=TCP, Port=8080, Direction=INBOUND   # Dashboard (optional)
+```
+
+Apply these rules using your firewall management tool (iptables, firewalld, ufw, Windows Firewall, cloud security groups, etc.).
+
+#### Router/NAT Port Forwarding
+
+If your HBlink4 server is behind a router/NAT:
+
+1. **Log into your router** (typically http://192.168.1.1 or similar)
+2. **Find Port Forwarding** section (may be called "Virtual Server", "NAT", or "Applications")
+3. **Add port forwarding rules**:
+
+```
+Forward: External_Port=62031 -> Internal_IP=[server], Internal_Port=62031, Protocol=UDP
+Forward: External_Port=62032 -> Internal_IP=[server], Internal_Port=62032, Protocol=UDP
+Forward: External_Port=8080 -> Internal_IP=[server], Internal_Port=8080, Protocol=TCP (optional)
+```
+
+**Example:**
+```
+Service Name: HBlink4-IPv4
+External Port: 62031
+Internal Port: 62031
+Protocol: UDP
+Internal IP: 192.168.1.100  # Your server's local IP address
+```
+
+#### Testing Connectivity
+
+**From outside your network:**
+
+```bash
+# Test if port is reachable (from remote machine)
+nc -vuz your-public-ip 62031
+nc -vuz your-public-ip 62032
+
+# Or use online port checking tools
+# https://www.yougetsignal.com/tools/open-ports/
+```
+
+**Check your public IP:**
+```bash
+curl ifconfig.me
+# or
+curl icanhazip.com
+```
+
+### For Repeater/Hotspot Operators
+
+If you're connecting TO an HBlink4 server, you typically don't need any special firewall configuration since you're making outbound connections.
+
+#### Outbound Traffic Requirements
+
+Your repeater/hotspot needs to make outbound connections:
+
+```
+ALLOW: Protocol=UDP, Destination=[server-ip], Port=62031, Direction=OUTBOUND
+```
+
+Most firewalls with stateful packet inspection will automatically allow the return traffic.
+
+### Cloud Hosting Considerations
+
+#### AWS (Amazon Web Services)
+
+Configure **Security Group** inbound rules:
+
+```
+Type: Custom UDP, Port: 62031, Source: 0.0.0.0/0 (or specific IPs)
+Type: Custom UDP, Port: 62032, Source: 0.0.0.0/0
+Type: Custom TCP, Port: 8080, Source: 0.0.0.0/0 (dashboard, optional)
+```
+
+Ensure **Network ACL** allows UDP traffic.
+
+#### Azure
+
+Add **Inbound Port Rules** to Network Security Group:
+
+```
+Port: 62031, Protocol: UDP, Source: Any
+Port: 62032, Protocol: UDP, Source: Any
+Port: 8080, Protocol: TCP, Source: Any (optional)
+```
+
+#### Google Cloud Platform (GCP)
+
+Create **Firewall Rule**:
+
+```
+Direction: Ingress
+Targets: All instances (or specific tags)
+Source: 0.0.0.0/0
+Protocols and ports: udp:62031,62032; tcp:8080
+```
+
+#### DigitalOcean
+
+Configure **Cloud Firewalls**:
+
+```
+Inbound: UDP ports 62031, 62032
+Inbound: TCP port 8080 (optional)
+Source: All IPv4 / All IPv6
+```
+
+### Dashboard Access Security
+
+If exposing the dashboard publicly, consider:
+
+1. **Use a reverse proxy** with HTTPS (nginx/apache + Let's Encrypt)
+2. **Add authentication** (HTTP basic auth or OAuth)
+3. **Restrict by IP** if accessing from known locations
+4. **Use VPN** for secure remote access
+5. **Keep dashboard on localhost** and access via SSH tunnel:
+
+```bash
+# SSH tunnel from remote machine
+ssh -L 8080:localhost:8080 user@your-server-ip
+
+# Then access http://localhost:8080 in your browser
+```
+
+### Troubleshooting Network Issues
+
+**Cannot connect to server:**
+- Verify server IP and port are correct
+- Check firewall rules on server (ensure UDP 62031/62032 allowed)
+- Verify NAT/port forwarding if behind router
+- Test with `nc -vuz server-ip port`
+- Check server is actually running: `sudo systemctl status hblink4`
+
+**Intermittent disconnections:**
+- Check for NAT session timeouts (increase timeout on router)
+- Verify keepalive packets are being sent
+- Check network stability and packet loss
+- Review MTU settings (especially over VPN)
+
+**Dashboard not accessible:**
+- Verify dashboard service is running: `sudo systemctl status hblink4-dash`
+- Check firewall allows TCP 8080
+- Confirm dashboard is binding to 0.0.0.0 (not just 127.0.0.1)
+- Review dashboard logs: `journalctl -u hblink4-dash`
 
 ## Dynamic Talkgroup Subscription (RPTO)
 
@@ -177,6 +345,7 @@ If disconnected:
 
 HBlink4 is compatible with:
 
+- **MMDVMHost** - The original implmentation of Homebrew Repeater Protocol, and under the hood of most/all below
 - **Pi-Star** - Set mode to "Homebrew" and configure master server
 - **MMDVM_Bridge** - Use HBlink protocol mode
 - **OpenGD77** hotspots - Configure as Homebrew/HBlink
