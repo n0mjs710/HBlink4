@@ -78,14 +78,39 @@ For detailed configuration instructions, see the [Configuration Guide](docs/conf
 
 ## Running
 
-### Start all services (recommended)
+### Using systemd (recommended for production)
+
+For production deployments, use the provided systemd service files to automatically start HBlink4 and the dashboard at boot:
+
+```bash
+# Copy service files to systemd directory
+sudo cp hblink4.service /etc/systemd/system/
+sudo cp hblink4-dash.service /etc/systemd/system/
+
+# Edit the service files to match your installation path
+sudo nano /etc/systemd/system/hblink4.service
+sudo nano /etc/systemd/system/hblink4-dash.service
+
+# Reload systemd, enable and start services
+sudo systemctl daemon-reload
+sudo systemctl enable hblink4 hblink4-dash
+sudo systemctl start hblink4 hblink4-dash
+
+# Check status
+sudo systemctl status hblink4
+sudo systemctl status hblink4-dash
+```
+
+For detailed installation instructions and troubleshooting, see [SYSTEMD.md](SYSTEMD.md).
+
+### Start all services (development)
 ```bash
 ./run_all.sh
 ```
 
 This starts both HBlink4 and the web dashboard. Access the dashboard at http://localhost:8080
 
-### Start services separately
+### Start services separately (development)
 ```bash
 # Start HBlink4 server
 python3 run.py
@@ -104,6 +129,8 @@ Comprehensive documentation is available in the `docs/` directory:
 
 - **[Configuration Guide](docs/configuration.md)** - Complete configuration reference with all settings explained
 - **[Dashboard README](dashboard/README.md)** - Dashboard features and usage
+- **[Systemd Service Installation](SYSTEMD.md)** - Production deployment with automatic startup
+- **[Connecting Repeaters](docs/connecting_to_hblink4.md)** - How to connect repeaters to HBlink4
 - **[Stream Tracking](docs/stream_tracking.md)** - How DMR transmission streams are managed
 - **[Hang Time](docs/hang_time.md)** - Preventing conversation interruption
 - **[Protocol Specification](docs/protocol.md)** - HomeBrew DMR protocol details
