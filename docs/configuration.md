@@ -242,29 +242,23 @@ The `blacklist` section defines patterns for blocking unwanted repeaters. Each p
 
 ### Match Types
 
-Only ONE match type can be used per pattern:
+Patterns support three match types (specify exactly **ONE** per pattern):
+- **Specific IDs**: `"ids"` - Array of DMR IDs
+- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive). **Multiple ranges allowed!**
+- **Callsign Patterns**: `"callsigns"` - Array of patterns with "*" wildcards
 
-1. **Specific IDs**:
-   ```json
-   "match": {
-       "ids": [310666, 310667]
-   }
-   ```
-
-2. **ID Ranges**:
-   ```json
-   "match": {
-       "id_ranges": [[315000, 315999]]
-   }
-   ```
-
-3. **Callsign Patterns**:
-   ```json
-   "match": {
-       "callsigns": ["BADACTOR*", "SPAM*"]
-   }
-   ```
-   Note: Callsign patterns support "*" as a wildcard.
+**Multiple Ranges Example:**
+```json
+{
+    "name": "Blocked Multiple Ranges",
+    "description": "Multiple unauthorized ranges",
+    "match": {
+        "id_ranges": [[1000, 1999], [5000, 5999], [9000, 9999]]
+    },
+    "reason": "Unauthorized network ranges"
+}
+```
+This will block any ID in the ranges 1000-1999, 5000-5999, or 9000-9999.
 
 ## Repeater Configurations
 
@@ -312,8 +306,25 @@ Each pattern defines a match rule and associated configuration:
 
 Like blacklist patterns, repeater patterns support three match types (only ONE per pattern):
 - **Specific IDs**: `"ids"` - Array of DMR IDs
-- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive)
+- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive). **Multiple ranges allowed!**
 - **Callsign Patterns**: `"callsigns"` - Array of patterns with "*" wildcards
+
+**Multiple Ranges Example:**
+```json
+{
+    "name": "Regional Network Repeaters",
+    "description": "All repeaters in regions 310, 311, and 312",
+    "match": {
+        "id_ranges": [[310000, 310999], [311000, 311999], [312000, 312999]]
+    },
+    "config": {
+        "passphrase": "regional_pass",
+        "slot1_talkgroups": [1, 2, 3],
+        "slot2_talkgroups": [3100, 3110, 3120]
+    }
+}
+```
+This matches any repeater ID in ranges 310000-310999, 311000-311999, or 312000-312999.
 
 ### Configuration Options
 

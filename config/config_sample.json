@@ -65,6 +65,14 @@
                 "reason": "Unauthorized DMR-MARC range"
             },
             {
+                "name": "Blocked Multiple Ranges",
+                "description": "Example of multiple ranges in one pattern",
+                "match": {
+                    "id_ranges": [[100000, 109999], [200000, 209999], [900000, 909999]]
+                },
+                "reason": "Multiple unauthorized network ranges"
+            },
+            {
                 "name": "Blocked Callsigns",
                 "description": "Banned operators",
                 "match": {
@@ -98,6 +106,18 @@
                     "passphrase": "wa0eda-network-key",
                     "slot1_talkgroups": [8],
                     "slot2_talkgroups": [31201, 31202]
+                }
+            },
+            {
+                "name": "Regional Network Repeaters",
+                "description": "Example of multiple ranges in one pattern - regions 310, 311, 312",
+                "match": {
+                    "id_ranges": [[310000, 310999], [311000, 311999], [312000, 312999]]
+                },
+                "config": {
+                    "passphrase": "regional-network-key",
+                    "slot1_talkgroups": [1, 2, 3, 8],
+                    "slot2_talkgroups": [3100, 3110, 3120]
                 }
             },
             {
