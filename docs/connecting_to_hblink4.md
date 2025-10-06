@@ -113,26 +113,6 @@ Protocol: UDP
 Internal IP: 192.168.1.100  # Your server's local IP address
 ```
 
-#### Testing Connectivity
-
-**From outside your network:**
-
-```bash
-# Test if port is reachable (from remote machine)
-nc -vuz your-public-ip 62031
-nc -vuz your-public-ip 62032
-
-# Or use online port checking tools
-# https://www.yougetsignal.com/tools/open-ports/
-```
-
-**Check your public IP:**
-```bash
-curl ifconfig.me
-# or
-curl icanhazip.com
-```
-
 ### For Repeater/Hotspot Operators
 
 If you're connecting TO an HBlink4 server, you typically don't need any special firewall configuration since you're making outbound connections.
@@ -147,82 +127,7 @@ ALLOW: Protocol=UDP, Destination=[server-ip], Port=62031, Direction=OUTBOUND
 
 Most firewalls with stateful packet inspection will automatically allow the return traffic.
 
-### Cloud Hosting Considerations
-
-#### AWS (Amazon Web Services)
-
-Configure **Security Group** inbound rules:
-
-```
-Type: Custom UDP, Port: 62031, Source: 0.0.0.0/0 (or specific IPs)
-Type: Custom UDP, Port: 62032, Source: 0.0.0.0/0
-Type: Custom TCP, Port: 8080, Source: 0.0.0.0/0 (dashboard, optional)
-```
-
-Ensure **Network ACL** allows UDP traffic.
-
-#### Azure
-
-Add **Inbound Port Rules** to Network Security Group:
-
-```
-Port: 62031, Protocol: UDP, Source: Any
-Port: 62032, Protocol: UDP, Source: Any
-Port: 8080, Protocol: TCP, Source: Any (optional)
-```
-
-#### Google Cloud Platform (GCP)
-
-Create **Firewall Rule**:
-
-```
-Direction: Ingress
-Targets: All instances (or specific tags)
-Source: 0.0.0.0/0
-Protocols and ports: udp:62031,62032; tcp:8080
-```
-
-#### DigitalOcean
-
-Configure **Cloud Firewalls**:
-
-```
-Inbound: UDP ports 62031, 62032
-Inbound: TCP port 8080 (optional)
-Source: All IPv4 / All IPv6
-```
-
-### Dashboard Access Security
-
-If exposing the dashboard publicly, consider:
-
-1. **Use a reverse proxy** with HTTPS (nginx/apache + Let's Encrypt)
-2. **Add authentication** (HTTP basic auth or OAuth)
-3. **Restrict by IP** if accessing from known locations
-4. **Use VPN** for secure remote access
-5. **Keep dashboard on localhost** and access via SSH tunnel:
-
-```bash
-# SSH tunnel from remote machine
-ssh -L 8080:localhost:8080 user@your-server-ip
-
-# Then access http://localhost:8080 in your browser
-```
-
 ### Troubleshooting Network Issues
-
-**Cannot connect to server:**
-- Verify server IP and port are correct
-- Check firewall rules on server (ensure UDP 62031/62032 allowed)
-- Verify NAT/port forwarding if behind router
-- Test with `nc -vuz server-ip port`
-- Check server is actually running: `sudo systemctl status hblink4`
-
-**Intermittent disconnections:**
-- Check for NAT session timeouts (increase timeout on router)
-- Verify keepalive packets are being sent
-- Check network stability and packet loss
-- Review MTU settings (especially over VPN)
 
 **Dashboard not accessible:**
 - Verify dashboard service is running: `sudo systemctl status hblink4-dash`
@@ -414,14 +319,6 @@ HBlink4 is compatible with:
 - Ensure server is not overloaded
 - Review server timeout settings
 - Check for IP address changes (DHCP issues)
-
-## Security Considerations
-
-- **Passkeys**: Use strong, unique passkeys for each repeater
-- **Firewall**: Limit access to trusted repeater IPs when possible
-- **Monitoring**: Watch server logs for suspicious connection attempts
-- **Config Security**: Protect your `config.json` file (contains passkeys)
-- **Updates**: Keep HBlink4 updated for security patches
 
 ## Getting Help
 
