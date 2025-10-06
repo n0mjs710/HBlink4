@@ -35,22 +35,32 @@
         
         h1 { color: #38bdf8; font-size: 32px; }
         
+        .status-badges {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
         .connection-status {
             padding: 8px 16px;
             border-radius: 6px;
             font-size: 14px;
             font-weight: 500;
-            cursor: pointer;
             transition: all 0.2s ease;
             user-select: none;
         }
         
-        .connection-status:hover {
+        .connection-status.clickable {
+            cursor: pointer;
+        }
+        
+        .connection-status.clickable:hover {
             transform: scale(1.05);
             box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
         
         .connection-status.connected { background: #10b981; color: white; }
+        .connection-status.warning { background: #f59e0b; color: white; }
         .connection-status.disconnected { 
             background: #ef4444; 
             color: white; 
@@ -508,7 +518,10 @@
                     <div style="color: #64748b; font-size: 14px; margin-top: 4px;" id="serverName"></div>
                 </div>
             </div>
-            <div class="connection-status" id="connectionStatus">Connecting...</div>
+            <div class="status-badges">
+                <div class="connection-status clickable connected" id="wsStatus" title="WebSocket connection to dashboard server">Dashboard</div>
+                <div class="connection-status connected" id="hblinkStatus" title="Dashboard server connection to HBlink4">HBlink4</div>
+            </div>
         </header>
         
         <h2 class="section-header">Statistics</h2>
@@ -617,13 +630,14 @@
             
             ws.onopen = () => {
                 console.log('WebSocket connected');
-                // Don't update connection status here - wait for HBlink status from server
+                updateWebSocketStatus(true);
             };
             
             ws.onclose = () => {
                 console.log('WebSocket disconnected');
-                // When we lose connection to dashboard server, we're definitely not connected to HBlink
-                updateConnectionStatus(false);
+                updateWebSocketStatus(false);
+                // When we lose WebSocket, we also can't know HBlink status
+                updateHBlinkStatus(false);
                 // Reconnect after 3 seconds
                 reconnectTimeout = setTimeout(connectWebSocket, 3000);
             };
@@ -643,7 +657,7 @@
                     state.last_heard = data.data.last_heard || [];
                     
                     // Update HBlink connection status
-                    updateConnectionStatus(data.data.hblink_connected || false);
+                    updateHBlinkStatus(data.data.hblink_connected || false);
                     
                     updateRepeaters(state.repeaters);
                     updateStreams(state.streams);
@@ -653,7 +667,7 @@
                 } else if (data.type === 'hblink_status') {
                     // HBlink4 connection status changed
                     console.log('HBlink4 connection status:', data.data.connected ? 'connected' : 'disconnected');
-                    updateConnectionStatus(data.data.connected);
+                    updateHBlinkStatus(data.data.connected);
                 } else if (data.type === 'stats_reset') {
                     // Midnight reset - update stats immediately
                     state.stats = data.data;
@@ -685,17 +699,31 @@
             }
         }
         
-        function updateConnectionStatus(connected) {
-            const el = document.getElementById('connectionStatus');
+        function updateWebSocketStatus(connected) {
+            const el = document.getElementById('wsStatus');
             
             if (connected) {
-                el.textContent = 'HBlink4 Connected';
-                el.className = 'connection-status connected';
-                el.title = 'Dashboard connected to HBlink4 - Click to reload page';
+                el.textContent = '✓ Dashboard';
+                el.className = 'connection-status clickable connected';
+                el.title = 'Connected to dashboard server - Click to reload';
             } else {
-                el.textContent = '⚠️ HBlink4 Disconnected';
-                el.className = 'connection-status disconnected';
-                el.title = 'Dashboard not connected to HBlink4 server';
+                el.textContent = '🔄 Click to Reconnect';
+                el.className = 'connection-status clickable disconnected';
+                el.title = 'Disconnected from dashboard server';
+            }
+        }
+        
+        function updateHBlinkStatus(connected) {
+            const el = document.getElementById('hblinkStatus');
+            
+            if (connected) {
+                el.textContent = '✓ HBlink4';
+                el.className = 'connection-status connected';
+                el.title = 'Dashboard connected to HBlink4 server';
+            } else {
+                el.textContent = '✗ HBlink4';
+                el.className = 'connection-status warning';
+                el.title = 'Dashboard not connected to HBlink4';
                 
                 // Clear stale data from display
                 console.log('🧹 Clearing stale data - HBlink4 disconnected');
@@ -1212,11 +1240,28 @@
             }
         }, 30000);
         
-        // Add click handler to connection status badge
-        document.getElementById('connectionStatus').addEventListener('click', () => {
-            // Just reload the page - connection status is managed server-side
-            location.reload();
+        // Add click handlers to status badges
+        document.getElementById('wsStatus').addEventListener('click', () => {
+            const el = document.getElementById('wsStatus');
+            if (el.classList.contains('disconnected')) {
+                // Try to reconnect WebSocket immediately
+                console.log('🔄 Manual WebSocket reconnect requested');
+                if (reconnectTimeout) {
+                    clearTimeout(reconnectTimeout);
+                    reconnectTimeout = null;
+                }
+                if (ws) {
+                    ws.close();
+                }
+                connectWebSocket();
+            } else {
+                // Reload page when connected
+                location.reload();
+            }
         });
+        
+        // HBlink4 badge is not clickable - it's just a status indicator
+        // Users can't control the server-side connection from the browser
         
         // Initialize dashboard
         loadConfig();
