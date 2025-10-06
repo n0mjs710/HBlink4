@@ -71,20 +71,29 @@ HBlink4 is **dual-stack native** and can listen on both IPv4 and IPv6 simultaneo
 - Specific addresses can be used instead of wildcards (e.g., `"192.168.1.10"` or `"2001:db8::1"`)
 - Use `disable_ipv6: true` to force IPv4-only mode if IPv6 is broken on your network
 
+**Common Issue: "Address Already in Use" on IPv6 Bind**
+
+If you see an error like "address already in use" when binding IPv6 with the same port as IPv4, your system's IPv6 stack is in dual-stack mode (IPv6 can handle both IPv4 and IPv6 on the same port). This is **normal and expected** on many Linux systems.
+
+**Solutions:**
+1. **Use different ports** (simple): `port_ipv4: 62031`, `port_ipv6: 62032`
+2. **Disable IPv6** (IPv4-only): Set `disable_ipv6: true`
+3. **Let IPv6 handle both** (advanced): Set `bind_ipv4: ""` to disable IPv4 bind
+
 **Example configurations:**
 ```json
-// Dual-stack (both IPv4 and IPv6) - RECOMMENDED
+// Dual-stack with separate ports (RECOMMENDED if you see bind errors)
 "bind_ipv4": "0.0.0.0",
 "bind_ipv6": "::",
 "port_ipv4": 62031,
-"port_ipv6": 62031,
+"port_ipv6": 62032,
 
-// IPv4 only
+// IPv4 only (simple and reliable)
 "disable_ipv6": true,
 "bind_ipv4": "0.0.0.0",
 "port_ipv4": 62031,
 
-// Specific addresses
+// Specific addresses (no port conflict)
 "bind_ipv4": "192.168.1.10",
 "bind_ipv6": "2001:db8::1",
 "port_ipv4": 62031,

@@ -1747,9 +1747,22 @@ def main():
             protocol_v6 = HBProtocol()
             listener = reactor.listenUDP(port_ipv6, protocol_v6, interface=bind_ipv6)
             listeners.append(listener)
-            LOGGER.info(f'✓ HBlink4 listening on [{bind_ipv6}]:{port_ipv6} (UDP, IPv6/dual-stack)')
+            LOGGER.info(f'✓ HBlink4 listening on [{bind_ipv6}]:{port_ipv6} (UDP, IPv6)')
         except Exception as e:
-            LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
+            error_msg = str(e)
+            # Check if this is the common dual-stack port conflict
+            if 'address already in use' in error_msg.lower() or 'address in use' in error_msg.lower():
+                if port_ipv4 == port_ipv6 and bind_ipv4 and bind_ipv6 == '::':
+                    LOGGER.warning(f'⚠️  IPv6 bind to [::]:{port_ipv6} failed (port already in use by IPv4)')
+                    LOGGER.warning(f'⚠️  This is normal if your system uses dual-stack IPv6 (IPv6 handles both IPv4 and IPv6)')
+                    LOGGER.warning(f'⚠️  Solutions: 1) Use different ports (port_ipv4: {port_ipv4}, port_ipv6: {port_ipv4+1})')
+                    LOGGER.warning(f'⚠️             2) Set disable_ipv6: true to use IPv4-only')
+                    LOGGER.warning(f'⚠️             3) Set bind_ipv4: "" to let IPv6 handle both (if dual-stack works)')
+                else:
+                    LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
+            else:
+                LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
+            
             if bind_ipv6 != '::':
                 # If specific address failed, don't exit - maybe IPv4 worked
                 pass
