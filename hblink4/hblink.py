@@ -654,7 +654,21 @@ class HBProtocol(DatagramProtocol):
                 repeater = self._repeaters[repeater_id]
                 if repeater.connection_state == 'connected':
                     repeater.last_ping = time()
-                    repeater.missed_pings = 0
+                    # If missed_pings is being cleared, notify dashboard
+                    if repeater.missed_pings > 0:
+                        repeater.missed_pings = 0
+                        self.emit_event('repeater_connected', {
+                            'repeater_id': int.from_bytes(repeater_id, 'big'),
+                            'callsign': repeater.callsign,
+                            'radio_id': repeater.radio_id,
+                            'connection_state': repeater.connection_state,
+                            'missed_pings': 0,
+                            'last_ping': repeater.last_ping,
+                            'slot1_talkgroups': repeater.slot1_talkgroups,
+                            'slot2_talkgroups': repeater.slot2_talkgroups
+                        })
+                    else:
+                        repeater.missed_pings = 0
 
             # Process the packet
             if _command == DMRD:

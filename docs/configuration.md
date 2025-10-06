@@ -279,13 +279,26 @@ The `blacklist` section defines patterns for blocking unwanted repeaters. Each p
 
 ### Match Types
 
-Patterns support three match types (specify exactly **ONE** per pattern):
+Patterns support three match types (one or more per pattern):
 - **Specific IDs**: `"ids"` - Array of DMR IDs
-- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive). **Multiple ranges allowed!**
+- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive)
 - **Callsign Patterns**: `"callsigns"` - Array of patterns with "*" wildcards
 
-**Multiple Ranges Example:**
+Multiple match types in a single pattern are combined with OR logic (any match triggers the rule).
+
+**Examples:**
 ```json
+// Single match type
+{
+    "name": "Blocked Range",
+    "description": "Unauthorized range",
+    "match": {
+        "id_ranges": [[1000, 1999]]
+    },
+    "reason": "Unauthorized network"
+}
+
+// Multiple ID ranges
 {
     "name": "Blocked Multiple Ranges",
     "description": "Multiple unauthorized ranges",
@@ -294,8 +307,19 @@ Patterns support three match types (specify exactly **ONE** per pattern):
     },
     "reason": "Unauthorized network ranges"
 }
+
+// Multiple match types (IDs + ranges + callsigns)
+{
+    "name": "Blocked Combined",
+    "description": "Specific IDs, ranges, and callsigns",
+    "match": {
+        "ids": [123456],
+        "id_ranges": [[1000, 1999]],
+        "callsigns": ["BADACTOR*"]
+    },
+    "reason": "Network abuse"
+}
 ```
-This will block any ID in the ranges 1000-1999, 5000-5999, or 9000-9999.
 
 ## Repeater Configurations
 
@@ -306,11 +330,9 @@ The `repeater_configurations` section defines patterns for matching repeaters an
     "repeater_configurations": {
         "patterns": [...],
         "default": {
-            "enabled": true,
-            "timeout": 30,
             "passphrase": "default-key",
-            "talkgroups": [3100],
-            "description": "Default Configuration"
+            "slot1_talkgroups": [1],
+            "slot2_talkgroups": [2]
         }
     }
 }
@@ -325,9 +347,9 @@ Each pattern defines a match rule and associated configuration:
     "name": "Pattern Name",
     "description": "Optional description for documentation",
     "match": {
-        "ids": [312100, 312101]
-        // OR "id_ranges": [[312000, 312099]]
-        // OR "callsigns": ["WA0EDA*"]
+        "ids": [312100, 312101],
+        "id_ranges": [[312000, 312099]],
+        "callsigns": ["WA0EDA*"]
     },
     "config": {
         "passphrase": "secret-key",
@@ -341,27 +363,73 @@ Each pattern defines a match rule and associated configuration:
 
 ### Match Types
 
-Like blacklist patterns, repeater patterns support three match types (only ONE per pattern):
+Repeater patterns support three match types (one or more per pattern):
 - **Specific IDs**: `"ids"` - Array of DMR IDs
-- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive). **Multiple ranges allowed!**
+- **ID Ranges**: `"id_ranges"` - Array of [start, end] ranges (inclusive)
 - **Callsign Patterns**: `"callsigns"` - Array of patterns with "*" wildcards
 
-**Multiple Ranges Example:**
+Multiple match types in a single pattern are combined with OR logic (any match triggers the rule).
+
+**Match-All Pattern**: Use `"callsigns": ["*"]` to match any repeater (useful for catch-all patterns).
+
+**Examples:**
 ```json
+// Single ID range
 {
-    "name": "Regional Network Repeaters",
-    "description": "All repeaters in regions 310, 311, and 312",
+    "name": "KS-DMR Range",
+    "match": {
+        "id_ranges": [[312000, 312099]]
+    },
+    "config": {
+        "passphrase": "ks-dmr-key",
+        "slot1_talkgroups": [8, 9],
+        "slot2_talkgroups": [3120]
+    }
+}
+
+// Multiple ID ranges
+{
+    "name": "Regional Network",
+    "description": "Regions 310, 311, and 312",
     "match": {
         "id_ranges": [[310000, 310999], [311000, 311999], [312000, 312999]]
     },
     "config": {
-        "passphrase": "regional_pass",
+        "passphrase": "regional-key",
         "slot1_talkgroups": [1, 2, 3],
         "slot2_talkgroups": [3100, 3110, 3120]
     }
 }
+
+// Multiple match types combined
+{
+    "name": "KS-DMR Network",
+    "description": "All KS-DMR repeaters",
+    "match": {
+        "ids": [315035, 3129054],
+        "id_ranges": [[312001, 312099]],
+        "callsigns": ["WA0EDA*"]
+    },
+    "config": {
+        "passphrase": "network-key",
+        "slot1_talkgroups": [2, 9],
+        "slot2_talkgroups": [3120]
+    }
+}
+
+// Match-all pattern (catch-all for any repeater not matched above)
+{
+    "name": "Guest Repeaters",
+    "match": {
+        "callsigns": ["*"]
+    },
+    "config": {
+        "passphrase": "guest-key",
+        "slot1_talkgroups": [8],
+        "slot2_talkgroups": [3100]
+    }
+}
 ```
-This matches any repeater ID in ranges 310000-310999, 311000-311999, or 312000-312999.
 
 ### Configuration Options
 
@@ -391,12 +459,7 @@ The same talkgroup lists control BOTH directions:
 
 ### Pattern Matching Priority
 
-When multiple patterns could match a repeater, they are evaluated in this order:
-1. **Specific IDs** (highest priority)
-2. **ID Ranges**
-3. **Callsign patterns** (lowest priority)
-
-The first matching pattern is used.
+Patterns are evaluated in the order they appear in the configuration file. The first pattern that matches is used. Within each pattern, all match types (IDs, ID ranges, callsigns) are checked with OR logic.
 
 ## Talkgroup Definitions
 

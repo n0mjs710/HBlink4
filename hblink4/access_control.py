@@ -44,13 +44,19 @@ class BlacklistMatch:
     """Represents a blacklist pattern"""
     name: str
     description: str
-    match_type: Literal['specific_id', 'id_range', 'callsign']
-    pattern: PatternValue
-    reason: str
+    ids: List[int] = field(default_factory=list)
+    id_ranges: List[Tuple[int, int]] = field(default_factory=list)
+    callsigns: List[str] = field(default_factory=list)
+    reason: str = ''
 
     def __post_init__(self):
-        """Validate pattern matches the declared type"""
-        validate_pattern(self.match_type, self.pattern)
+        """Validate all patterns"""
+        if self.ids:
+            validate_pattern('specific_id', self.ids)
+        if self.id_ranges:
+            validate_pattern('id_range', self.id_ranges)
+        if self.callsigns:
+            validate_pattern('callsign', self.callsigns)
 
 @dataclass
 class RepeaterConfig:
@@ -59,32 +65,28 @@ class RepeaterConfig:
     slot1_talkgroups: List[int] = field(default_factory=list)
     slot2_talkgroups: List[int] = field(default_factory=list)
 
-MatchType = Literal['specific_id', 'id_range', 'callsign']
-
 @dataclass
 class PatternMatch:
     """Represents a pattern matching rule for repeater configuration"""
     name: str
     config: RepeaterConfig
-    match_type: Literal['specific_id', 'id_range', 'callsign']
-    pattern: PatternValue
+    # Support multiple match types in one pattern (evaluated with OR logic)
+    ids: List[int] = field(default_factory=list)
+    id_ranges: List[Tuple[int, int]] = field(default_factory=list)
+    callsigns: List[str] = field(default_factory=list)
 
     def __post_init__(self):
-        """Validate pattern matches the declared type"""
-        validate_pattern(self.match_type, self.pattern)
-
-def _extract_match_type(match_dict: Dict[str, Any]) -> Tuple[Literal['specific_id', 'id_range', 'callsign'], Any]:
-    """Helper to extract match type and pattern from a match dictionary"""
-    match_keys = [k for k in ['ids', 'id_ranges', 'callsigns'] if k in match_dict]
-    if len(match_keys) != 1:
-        raise InvalidPatternError(f"Must specify exactly one match type, found: {match_keys}")
-
-    if 'ids' in match_dict:
-        return 'specific_id', match_dict['ids']
-    elif 'id_ranges' in match_dict:
-        return 'id_range', [tuple(r) for r in match_dict['id_ranges']]
-    else:  # callsigns
-        return 'callsign', match_dict['callsigns']
+        """Validate all patterns"""
+        if self.ids:
+            validate_pattern('specific_id', self.ids)
+        if self.id_ranges:
+            validate_pattern('id_range', self.id_ranges)
+        if self.callsigns:
+            validate_pattern('callsign', self.callsigns)
+        
+        # At least one match type must be specified
+        if not (self.ids or self.id_ranges or self.callsigns):
+            raise InvalidPatternError(f"Pattern '{self.name}' must specify at least one match type")
 
 class RepeaterMatcher:
     """
@@ -101,53 +103,67 @@ class RepeaterMatcher:
         }))
 
     def _parse_blacklist(self, blacklist_config: Dict[str, Any]) -> List[BlacklistMatch]:
-        """Parse blacklist patterns from config"""
+        """Parse blacklist patterns from config - supports multiple match types per pattern"""
         result = []
         for pattern in blacklist_config['patterns']:
-            match_type, pattern_value = _extract_match_type(pattern['match'])
+            match_dict = pattern['match']
+            
+            # Extract all match types (can be multiple)
+            ids = match_dict.get('ids', [])
+            id_ranges = [tuple(r) for r in match_dict.get('id_ranges', [])]
+            callsigns = match_dict.get('callsigns', [])
+            
             result.append(BlacklistMatch(
                 name=pattern['name'],
                 description=pattern['description'],
-                match_type=match_type,
-                pattern=pattern_value,
+                ids=ids,
+                id_ranges=id_ranges,
+                callsigns=callsigns,
                 reason=pattern['reason']
             ))
         return result
 
     def _parse_patterns(self, patterns: List[Dict[str, Any]]) -> List[PatternMatch]:
-        """Parse pattern configurations from config file"""
+        """Parse pattern configurations from config file - supports multiple match types per pattern"""
         result = []
         for pattern in patterns:
-            match_type, pattern_value = _extract_match_type(pattern['match'])
+            match_dict = pattern['match']
             config = RepeaterConfig(**pattern['config'])
+            
+            # Extract all match types (can be multiple)
+            ids = match_dict.get('ids', [])
+            id_ranges = [tuple(r) for r in match_dict.get('id_ranges', [])]
+            callsigns = match_dict.get('callsigns', [])
+            
             result.append(PatternMatch(
                 name=pattern['name'],
                 config=config,
-                match_type=match_type,
-                pattern=pattern_value
+                ids=ids,
+                id_ranges=id_ranges,
+                callsigns=callsigns
             ))
         
-        # Sort by specificity: specific_id (0) -> id_range (1) -> callsign (2)
-        result.sort(key=lambda p: {'specific_id': 0, 'id_range': 1, 'callsign': 2}[p.match_type])
+        # No need to sort - patterns are evaluated in order, first match wins
         return result
 
     def _match_pattern(self, radio_id: int, callsign: Optional[str], pattern: Union[BlacklistMatch, PatternMatch]) -> bool:
-        """Match a repeater against a pattern based on the pattern type"""
-        if pattern.match_type == 'specific_id':
-            return radio_id in pattern.pattern
-            
-        elif pattern.match_type == 'id_range':
-            return any(start <= radio_id <= end for start, end in pattern.pattern)
-            
-        else:  # callsign
-            if not callsign:  # Can't match callsign patterns without a callsign
-                return False
-                
-            for p in pattern.pattern:
+        """Match a repeater against a pattern - checks all match types with OR logic"""
+        # Check specific IDs
+        if pattern.ids and radio_id in pattern.ids:
+            return True
+        
+        # Check ID ranges
+        if pattern.id_ranges and any(start <= radio_id <= end for start, end in pattern.id_ranges):
+            return True
+        
+        # Check callsign patterns
+        if pattern.callsigns and callsign:
+            for p in pattern.callsigns:
                 pattern_regex = p.replace('*', '.*') if '*' in p else re.escape(p)
                 if re.match(f"^{pattern_regex}$", callsign, re.IGNORECASE):
                     return True
-            return False
+        
+        return False
 
     def _check_blacklist(self, radio_id: int, callsign: Optional[str] = None) -> None:
         """Check if a repeater matches any blacklist patterns"""
@@ -158,11 +174,10 @@ class RepeaterMatcher:
     def get_repeater_config(self, radio_id: int, callsign: Optional[str] = None) -> RepeaterConfig:
         """
         Get the configuration for a connecting repeater based on its ID and/or callsign.
-        First checks blacklist, then follows strict priority:
-        1. Specific IDs
-        2. ID Ranges
-        3. Callsign patterns
-        4. Default config
+        First checks blacklist, then checks patterns in order (first match wins).
+        Within each pattern, match priority is: specific IDs -> ID ranges -> callsign patterns
+        
+        Patterns can now contain multiple match types (ids, id_ranges, callsigns) for flexibility.
         
         Raises:
             BlacklistError: If the repeater matches any blacklist pattern
