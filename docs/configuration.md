@@ -148,6 +148,34 @@ The `dashboard` section is a **top-level** configuration (not nested under `glob
 - **Configuration**: Uses `host_ipv4`, `host_ipv6`, and `port` (unix_socket field ignored)
 - **IPv6 detection**: Automatic based on address format
 
+**TCP Dual-Stack Configuration:**
+
+When using TCP transport with HBlink4 and dashboard on **different machines**, you have the same dual-stack options as the main UDP server:
+
+```json
+// Localhost (both on same machine) - NO dual-stack issues
+"host_ipv4": "127.0.0.1",
+"host_ipv6": "::1",
+"port": 8765,
+
+// Remote, dual-stack mode (RECOMMENDED for remote dashboard)
+"host_ipv4": "",              // Empty = disable IPv4 listener
+"host_ipv6": "::",            // Listen on all IPv6 interfaces
+"port": 8765,                 // Single port handles both IPv4 and IPv6
+
+// Remote, separate ports (if dual-stack conflicts)
+"host_ipv4": "0.0.0.0",
+"host_ipv6": "::",
+"port": 8765,                 // Note: May need different ports if bind error
+
+// Remote, IPv4-only (simplest)
+"disable_ipv6": true,
+"host_ipv4": "0.0.0.0",
+"port": 8765,
+```
+
+**Note**: HBlink4's event emitter tries IPv6 first, then falls back to IPv4 automatically, so dual-stack configuration on the dashboard side works seamlessly.
+
 ### Dashboard Configuration Examples
 
 **Local dashboard (Unix socket - recommended):**
