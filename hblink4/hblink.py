@@ -280,8 +280,8 @@ class HBProtocol(DatagramProtocol):
                 
                 # Emit event to update dashboard with missed ping count
                 rid_int = int.from_bytes(repeater_id, 'big')
-                slot1_talkgroups = [tg for tg in repeater.slot1_tgs] if repeater.slot1_tgs else []
-                slot2_talkgroups = [tg for tg in repeater.slot2_tgs] if repeater.slot2_tgs else []
+                slot1_talkgroups = list(repeater.slot1_talkgroups) if repeater.slot1_talkgroups else []
+                slot2_talkgroups = list(repeater.slot2_talkgroups) if repeater.slot2_talkgroups else []
                 self._events.emit('repeater_connected', {
                     'repeater_id': rid_int,
                     'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
@@ -1218,8 +1218,8 @@ class HBProtocol(DatagramProtocol):
         # Emit event to update dashboard if we had missed pings (to clear warning)
         if had_missed_pings:
             rid_int = int.from_bytes(repeater_id, 'big')
-            slot1_talkgroups = [tg for tg in repeater.slot1_tgs] if repeater.slot1_tgs else []
-            slot2_talkgroups = [tg for tg in repeater.slot2_tgs] if repeater.slot2_tgs else []
+            slot1_talkgroups = list(repeater.slot1_talkgroups) if repeater.slot1_talkgroups else []
+            slot2_talkgroups = list(repeater.slot2_talkgroups) if repeater.slot2_talkgroups else []
             self._events.emit('repeater_connected', {
                 'repeater_id': rid_int,
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
