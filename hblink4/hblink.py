@@ -278,6 +278,25 @@ class HBProtocol(DatagramProtocol):
                 repeater.missed_pings += 1
                 LOGGER.warning(f'Repeater {int.from_bytes(repeater_id, "big")} missed ping #{repeater.missed_pings}')
                 
+                # Emit event to update dashboard with missed ping count
+                rid_int = int.from_bytes(repeater_id, 'big')
+                slot1_talkgroups = [tg for tg in repeater.slot1_tgs] if repeater.slot1_tgs else []
+                slot2_talkgroups = [tg for tg in repeater.slot2_tgs] if repeater.slot2_tgs else []
+                self._events.emit('repeater_connected', {
+                    'repeater_id': rid_int,
+                    'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
+                    'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
+                    'address': f'{repeater.ip}:{repeater.port}',
+                    'rx_freq': repeater.rx_freq.decode().strip() if repeater.rx_freq else '',
+                    'tx_freq': repeater.tx_freq.decode().strip() if repeater.tx_freq else '',
+                    'colorcode': repeater.colorcode.decode().strip() if repeater.colorcode else '',
+                    'slot1_talkgroups': slot1_talkgroups,
+                    'slot2_talkgroups': slot2_talkgroups,
+                    'rpto_received': repeater.rpto_received,
+                    'last_ping': repeater.last_ping,
+                    'missed_pings': repeater.missed_pings
+                })
+                
                 if repeater.missed_pings >= max_missed:
                     LOGGER.error(f'Repeater {int.from_bytes(repeater_id, "big")} timed out after {repeater.missed_pings} missed pings')
                     # Send NAK to trigger re-registration
@@ -1180,10 +1199,31 @@ class HBProtocol(DatagramProtocol):
             
         # Update ping time and reset missed pings
         repeater.last_ping = time()
-        if repeater.missed_pings > 0:
+        had_missed_pings = repeater.missed_pings > 0
+        if had_missed_pings:
             LOGGER.info(f'Ping counter reset for repeater {int.from_bytes(repeater_id, "big")} after {repeater.missed_pings} missed pings')
         repeater.missed_pings = 0
         repeater.ping_count += 1
+        
+        # Emit event to update dashboard if we had missed pings (to clear warning)
+        if had_missed_pings:
+            rid_int = int.from_bytes(repeater_id, 'big')
+            slot1_talkgroups = [tg for tg in repeater.slot1_tgs] if repeater.slot1_tgs else []
+            slot2_talkgroups = [tg for tg in repeater.slot2_tgs] if repeater.slot2_tgs else []
+            self._events.emit('repeater_connected', {
+                'repeater_id': rid_int,
+                'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
+                'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
+                'address': f'{repeater.ip}:{repeater.port}',
+                'rx_freq': repeater.rx_freq.decode().strip() if repeater.rx_freq else '',
+                'tx_freq': repeater.tx_freq.decode().strip() if repeater.tx_freq else '',
+                'colorcode': repeater.colorcode.decode().strip() if repeater.colorcode else '',
+                'slot1_talkgroups': slot1_talkgroups,
+                'slot2_talkgroups': slot2_talkgroups,
+                'rpto_received': repeater.rpto_received,
+                'last_ping': repeater.last_ping,
+                'missed_pings': repeater.missed_pings
+            })
         
         # Send MSTPONG in response to RPTPING/RPTP from repeater
         LOGGER.debug(f'Sending MSTPONG to repeater {int.from_bytes(repeater_id, "big")}')
