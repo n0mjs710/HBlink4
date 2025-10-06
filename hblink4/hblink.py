@@ -335,26 +335,35 @@ class HBProtocol(DatagramProtocol):
         else:  # timeout
             reason_text = f'entering hang time ({hang_time}s)'
         
-        # Log stream end
-        LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
-                   f'src={int.from_bytes(stream.rf_src, "big")}, '
-                   f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                   f'duration={duration:.2f}s, '
-                   f'packets={stream.packet_count}, '
-                   f'{reason_text}')
+        # Log stream end (DEBUG for TX, INFO for RX)
+        if stream_type == "TX":
+            LOGGER.debug(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(stream.rf_src, "big")}, '
+                       f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                       f'duration={duration:.2f}s, '
+                       f'packets={stream.packet_count}, '
+                       f'{reason_text}')
+        else:
+            LOGGER.info(f'{stream_type} stream ended on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(stream.rf_src, "big")}, '
+                       f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                       f'duration={duration:.2f}s, '
+                       f'packets={stream.packet_count}, '
+                       f'{reason_text}')
         
-        # Emit stream_end event
-        self._events.emit('stream_end', {
-            'repeater_id': int.from_bytes(repeater_id, 'big'),
-            'slot': slot,
-            'src_id': int.from_bytes(stream.rf_src, 'big'),
-            'dst_id': int.from_bytes(stream.dst_id, 'big'),
-            'duration': round(duration, 2),
-            'packets': stream.packet_count,
-            'end_reason': end_reason,
-            'hang_time': hang_time,
-            'call_type': stream.call_type
-        })
+        # Emit stream_end event only for RX streams (not TX/assumed streams)
+        if not stream.is_assumed:
+            self._events.emit('stream_end', {
+                'repeater_id': int.from_bytes(repeater_id, 'big'),
+                'slot': slot,
+                'src_id': int.from_bytes(stream.rf_src, 'big'),
+                'dst_id': int.from_bytes(stream.dst_id, 'big'),
+                'duration': round(duration, 2),
+                'packets': stream.packet_count,
+                'end_reason': end_reason,
+                'hang_time': hang_time,
+                'call_type': stream.call_type
+            })
         
         # Decrement forwarding stats if this was an assumed (TX) stream
         if stream.is_assumed:
@@ -379,7 +388,7 @@ class HBProtocol(DatagramProtocol):
                 # Hang time expired - clear the slot
                 hang_duration = current_time - stream.end_time if stream.end_time else 0
                 stream_type = "TX" if stream.is_assumed else "RX"
-                LOGGER.info(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
+                LOGGER.debug(f'{stream_type} hang time completed on repeater {int.from_bytes(repeater_id, "big")} slot {slot}: '
                            f'src={int.from_bytes(stream.rf_src, "big")}, '
                            f'dst={int.from_bytes(stream.dst_id, "big")}, '
                            f'hang_duration={hang_duration:.2f}s')
@@ -1432,7 +1441,8 @@ class HBProtocol(DatagramProtocol):
             self._end_stream(current_stream, repeater_id, _slot, time(), 'terminator')
         
         # Emit stream_update every 60 packets (10 superframes = 1 second)
-        if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
+        # Only for RX streams - TX streams would clutter the dashboard
+        if current_stream and not current_stream.ended and not current_stream.is_assumed and current_stream.packet_count % 60 == 0:
             self._events.emit('stream_update', {
                 'repeater_id': int.from_bytes(repeater_id, 'big'),
                 'slot': _slot,
@@ -1559,21 +1569,13 @@ class HBProtocol(DatagramProtocol):
             )
             repeater.set_slot_stream(slot, new_stream)
             
-            # Log at INFO level - will appear once per target repeater
-            LOGGER.info(f'TX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+            # Log at DEBUG level - TX streams are noisy
+            LOGGER.debug(f'TX stream started on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                        f'from repeater {source_repeater_id}, '
                        f'src={int.from_bytes(rf_src, "big")}, '
                        f'dst={int.from_bytes(dst_id, "big")}')
             
-            # Emit stream_start event for dashboard
-            self._events.emit('stream_start', {
-                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-                'slot': slot,
-                'src_id': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
-                'call_type': 'group',
-                'is_assumed': True
-            })
+            # Don't emit stream_start event for TX streams - would clutter dashboard
             
             # Update forwarding stats
             self._forwarding_stats['active_calls'] += 1
