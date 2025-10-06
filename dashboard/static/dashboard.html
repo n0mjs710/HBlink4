@@ -519,8 +519,8 @@
                 </div>
             </div>
             <div class="status-badges">
-                <div class="connection-status clickable connected" id="wsStatus" title="WebSocket connection to dashboard server">Dashboard</div>
-                <div class="connection-status connected" id="hblinkStatus" title="Dashboard server connection to HBlink4">HBlink4</div>
+                <div class="connection-status clickable warning" id="wsStatus" title="Connecting to dashboard server...">Connecting...</div>
+                <div class="connection-status warning" id="hblinkStatus" title="Waiting for connection status...">Unknown</div>
             </div>
         </header>
         
@@ -644,6 +644,9 @@
             
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
+                // Update UI immediately on error
+                updateWebSocketStatus(false);
+                updateHBlinkStatus(false);
             };
             
             ws.onmessage = (event) => {
