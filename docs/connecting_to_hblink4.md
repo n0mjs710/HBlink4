@@ -37,7 +37,7 @@ To connect to an HBlink4 server, you need:
 
 ### 3. Server Configuration Requirements
 
-Before connecting, the server administrator must add your repeater to their `config.json`:
+Before connecting, the server administrator must add your repeater to their `config.json`, or use a "range" configuration that would include your repeater by radio ID range and/or callsign, including widlcards:
 
 ```json
 {
@@ -66,8 +66,6 @@ If you're hosting an HBlink4 server, you need to configure your firewall and rou
 **HBlink4 Server:**
 - **UDP 62031** - IPv4 repeater connections (default)
 - **UDP 62032** - IPv6 repeater connections (default, if IPv6 enabled)
-  - Note: Most firewalls don't require separate IPv4/IPv6 rules per port
-  - If using same port for both (e.g., 62031), one rule typically covers both protocols
 
 **Dashboard (optional, for remote access):**
 - **TCP 8080** - Web dashboard HTTP (default, both IPv4 and IPv6)
@@ -79,14 +77,14 @@ Configure your firewall to allow the following inbound traffic:
 
 ```
 # HBlink4 repeater ports (applies to both IPv4 and IPv6)
-ALLOW: Protocol=UDP, Port=62031, Direction=INBOUND  # IPv4 repeaters
-ALLOW: Protocol=UDP, Port=62032, Direction=INBOUND  # IPv6 repeaters (if enabled)
+ALLOW: Protocol=UDP4, Port=62031, Direction=INBOUND  # IPv4 repeaters
+ALLOW: Protocol=UDP6, Port=62032, Direction=INBOUND  # IPv6 repeaters (if enabled)
 
 # Dashboard web interface (applies to both IPv4 and IPv6)
-ALLOW: Protocol=TCP, Port=8080, Direction=INBOUND   # Dashboard HTTP/WebSocket
+ALLOW: Protocol=TCP*, Port=8080, Direction=INBOUND   # Dashboard HTTP/WebSocket
 ```
 
-**Note:** Most modern firewalls automatically handle both IPv4 and IPv6 with a single rule per port. If your firewall requires separate rules for each protocol, you may need to duplicate rules for IPv4 and IPv6.
+**Note:** Some firewalls automatically handle both IPv4 and IPv6 with a single rule per port. If your firewall requires separate rules for each protocol, you may need to duplicate rules for IPv4 and IPv6. In the information here, we use a 4, 6, or * to indicate one, the other or both.
 
 Apply these rules using your firewall management tool (iptables, firewalld, ufw, Windows Firewall, cloud security groups, etc.).
 
@@ -99,9 +97,9 @@ If your HBlink4 server is behind a router/NAT:
 3. **Add port forwarding rules**:
 
 ```
-Forward: External_Port=62031 -> Internal_IP=[server], Internal_Port=62031, Protocol=UDP
-Forward: External_Port=62032 -> Internal_IP=[server], Internal_Port=62032, Protocol=UDP
-Forward: External_Port=8080 -> Internal_IP=[server], Internal_Port=8080, Protocol=TCP (optional)
+Forward: External_Port=62031 -> Internal_IP=[server], Internal_Port=62031, Protocol=UDP4
+Forward: External_Port=62032 -> Internal_IP=[server], Internal_Port=62032, Protocol=UDP6
+Forward: External_Port=8080 -> Internal_IP=[server], Internal_Port=8080, Protocol=TCP* (optional)
 ```
 
 **Example:**
@@ -115,7 +113,7 @@ Internal IP: 192.168.1.100  # Your server's local IP address
 
 ### For Repeater/Hotspot Operators
 
-If you're connecting TO an HBlink4 server, you typically don't need any special firewall configuration since you're making outbound connections.
+If you're connecting TO an HBlink4 server, you typically don't need any special firewall configuration since you're making outbound connections. However you should be careful to note that the UDP session timer in your firewall must be longer than the interval at which your repater sends pings to the server, or the state entry could be removed, and you will not receive trafic from the server back to your repaeter.
 
 #### Outbound Traffic Requirements
 
