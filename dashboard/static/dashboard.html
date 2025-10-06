@@ -72,6 +72,25 @@
             50% { opacity: 0.6; }
         }
         
+        .announcement-banner {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: #ffffff;
+            padding: 16px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+            border: 2px solid #fbbf24;
+            font-size: 15px;
+            line-height: 1.6;
+            font-weight: 500;
+        }
+        
+        .announcement-banner strong {
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
         .stats-bar {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -524,6 +543,11 @@
             </div>
         </header>
         
+        <!-- Announcement Banner (hidden by default, shown if announcement text exists) -->
+        <div id="announcementBanner" class="announcement-banner" style="display: none;">
+            <strong>📢 Announcement:</strong> <span id="announcementText"></span>
+        </div>
+        
         <h2 class="section-header">Statistics</h2>
         <div class="stats-bar">
                 <div class="stat-card">
@@ -619,6 +643,14 @@
                 document.title = config.dashboard_title || 'HBlink4 Dashboard';
                 document.getElementById('dashboardTitle').textContent = config.dashboard_title || 'HBlink4 Dashboard';
                 document.getElementById('serverName').textContent = config.server_name || '';
+                
+                // Show announcement banner if announcement text exists
+                if (config.announcement && config.announcement.trim()) {
+                    document.getElementById('announcementText').textContent = config.announcement;
+                    document.getElementById('announcementBanner').style.display = 'block';
+                } else {
+                    document.getElementById('announcementBanner').style.display = 'none';
+                }
             } catch (error) {
                 console.error('Failed to load config:', error);
             }

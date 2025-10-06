@@ -49,6 +49,7 @@ This configures the dashboard application itself and how it **receives** events:
     "server_name": "My HBlink4 Server",
     "server_description": "Amateur Radio DMR Network",
     "dashboard_title": "HBlink4 Dashboard",
+    "announcement": "Server maintenance scheduled for Sunday 3-5pm UTC",
     "refresh_interval": 1000,
     "max_events": 50,
     "event_receiver": {
@@ -67,6 +68,7 @@ This configures the dashboard application itself and how it **receives** events:
 - `server_name`: Displayed below the dashboard title (e.g., "KD0ABC Repeater Network")
 - `server_description`: Reserved for future use
 - `dashboard_title`: Main page title and browser tab text
+- `announcement`: High-visibility announcement banner text (leave empty "" to hide banner)
 - `refresh_interval`: WebSocket update interval in milliseconds (default: 1000)
 - `max_events`: Maximum events to retain in event log (default: 50)
 
