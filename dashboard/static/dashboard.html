@@ -1180,6 +1180,24 @@
                     updateStats(state.stats);
                     break;
                     
+                case 'repeater_connected':
+                    // Update repeater info (especially missed_pings for yellow warning indicator)
+                    if (state.repeaters && data.repeater_id) {
+                        const repeaterIndex = state.repeaters.findIndex(r => r.repeater_id == data.repeater_id);
+                        if (repeaterIndex >= 0) {
+                            // Update the repeater data while preserving other fields
+                            state.repeaters[repeaterIndex] = {
+                                ...state.repeaters[repeaterIndex],
+                                ...data,
+                                last_ping: data.last_ping || state.repeaters[repeaterIndex].last_ping,
+                                missed_pings: data.missed_pings !== undefined ? data.missed_pings : 0
+                            };
+                            // Immediately refresh the display to update yellow warning
+                            updateRepeaters(state.repeaters);
+                        }
+                    }
+                    break;
+                    
                 case 'repeater_disconnected':
                     // Remove repeater from state immediately
                     if (state.repeaters && state.repeaters[data.repeater_id]) {
