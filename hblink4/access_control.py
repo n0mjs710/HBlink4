@@ -192,3 +192,22 @@ class RepeaterMatcher:
 
         # If no patterns match, return default configuration
         return self.default_config
+
+    def get_pattern_for_repeater(self, radio_id: int, callsign: Optional[str] = None) -> Optional[PatternMatch]:
+        """
+        Return the pattern that matched this repeater, or None if using default config.
+        Used for dashboard display of which pattern was matched.
+        
+        Raises:
+            BlacklistError: If the repeater matches any blacklist pattern
+        """
+        # Check blacklist first
+        self._check_blacklist(radio_id, callsign)
+        
+        # Find the matching pattern
+        for pattern in self.patterns:
+            if self._match_pattern(radio_id, callsign, pattern):
+                return pattern
+        
+        # No pattern matched, using default
+        return None

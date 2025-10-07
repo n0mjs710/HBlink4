@@ -69,6 +69,148 @@
             border-color: #4b5563;
         }
         
+        /* Modal styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        
+        .modal-content {
+            background: #1e293b;
+            border-radius: 12px;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            border: 1px solid #334155;
+        }
+        
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            background: #1e293b;
+            z-index: 1;
+        }
+        
+        .modal-header h2 {
+            margin: 0;
+            color: #38bdf8;
+            font-size: 24px;
+        }
+        
+        .modal-close {
+            background: #374151;
+            border: none;
+            color: #e2e8f0;
+            font-size: 28px;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        
+        .modal-close:hover {
+            background: #4b5563;
+            transform: scale(1.1);
+        }
+        
+        .modal-body {
+            padding: 24px;
+        }
+        
+        .modal-section {
+            margin-bottom: 24px;
+        }
+        
+        .modal-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .modal-section h3 {
+            color: #94a3b8;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin: 0 0 12px 0;
+            font-weight: 600;
+        }
+        
+        .modal-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .modal-table td {
+            padding: 8px 0;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .modal-table td:first-child {
+            color: #94a3b8;
+            font-weight: 500;
+            width: 180px;
+        }
+        
+        .modal-table td:last-child {
+            color: #e2e8f0;
+        }
+        
+        .modal-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .modal-highlight {
+            color: #38bdf8;
+            font-weight: 600;
+        }
+        
+        .modal-link {
+            color: #38bdf8;
+            text-decoration: none;
+        }
+        
+        .modal-link:hover {
+            text-decoration: underline;
+        }
+        
+        .repeater-header {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .repeater-header:hover {
+            background: #1e40af;
+            transform: translateY(-1px);
+        }
+        
+        .repeater-header-warning {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .repeater-header-warning:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+        }
+        
         .connection-status {
             padding: 8px 16px;
             border-radius: 6px;
@@ -648,6 +790,7 @@
         let reconnectTimeout = null;
         let state = {
             repeaters: [],
+            repeater_details: {},  // Detailed info for each repeater
             streams: [],
             events: [],
             last_heard: [],
@@ -830,6 +973,212 @@
             }
         }
         
+        async function showRepeaterDetails(repeaterId) {
+            try {
+                // Fetch detailed stats from API
+                const response = await fetch(`/api/repeater/${repeaterId}`);
+                if (!response.ok) {
+                    console.error('Failed to fetch repeater details');
+                    return;
+                }
+                const details = await response.json();
+                
+                // Create modal
+                const modal = document.createElement('div');
+                modal.className = 'modal-overlay';
+                modal.onclick = (e) => {
+                    if (e.target === modal) modal.remove();
+                };
+                
+                modal.innerHTML = `
+                    <div class="modal-content" onclick="event.stopPropagation()">
+                        <div class="modal-header">
+                            <h2>📶 ${details.callsign} (${details.repeater_id})</h2>
+                            <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="modal-section">
+                                <h3>🔐 Access Control</h3>
+                                <table class="modal-table">
+                                    <tr>
+                                        <td>Pattern Matched:</td>
+                                        <td class="modal-highlight">${details.access_control.matched_pattern}</td>
+                                    </tr>
+                                    ${details.access_control.pattern_description ? `
+                                    <tr>
+                                        <td>Pattern Description:</td>
+                                        <td>${details.access_control.pattern_description}</td>
+                                    </tr>
+                                    ` : ''}
+                                    <tr>
+                                        <td>Match Reason:</td>
+                                        <td>${details.access_control.match_reason}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>TG Source:</td>
+                                        <td>${details.access_control.talkgroups_source}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>RPTO Received:</td>
+                                        <td>${details.access_control.rpto_received ? '✓ Yes' : '✗ No'}</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            
+                            <div class="modal-section">
+                                <h3>📡 Connection</h3>
+                                <table class="modal-table">
+                                    <tr>
+                                        <td>Address:</td>
+                                        <td>${details.connection.address}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Uptime:</td>
+                                        <td>${formatDuration(details.connection.uptime_seconds)}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Status:</td>
+                                        <td class="modal-highlight">${details.connection.status}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Missed Pings:</td>
+                                        <td ${details.connection.missed_pings > 0 ? 'style="color: #fbbf24;"' : ''}>${details.connection.missed_pings}</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            
+                            <div class="modal-section">
+                                <h3>📍 Location</h3>
+                                <table class="modal-table">
+                                    <tr>
+                                        <td>Location:</td>
+                                        <td>${details.location.location || 'Not specified'}</td>
+                                    </tr>
+                                    ${details.location.latitude && details.location.longitude ? `
+                                    <tr>
+                                        <td>Coordinates:</td>
+                                        <td>${details.location.latitude}, ${details.location.longitude}</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.location.height ? `
+                                    <tr>
+                                        <td>Height:</td>
+                                        <td>${details.location.height}m</td>
+                                    </tr>
+                                    ` : ''}
+                                </table>
+                            </div>
+                            
+                            <div class="modal-section">
+                                <h3>📻 Frequencies & Settings</h3>
+                                <table class="modal-table">
+                                    ${details.frequencies.rx_freq ? `
+                                    <tr>
+                                        <td>RX Frequency:</td>
+                                        <td>${(parseFloat(details.frequencies.rx_freq) / 1000000).toFixed(4)} MHz</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.frequencies.tx_freq ? `
+                                    <tr>
+                                        <td>TX Frequency:</td>
+                                        <td>${(parseFloat(details.frequencies.tx_freq) / 1000000).toFixed(4)} MHz</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.frequencies.tx_power ? `
+                                    <tr>
+                                        <td>TX Power:</td>
+                                        <td>${details.frequencies.tx_power}W</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.frequencies.colorcode ? `
+                                    <tr>
+                                        <td>Color Code:</td>
+                                        <td>${details.frequencies.colorcode}</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.frequencies.slots ? `
+                                    <tr>
+                                        <td>Slots:</td>
+                                        <td>${details.frequencies.slots}</td>
+                                    </tr>
+                                    ` : ''}
+                                </table>
+                            </div>
+                            
+                            <div class="modal-section">
+                                <h3>📢 Talkgroups</h3>
+                                <table class="modal-table">
+                                    <tr>
+                                        <td>Timeslot 1:</td>
+                                        <td>${details.access_control.slot1_talkgroups.length > 0 ? details.access_control.slot1_talkgroups.join(', ') : 'None'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Timeslot 2:</td>
+                                        <td>${details.access_control.slot2_talkgroups.length > 0 ? details.access_control.slot2_talkgroups.join(', ') : 'None'}</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            
+                            ${details.metadata.description || details.metadata.url || details.metadata.software_id ? `
+                            <div class="modal-section">
+                                <h3>ℹ️ Metadata</h3>
+                                <table class="modal-table">
+                                    ${details.metadata.description ? `
+                                    <tr>
+                                        <td>Description:</td>
+                                        <td>${details.metadata.description}</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.metadata.url ? `
+                                    <tr>
+                                        <td>URL:</td>
+                                        <td><a href="${details.metadata.url}" class="modal-link" target="_blank">${details.metadata.url}</a></td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.metadata.software_id ? `
+                                    <tr>
+                                        <td>Software:</td>
+                                        <td>${details.metadata.software_id}</td>
+                                    </tr>
+                                    ` : ''}
+                                    ${details.metadata.package_id ? `
+                                    <tr>
+                                        <td>Package:</td>
+                                        <td>${details.metadata.package_id}</td>
+                                    </tr>
+                                    ` : ''}
+                                </table>
+                            </div>
+                            ` : ''}
+                            
+                            <div class="modal-section">
+                                <h3>📊 Statistics (Today)</h3>
+                                <table class="modal-table">
+                                    <tr>
+                                        <td>Total Streams:</td>
+                                        <td>${details.statistics.total_streams_today}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Slot 1 Active:</td>
+                                        <td>${details.statistics.slot1_active ? '✓ Yes' : '✗ No'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Slot 2 Active:</td>
+                                        <td>${details.statistics.slot2_active ? '✓ Yes' : '✗ No'}</td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+            } catch (error) {
+                console.error('Error showing repeater details:', error);
+                alert('Failed to load repeater details. Please try again.');
+            }
+        }
+        
         function updateWebSocketStatus(connected) {
             const el = document.getElementById('wsStatus');
             
@@ -941,9 +1290,9 @@
                     const headerClass = hasMissedPings ? 'repeater-header-warning' : 'repeater-header';
                     
                     return `
-                        <div class="repeater-card">
+                        <div class="repeater-card" data-repeater-id="${r.repeater_id}">
                             <div class="repeater-info">
-                                <div class="${headerClass}">
+                                <div class="${headerClass}" onclick="showRepeaterDetails(${r.repeater_id})" title="Click for detailed information">
                                     📶 ${r.callsign || 'Unknown'} (${r.repeater_id})
                                 </div>
                                 <div class="repeater-meta">
@@ -1307,6 +1656,14 @@
                             // New repeater connection
                             playConnectTone();
                         }
+                    }
+                    break;
+                
+                case 'repeater_details':
+                    // Store detailed repeater information (sent once on connection)
+                    if (data.repeater_id) {
+                        state.repeater_details[data.repeater_id] = data;
+                        console.log(`📋 Received details for repeater ${data.repeater_id} - Pattern: ${data.matched_pattern}`);
                     }
                     break;
                     

@@ -1110,7 +1110,10 @@ class HBProtocol(DatagramProtocol):
             LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
             LOGGER.debug(f'Repeater state after config: id={int.from_bytes(repeater_id, "big")}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
-            # Emit repeater_connected event
+            # Emit detailed repeater info (sent once on connection)
+            self._emit_repeater_details(repeater_id, repeater)
+            
+            # Emit repeater_connected event (lightweight, will be sent on ping updates)
             try:
                 repeater_config = self._matcher.get_repeater_config(
                     int.from_bytes(repeater_id, 'big'),
@@ -1141,6 +1144,67 @@ class HBProtocol(DatagramProtocol):
             LOGGER.error(f'Error parsing config: {str(e)}')
             if 'repeater_id' in locals():
                 self._send_nak(repeater_id, addr)
+
+    def _emit_repeater_details(self, repeater_id: bytes, repeater: RepeaterState) -> None:
+        """
+        Emit detailed repeater information (sent once on connection).
+        This includes metadata and pattern match information that doesn't change during the connection.
+        """
+        rid_int = int.from_bytes(repeater_id, 'big')
+        callsign = repeater.callsign.decode().strip() if repeater.callsign else None
+        
+        # Get pattern match info
+        try:
+            pattern = self._matcher.get_pattern_for_repeater(rid_int, callsign)
+            if pattern:
+                pattern_name = pattern.name
+                pattern_desc = pattern.description if hasattr(pattern, 'description') else ''
+                
+                # Determine which match type succeeded
+                if rid_int in pattern.ids:
+                    match_reason = f"specific_id: {rid_int}"
+                elif any(start <= rid_int <= end for start, end in pattern.id_ranges):
+                    for start, end in pattern.id_ranges:
+                        if start <= rid_int <= end:
+                            match_reason = f"id_range: {start}-{end}"
+                            break
+                elif callsign and pattern.callsigns:
+                    for pattern_str in pattern.callsigns:
+                        pattern_regex = pattern_str.replace('*', '.*') if '*' in pattern_str else pattern_str
+                        import re
+                        if re.match(f"^{pattern_regex}$", callsign, re.IGNORECASE):
+                            match_reason = f"callsign: {pattern_str}"
+                            break
+                    else:
+                        match_reason = "pattern_match"
+                else:
+                    match_reason = "pattern_match"
+            else:
+                pattern_name = "Default"
+                pattern_desc = "Using default configuration"
+                match_reason = "default"
+        except Exception as e:
+            LOGGER.warning(f'Could not determine pattern for repeater {rid_int}: {e}')
+            pattern_name = "Unknown"
+            pattern_desc = ""
+            match_reason = "unknown"
+        
+        # Emit detailed info event
+        self._events.emit('repeater_details', {
+            'repeater_id': rid_int,
+            'latitude': repeater.latitude.decode().strip() if repeater.latitude else '',
+            'longitude': repeater.longitude.decode().strip() if repeater.longitude else '',
+            'height': repeater.height.decode().strip() if repeater.height else '',
+            'tx_power': repeater.tx_power.decode().strip() if repeater.tx_power else '',
+            'description': repeater.description.decode().strip() if repeater.description else '',
+            'url': repeater.url.decode().strip() if repeater.url else '',
+            'software_id': repeater.software_id.decode().strip() if repeater.software_id else '',
+            'package_id': repeater.package_id.decode().strip() if repeater.package_id else '',
+            'slots': repeater.slots.decode().strip() if repeater.slots else '',
+            'matched_pattern': pattern_name,
+            'pattern_description': pattern_desc,
+            'match_reason': match_reason
+        })
 
     def _handle_options(self, repeater_id: bytes, data: bytes, addr: PeerAddress) -> None:
         """

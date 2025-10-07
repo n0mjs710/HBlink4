@@ -101,24 +101,10 @@ dashboard_config = load_config()
 
 # In-memory state (could be Redis/database for persistence)
 class DashboardState:
-    """Global dashboard state"""
-    
+    """Maintains state for the dashboard"""
     def __init__(self):
         self.repeaters: Dict[int, dict] = {}
-        self.streams: Dict[str, dict] = {}  # key: f"{repeater_id}.{slot}"
-        self.events: deque = deque(maxlen=500)  # Ring buffer of recent events
-        self.last_heard: List[dict] = []  # Last heard users
-        self.last_heard_stats: dict = {}  # User cache statistics
-        self.websocket_clients: Set[WebSocket] = set()
-        self.hblink_connected: bool = False  # Track HBlink4 connection status
-        self.stats = {
-            'total_streams_today': 0,
-            'total_duration_today': 0.0,  # Total duration in seconds
-            'active_calls': 0,  # Currently active forwarded calls
-            'total_calls_today': 0,  # Total calls forwarded today
-            'start_time': datetime.now().isoformat(),
-            'last_reset_date': date.today().isoformat()  # Track when stats were last reset
-        }
+        self.repeater_details: Dict[int, dict] = {}  # Detailed info (sent once per connection)
     
     def reset_daily_stats(self):
         """Reset daily statistics at midnight"""
@@ -388,6 +374,14 @@ class EventReceiver:
                 del state.repeaters[data['repeater_id']]
                 logger.info(f"Repeater disconnected: {data['repeater_id']} ({data.get('callsign', 'UNKNOWN')}) - reason: {data.get('reason', 'unknown')}")
         
+        elif event_type == 'repeater_details':
+            # Store detailed repeater information (sent once on connection)
+            state.repeater_details[data['repeater_id']] = {
+                **data,
+                'received_at': event['timestamp']
+            }
+            logger.debug(f"Repeater details received: {data['repeater_id']} - Pattern: {data.get('matched_pattern', 'Unknown')}")
+        
         elif event_type == 'repeater_options_updated':
             # RPTO received - update TG lists in real-time
             if data['repeater_id'] in state.repeaters:
@@ -550,6 +544,80 @@ async def get_stats():
     }
 
 
+@app.get("/api/repeater/{repeater_id}")
+async def get_repeater_details(repeater_id: int):
+    """Get detailed information about a specific repeater"""
+    if repeater_id not in state.repeaters:
+        return {"error": "Repeater not found"}, 404
+    
+    repeater = state.repeaters[repeater_id]
+    details = state.repeater_details.get(repeater_id, {})
+    
+    # Calculate runtime statistics
+    current_time = datetime.now().timestamp()
+    uptime_seconds = int(current_time - repeater.get('connected_at', current_time))
+    
+    # Count streams for this repeater
+    total_streams = len([e for e in state.events 
+                        if e.get('type') == 'stream_start' 
+                        and e.get('data', {}).get('repeater_id') == repeater_id])
+    
+    # Find active streams
+    slot1_active = any(s.get('repeater_id') == repeater_id and s.get('slot') == 1 
+                      and s.get('status') == 'active' 
+                      for s in state.streams.values())
+    slot2_active = any(s.get('repeater_id') == repeater_id and s.get('slot') == 2 
+                      and s.get('status') == 'active' 
+                      for s in state.streams.values())
+    
+    # Build comprehensive response
+    return {
+        "repeater_id": repeater_id,
+        "callsign": repeater.get('callsign', 'UNKNOWN'),
+        "connection": {
+            "address": repeater.get('address', ''),
+            "connected_at": repeater.get('connected_at', 0),
+            "uptime_seconds": uptime_seconds,
+            "last_ping": repeater.get('last_ping', 0),
+            "missed_pings": repeater.get('missed_pings', 0),
+            "status": repeater.get('status', 'unknown')
+        },
+        "location": {
+            "location": repeater.get('location', ''),
+            "latitude": details.get('latitude', ''),
+            "longitude": details.get('longitude', ''),
+            "height": details.get('height', '')
+        },
+        "frequencies": {
+            "rx_freq": repeater.get('rx_freq', ''),
+            "tx_freq": repeater.get('tx_freq', ''),
+            "tx_power": details.get('tx_power', ''),
+            "colorcode": repeater.get('colorcode', ''),
+            "slots": details.get('slots', '')
+        },
+        "access_control": {
+            "matched_pattern": details.get('matched_pattern', 'Unknown'),
+            "pattern_description": details.get('pattern_description', ''),
+            "match_reason": details.get('match_reason', ''),
+            "rpto_received": repeater.get('rpto_received', False),
+            "slot1_talkgroups": repeater.get('slot1_talkgroups', []),
+            "slot2_talkgroups": repeater.get('slot2_talkgroups', []),
+            "talkgroups_source": "RPTO" if repeater.get('rpto_received') else "Pattern/Config"
+        },
+        "metadata": {
+            "description": details.get('description', ''),
+            "url": details.get('url', ''),
+            "software_id": details.get('software_id', ''),
+            "package_id": details.get('package_id', '')
+        },
+        "statistics": {
+            "total_streams_today": total_streams,
+            "slot1_active": slot1_active,
+            "slot2_active": slot2_active
+        }
+    }
+
+
 # WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -563,6 +631,7 @@ async def websocket_endpoint(websocket: WebSocket):
         'type': 'initial_state',
         'data': {
             'repeaters': list(state.repeaters.values()),
+            'repeater_details': state.repeater_details,
             'streams': list(state.streams.values()),
             'events': list(state.events)[-50:],
             'stats': state.stats,
