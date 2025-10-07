@@ -657,15 +657,22 @@ class HBProtocol(DatagramProtocol):
                     # If missed_pings is being cleared, notify dashboard
                     if repeater.missed_pings > 0:
                         repeater.missed_pings = 0
+                        rid_int = int.from_bytes(repeater_id, 'big')
+                        slot1_talkgroups = list(repeater.slot1_talkgroups) if repeater.slot1_talkgroups else []
+                        slot2_talkgroups = list(repeater.slot2_talkgroups) if repeater.slot2_talkgroups else []
                         self._events.emit('repeater_connected', {
-                            'repeater_id': int.from_bytes(repeater_id, 'big'),
-                            'callsign': repeater.callsign,
-                            'radio_id': repeater.radio_id,
-                            'connection_state': repeater.connection_state,
-                            'missed_pings': 0,
+                            'repeater_id': rid_int,
+                            'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'UNKNOWN',
+                            'location': repeater.location.decode().strip() if repeater.location else 'Unknown',
+                            'address': f'{repeater.ip}:{repeater.port}',
+                            'rx_freq': repeater.rx_freq.decode().strip() if repeater.rx_freq else '',
+                            'tx_freq': repeater.tx_freq.decode().strip() if repeater.tx_freq else '',
+                            'colorcode': repeater.colorcode.decode().strip() if repeater.colorcode else '',
+                            'slot1_talkgroups': slot1_talkgroups,
+                            'slot2_talkgroups': slot2_talkgroups,
+                            'rpto_received': repeater.rpto_received,
                             'last_ping': repeater.last_ping,
-                            'slot1_talkgroups': repeater.slot1_talkgroups,
-                            'slot2_talkgroups': repeater.slot2_talkgroups
+                            'missed_pings': 0
                         })
                     else:
                         repeater.missed_pings = 0
