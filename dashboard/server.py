@@ -567,6 +567,33 @@ async def get_repeater_details(repeater_id: int):
     repeater = state.repeaters[repeater_id]
     details = state.repeater_details.get(repeater_id, {})
     
+    # If no details event received yet, try to determine from config
+    if not details or not details.get('matched_pattern'):
+        # Try to load pattern from config
+        config_path = Path(__file__).parent.parent / 'config' / 'config.json'
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            
+            # Import here to avoid circular dependencies
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from hblink4.access_control import RepeaterMatcher
+            
+            matcher = RepeaterMatcher(config)
+            pattern = matcher.get_pattern_for_repeater(repeater_id, repeater.get('callsign'))
+            
+            if pattern:
+                details['matched_pattern'] = pattern.name
+                details['pattern_description'] = pattern.description
+            else:
+                details['matched_pattern'] = 'Default'
+                details['pattern_description'] = 'Using default configuration'
+        except Exception as e:
+            logger.warning(f'Could not determine pattern for repeater {repeater_id}: {e}')
+            details['matched_pattern'] = details.get('matched_pattern', 'Default')
+            details['pattern_description'] = details.get('pattern_description', 'Using default configuration')
+    
     # Calculate runtime statistics
     current_time = datetime.now().timestamp()
     uptime_seconds = int(current_time - repeater.get('connected_at', current_time))
@@ -584,12 +611,17 @@ async def get_repeater_details(repeater_id: int):
                       and s.get('status') == 'active' 
                       for s in state.streams.values())
     
+    # Clean up IPv4-mapped IPv6 addresses
+    address = repeater.get('address', '')
+    if address.startswith('::ffff:'):
+        address = address[7:]  # Remove '::ffff:' prefix
+    
     # Build comprehensive response
     return {
         "repeater_id": repeater_id,
         "callsign": repeater.get('callsign', 'UNKNOWN'),
         "connection": {
-            "address": repeater.get('address', ''),
+            "address": address,
             "connected_at": repeater.get('connected_at', 0),
             "uptime_seconds": uptime_seconds,
             "last_ping": repeater.get('last_ping', 0),
@@ -610,9 +642,8 @@ async def get_repeater_details(repeater_id: int):
             "slots": details.get('slots', '')
         },
         "access_control": {
-            "matched_pattern": details.get('matched_pattern', 'Unknown'),
-            "pattern_description": details.get('pattern_description', ''),
-            "match_reason": details.get('match_reason', ''),
+            "connection_category": details.get('matched_pattern', 'Default'),
+            "category_description": details.get('pattern_description', 'Using default configuration'),
             "rpto_received": repeater.get('rpto_received', False),
             "slot1_talkgroups": repeater.get('slot1_talkgroups', []),
             "slot2_talkgroups": repeater.get('slot2_talkgroups', []),

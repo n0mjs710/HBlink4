@@ -1001,19 +1001,15 @@
                                 <h3>🔐 Access Control</h3>
                                 <table class="modal-table">
                                     <tr>
-                                        <td>Pattern Matched:</td>
-                                        <td class="modal-highlight">${details.access_control.matched_pattern}</td>
+                                        <td>Connection Category:</td>
+                                        <td class="modal-highlight">${details.access_control.connection_category}</td>
                                     </tr>
-                                    ${details.access_control.pattern_description ? `
+                                    ${details.access_control.category_description ? `
                                     <tr>
-                                        <td>Pattern Description:</td>
-                                        <td>${details.access_control.pattern_description}</td>
+                                        <td>Category Description:</td>
+                                        <td>${details.access_control.category_description}</td>
                                     </tr>
                                     ` : ''}
-                                    <tr>
-                                        <td>Match Reason:</td>
-                                        <td>${details.access_control.match_reason}</td>
-                                    </tr>
                                     <tr>
                                         <td>TG Source:</td>
                                         <td>${details.access_control.talkgroups_source}</td>
