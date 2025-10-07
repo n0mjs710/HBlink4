@@ -657,7 +657,7 @@ class HBProtocol(DatagramProtocol):
                     # If missed_pings is being cleared, notify dashboard
                     if repeater.missed_pings > 0:
                         repeater.missed_pings = 0
-                        self.emit_event('repeater_connected', {
+                        self._events.emit('repeater_connected', {
                             'repeater_id': int.from_bytes(repeater_id, 'big'),
                             'callsign': repeater.callsign,
                             'radio_id': repeater.radio_id,
