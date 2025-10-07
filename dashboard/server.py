@@ -105,6 +105,20 @@ class DashboardState:
     def __init__(self):
         self.repeaters: Dict[int, dict] = {}
         self.repeater_details: Dict[int, dict] = {}  # Detailed info (sent once per connection)
+        self.streams: Dict[str, dict] = {}  # key: f"{repeater_id}.{slot}"
+        self.events: deque = deque(maxlen=500)  # Ring buffer of recent events
+        self.last_heard: List[dict] = []  # Last heard users
+        self.last_heard_stats: dict = {}  # User cache statistics
+        self.websocket_clients: Set[WebSocket] = set()
+        self.hblink_connected: bool = False  # Track HBlink4 connection status
+        self.stats = {
+            'total_streams_today': 0,
+            'total_duration_today': 0.0,  # Total duration in seconds
+            'active_calls': 0,  # Currently active forwarded calls
+            'total_calls_today': 0,  # Total calls forwarded today
+            'start_time': datetime.now().isoformat(),
+            'last_reset_date': date.today().isoformat()  # Track when stats were last reset
+        }
     
     def reset_daily_stats(self):
         """Reset daily statistics at midnight"""
