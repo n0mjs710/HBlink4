@@ -70,6 +70,7 @@ class PatternMatch:
     """Represents a pattern matching rule for repeater configuration"""
     name: str
     config: RepeaterConfig
+    description: str = ''  # Optional description of the pattern
     # Support multiple match types in one pattern (evaluated with OR logic)
     ids: List[int] = field(default_factory=list)
     id_ranges: List[Tuple[int, int]] = field(default_factory=list)
@@ -137,6 +138,7 @@ class RepeaterMatcher:
             
             result.append(PatternMatch(
                 name=pattern['name'],
+                description=pattern.get('description', ''),
                 config=config,
                 ids=ids,
                 id_ranges=id_ranges,
