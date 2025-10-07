@@ -41,6 +41,34 @@
             align-items: center;
         }
         
+        .audio-toggle {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease;
+            border: 2px solid #64748b;
+        }
+        
+        .audio-toggle:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        
+        .audio-toggle.enabled {
+            background: #8b5cf6;
+            color: white;
+            border-color: #8b5cf6;
+        }
+        
+        .audio-toggle.disabled {
+            background: #374151;
+            color: #9ca3af;
+            border-color: #4b5563;
+        }
+        
         .connection-status {
             padding: 8px 16px;
             border-radius: 6px;
@@ -540,6 +568,7 @@
             <div class="status-badges">
                 <div class="connection-status clickable warning" id="wsStatus" title="Connecting to dashboard server...">Connecting...</div>
                 <div class="connection-status warning" id="hblinkStatus" title="Waiting for connection status...">Unknown</div>
+                <div class="audio-toggle disabled" id="audioToggle" title="Click to enable audio notifications">🔇 Audio Off</div>
             </div>
         </header>
         
@@ -631,6 +660,73 @@
             },
             config: {}
         };
+        
+        // Audio notification system
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        let audioEnabled = localStorage.getItem('audioNotifications') === 'true';
+        
+        function updateAudioToggle() {
+            const toggle = document.getElementById('audioToggle');
+            if (audioEnabled) {
+                toggle.className = 'audio-toggle enabled';
+                toggle.textContent = '🔊 Audio On';
+                toggle.title = 'Click to disable audio notifications';
+            } else {
+                toggle.className = 'audio-toggle disabled';
+                toggle.textContent = '🔇 Audio Off';
+                toggle.title = 'Click to enable audio notifications';
+            }
+        }
+        
+        function toggleAudio() {
+            audioEnabled = !audioEnabled;
+            localStorage.setItem('audioNotifications', audioEnabled.toString());
+            updateAudioToggle();
+            // Resume audio context if enabling (required by browsers)
+            if (audioEnabled && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+        }
+        
+        function playTone(frequency, duration) {
+            if (!audioEnabled) return;
+            
+            // Resume audio context if suspended (required by browsers)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = frequency;
+            oscillator.type = 'sine';
+            
+            // Fade in and out to avoid clicks
+            const now = audioContext.currentTime;
+            gainNode.gain.setValueAtTime(0, now);
+            gainNode.gain.linearRampToValueAtTime(0.3, now + 0.01);
+            gainNode.gain.linearRampToValueAtTime(0.3, now + duration - 0.01);
+            gainNode.gain.linearRampToValueAtTime(0, now + duration);
+            
+            oscillator.start(now);
+            oscillator.stop(now + duration);
+        }
+        
+        function playConnectTone() {
+            playTone(880, 0.15);
+        }
+        
+        function playDisconnectTone() {
+            playTone(440, 0.15);
+        }
+        
+        function playAlertTone() {
+            playTone(2475, 0.05);
+        }
         
         // Load configuration
         async function loadConfig() {
@@ -1185,15 +1281,31 @@
                     if (state.repeaters && data.repeater_id) {
                         const repeaterIndex = state.repeaters.findIndex(r => r.repeater_id == data.repeater_id);
                         if (repeaterIndex >= 0) {
+                            const oldMissedPings = state.repeaters[repeaterIndex].missed_pings || 0;
+                            const newMissedPings = data.missed_pings !== undefined ? data.missed_pings : 0;
+                            
                             // Update the repeater data while preserving other fields
                             state.repeaters[repeaterIndex] = {
                                 ...state.repeaters[repeaterIndex],
                                 ...data,
                                 last_ping: data.last_ping || state.repeaters[repeaterIndex].last_ping,
-                                missed_pings: data.missed_pings !== undefined ? data.missed_pings : 0
+                                missed_pings: newMissedPings
                             };
+                            
+                            // Play appropriate tone based on missed_pings change
+                            if (oldMissedPings === 0 && newMissedPings > 0) {
+                                // Repeater just missed a ping (blue -> yellow)
+                                playAlertTone();
+                            } else if (oldMissedPings > 0 && newMissedPings === 0) {
+                                // Ping restored (yellow -> blue)
+                                playConnectTone();
+                            }
+                            
                             // Immediately refresh the display to update yellow warning
                             updateRepeaters(state.repeaters);
+                        } else {
+                            // New repeater connection
+                            playConnectTone();
                         }
                     }
                     break;
@@ -1201,6 +1313,7 @@
                 case 'repeater_disconnected':
                     // Remove repeater from state immediately
                     if (state.repeaters && state.repeaters[data.repeater_id]) {
+                        playDisconnectTone();
                         delete state.repeaters[data.repeater_id];
                         // Remove from DOM immediately
                         const repeaterCard = document.querySelector(`[data-repeater-id="${data.repeater_id}"]`);
@@ -1322,6 +1435,10 @@
         
         // HBlink4 badge is not clickable - it's just a status indicator
         // Users can't control the server-side connection from the browser
+        
+        // Set up audio toggle button
+        document.getElementById('audioToggle').addEventListener('click', toggleAudio);
+        updateAudioToggle();
         
         // Initialize dashboard
         loadConfig();
