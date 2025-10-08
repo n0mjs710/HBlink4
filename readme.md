@@ -149,7 +149,7 @@ The configuration file uses JSON format and supports extensive customization. Ke
 
 For complete documentation of all configuration options, see the [Configuration Guide](docs/configuration.md).
 
-## Supportq
+## Support
 
 No end-user support is provided. The development team for this software is exactly 1 person, with limited resources and no ability to duplicate environments for testing. Flagging genuine code issues is apprecicated, but please to not open issues because it doesn't work the way you'd like it to. There are no feature requests.
 
