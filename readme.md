@@ -149,13 +149,13 @@ The configuration file uses JSON format and supports extensive customization. Ke
 
 For complete documentation of all configuration options, see the [Configuration Guide](docs/configuration.md).
 
-## Support
+## Supportq
 
 No end-user support is provided. The development team for this software is exactly 1 person, with limited resources and no ability to duplicate environments for testing. Flagging genuine code issues is apprecicated, but please to not open issues because it doesn't work the way you'd like it to. There are no feature requests.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. Do not submit a Pull Request to the main branch for added features without consultation first. Added features may collide with other mainline features under development. Use alternative branches named for the feature being added.
+Contributions are welcome! Please feel free to submit a Pull Request. Do not submit a Pull Request to the main branch for added features without consultation first. Added features may collide with other mainline features under development, and additions that are inconsistent with the goals of the project may not be accepted. If you want to add a feature, it's best to discuss it first. Use alternative branches named for the feature being added.
 
 ## License
 
