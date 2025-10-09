@@ -177,8 +177,8 @@ RPTO + [radio_id] + "TS1=1,2,3;TS2=10,20"
 ```
 
 Result:
-- TS1 active TGs: `1, 2, 3`
-- TS2 active TGs: `10, 20`
+- TS1 active TGs: `1, 2, 3` (subset of allowed TGs)
+- TS2 active TGs: `10, 20` (subset of allowed TGs)
 
 #### Example 2: Request TGs Not in Config (Rejected)
 
@@ -200,7 +200,32 @@ Result:
 
 #### Example 3: Using All Configured TGs
 
-Repeater can send RPTO with all TGs from config, or simply not send RPTO at all - both result in using all configured TGs.
+If you want to use all configured TGs, simply **don't send RPTO**. The server will use the full list from the config.
+
+Alternatively, you can send RPTO with all TGs from the config:
+```
+RPTO + [radio_id] + "TS1=1,2,3,4,5;TS2=10,20,30"
+```
+Both approaches result in the same behavior.
+
+#### Example 4: Disable a Timeslot via RPTO
+
+Server config allows:
+```json
+"slot1_talkgroups": [1, 2, 3, 4, 5],
+"slot2_talkgroups": [10, 20, 30]
+```
+
+Repeater sends (note: TS1 has empty value):
+```
+RPTO + [radio_id] + "TS1=;TS2=10,20"
+```
+
+Result:
+- TS1 active TGs: `[]` (empty set - **no traffic accepted on TS1**)
+- TS2 active TGs: `10, 20`
+
+⚠️ **Note**: An empty TS value in RPTO (e.g., `TS1=`) results in no TGs being active on that slot. This is useful for temporarily disabling a timeslot without changing server config.
 
 ### When to Use RPTO
 
@@ -209,10 +234,23 @@ Repeater can send RPTO with all TGs from config, or simply not send RPTO at all 
 - Different talkgroups are needed for different times/events
 - Repeater has limited capacity and wants selective routing
 - Implementing dynamic TG subscription based on local user preferences
+- Need to temporarily disable a timeslot (send empty TG list)
 
 **Don't use RPTO when:**
-- You want all configured talkgroups (just connect normally)
-- Trying to add TGs not in server config (won't work - config is master)
+- You want all configured talkgroups (just connect normally - RPTO is optional)
+- Trying to add TGs not in server config (won't work - config is master allow list)
+
+**Understanding Allow All vs Deny All:**
+
+| Config Setting | RPTO Behavior | Result |
+|----------------|---------------|--------|
+| Config has TG list `[1,2,3]` | No RPTO sent | Use all TGs from config: `[1,2,3]` |
+| Config has TG list `[1,2,3]` | RPTO: `TS1=1,2` | Use intersection: `[1,2]` |
+| Config has TG list `[1,2,3]` | RPTO: `TS1=` (empty) | Use intersection: `[]` (deny all on TS1) |
+| Config has empty list `[]` | No RPTO sent | **Deny all** (empty config = deny all) |
+| Config has empty list `[]` | RPTO: `TS1=1,2,3` | Still `[]` (config is master - denies all) |
+| Config not defined (missing) | No RPTO sent | **Allow all** (no config = allow all) |
+| Config not defined (missing) | RPTO: `TS1=1,2` | Use RPTO list: `[1,2]` |
 
 ### RPTO Timing
 

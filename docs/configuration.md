@@ -444,16 +444,40 @@ The same talkgroup lists control BOTH directions:
 - **FROM repeater (inbound)**: Only listed TGIDs are accepted from the repeater
 - **TO repeater (outbound)**: Only listed TGIDs are forwarded to the repeater
 
-**Special Case - Accept/Forward All Talkgroups:**
-- **Empty list `[]`**: Accepts and forwards ALL talkgroups (no filtering)
-- This ensures symmetric routing—if a repeater can send any TG, it can receive any TG
+**Talkgroup Filtering Modes:**
 
-**Example:**
+| Configuration | Behavior | Use Case |
+|---------------|----------|----------|
+| **Missing/Not configured** | Allow ALL talkgroups | Legacy/unrestricted repeaters |
+| **Empty list `[]`** | **DENY ALL** talkgroups | Disable a timeslot completely |
+| **List with TGs `[1,2,3]`** | Allow ONLY listed TGs | Normal operation with specific TGs |
+
+⚠️ **IMPORTANT**: An empty list `[]` means "deny all" - no traffic will be accepted or forwarded on that timeslot!
+
+**Examples:**
+
 ```json
+// Example 1: Allow specific talkgroups
 "config": {
     "passphrase": "my-secret-key",
-    "slot1_talkgroups": [],          // Accept/forward ALL on TS1 (no filtering)
-    "slot2_talkgroups": [3120, 3121] // Accept/forward ONLY 3120 and 3121 on TS2
+    "slot1_talkgroups": [2, 9],       // Accept/forward ONLY TG 2 and 9 on TS1
+    "slot2_talkgroups": [3120, 3121]  // Accept/forward ONLY 3120 and 3121 on TS2
+}
+
+// Example 2: Disable a timeslot (deny all)
+"config": {
+    "passphrase": "my-secret-key",
+    "slot1_talkgroups": [],      // DENY ALL traffic on TS1 (slot disabled)
+    "slot2_talkgroups": [3120]   // Accept/forward ONLY TG 3120 on TS2
+}
+
+// Example 3: No configuration = allow all (backward compatibility)
+// If patterns section is omitted or pattern doesn't match,
+// the default config applies. If default has no TG lists defined,
+// all traffic is allowed (legacy behavior).
+"default": {
+    "passphrase": "default-password"
+    // No slot1_talkgroups or slot2_talkgroups = allow all TGs
 }
 ```
 
