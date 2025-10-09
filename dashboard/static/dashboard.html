@@ -1108,9 +1108,9 @@
                                         <td>Timeslot 1:</td>
                                         <td>${
                                             details.access_control.slot1_talkgroups === null
-                                                ? '<span style="color: #10b981;">All TGs Allowed</span>' 
+                                                ? 'All TGs Allowed' 
                                                 : Array.isArray(details.access_control.slot1_talkgroups) && details.access_control.slot1_talkgroups.length === 0
-                                                    ? '<span style="color: #ef4444;">All TGs Denied</span>'
+                                                    ? 'All TGs Denied'
                                                     : Array.isArray(details.access_control.slot1_talkgroups) && details.access_control.slot1_talkgroups.length > 0
                                                         ? details.access_control.slot1_talkgroups.join(', ')
                                                         : '<span style="color: #6b7280;">Unknown</span>'
@@ -1120,9 +1120,9 @@
                                         <td>Timeslot 2:</td>
                                         <td>${
                                             details.access_control.slot2_talkgroups === null
-                                                ? '<span style="color: #10b981;">All TGs Allowed</span>' 
+                                                ? 'All TGs Allowed' 
                                                 : Array.isArray(details.access_control.slot2_talkgroups) && details.access_control.slot2_talkgroups.length === 0
-                                                    ? '<span style="color: #ef4444;">All TGs Denied</span>'
+                                                    ? 'All TGs Denied'
                                                     : Array.isArray(details.access_control.slot2_talkgroups) && details.access_control.slot2_talkgroups.length > 0
                                                         ? details.access_control.slot2_talkgroups.join(', ')
                                                         : '<span style="color: #6b7280;">Unknown</span>'
@@ -1321,12 +1321,12 @@
                                     ${r.slot1_talkgroups === null ? `
                                     <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
                                         <span class="repeater-meta-label">TS1 TGs:</span>
-                                        <span style="color: #10b981;">All</span>
+                                        <span>All</span>
                                     </div>
                                     ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length === 0 ? `
                                     <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
                                         <span class="repeater-meta-label">TS1 TGs:</span>
-                                        <span style="color: #ef4444;">None</span>
+                                        <span>None</span>
                                     </div>
                                     ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length > 0 ? `
                                     <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
@@ -1349,12 +1349,12 @@
                                     ${r.slot2_talkgroups === null ? `
                                     <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
                                         <span class="repeater-meta-label">TS2 TGs:</span>
-                                        <span style="color: #10b981;">All</span>
+                                        <span>All</span>
                                     </div>
                                     ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length === 0 ? `
                                     <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
                                         <span class="repeater-meta-label">TS2 TGs:</span>
-                                        <span style="color: #ef4444;">None</span>
+                                        <span>None</span>
                                     </div>
                                     ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length > 0 ? `
                                     <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
