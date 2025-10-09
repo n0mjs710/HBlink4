@@ -1243,8 +1243,10 @@ class HBProtocol(DatagramProtocol):
                 int.from_bytes(repeater_id, 'big'),
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
-            config_ts1 = set(repeater_config.slot1_talkgroups)
-            config_ts2 = set(repeater_config.slot2_talkgroups)
+            # Convert config to sets, handling None (allow all) properly
+            # None = allow all TGs, [] = deny all, [1,2,3] = specific TGs
+            config_ts1 = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
+            config_ts2 = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
             
             # Parse RPTO format: "TS1=1,2,3;TS2=4,5,6;..."
             requested_ts1 = set()
@@ -1265,12 +1267,30 @@ class HBProtocol(DatagramProtocol):
                                      if tg.strip().isdigit()}
             
             # Filter: only accept TGs that are in config (intersection)
-            final_ts1 = requested_ts1 & config_ts1 if requested_ts1 else config_ts1
-            final_ts2 = requested_ts2 & config_ts2 if requested_ts2 else config_ts2
+            # If config is None (allow all), any RPTO request is valid (subset of "all")
+            # If config is a set, only grant intersection (RPTO can restrict, not expand)
+            if config_ts1 is None:
+                # Config allows all TGs, so grant whatever repeater requested
+                final_ts1 = requested_ts1 if requested_ts1 else None  # None = keep "allow all"
+            else:
+                # Config has specific TGs, filter RPTO to only those in config
+                final_ts1 = requested_ts1 & config_ts1 if requested_ts1 else config_ts1
             
-            # Log any requested TGs that were rejected
-            rejected_ts1 = requested_ts1 - config_ts1
-            rejected_ts2 = requested_ts2 - config_ts2
+            if config_ts2 is None:
+                final_ts2 = requested_ts2 if requested_ts2 else None
+            else:
+                final_ts2 = requested_ts2 & config_ts2 if requested_ts2 else config_ts2
+            
+            # Log any requested TGs that were rejected (only when config has restrictions)
+            if config_ts1 is not None:
+                rejected_ts1 = requested_ts1 - config_ts1
+            else:
+                rejected_ts1 = set()  # No rejections when config allows all
+            
+            if config_ts2 is not None:
+                rejected_ts2 = requested_ts2 - config_ts2
+            else:
+                rejected_ts2 = set()
             if rejected_ts1:
                 LOGGER.warning(f'⚠️  TS1 TG(s) {sorted(rejected_ts1)} requested by repeater {int.from_bytes(repeater_id, "big")} not allowed by config')
             if rejected_ts2:
@@ -1281,14 +1301,21 @@ class HBProtocol(DatagramProtocol):
             repeater.slot2_talkgroups = final_ts2
             repeater.rpto_received = True  # Mark that RPTO was received
             
-            LOGGER.info(f'  → TS1 TGs: {sorted(final_ts1)}')
-            LOGGER.info(f'  → TS2 TGs: {sorted(final_ts2)}')
+            # Log final TG lists (handle None = allow all)
+            ts1_display = 'All' if final_ts1 is None else (sorted(final_ts1) if final_ts1 else 'None')
+            ts2_display = 'All' if final_ts2 is None else (sorted(final_ts2) if final_ts2 else 'None')
+            LOGGER.info(f'  → TS1 TGs: {ts1_display}')
+            LOGGER.info(f'  → TS2 TGs: {ts2_display}')
             
             # Emit event to update dashboard in real-time
+            # Convert internal state to JSON-serializable format
+            slot1_json = None if final_ts1 is None else ([] if not final_ts1 else sorted(list(final_ts1)))
+            slot2_json = None if final_ts2 is None else ([] if not final_ts2 else sorted(list(final_ts2)))
+            
             self._events.emit('repeater_options_updated', {
                 'repeater_id': int.from_bytes(repeater_id, 'big'),
-                'slot1_talkgroups': sorted(final_ts1),
-                'slot2_talkgroups': sorted(final_ts2),
+                'slot1_talkgroups': slot1_json,
+                'slot2_talkgroups': slot2_json,
                 'rpto_received': True
             })
             
