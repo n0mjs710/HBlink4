@@ -645,8 +645,8 @@ async def get_repeater_details(repeater_id: int):
             "connection_category": details.get('matched_pattern', 'Default'),
             "category_description": details.get('pattern_description', 'Using default configuration'),
             "rpto_received": repeater.get('rpto_received', False),
-            "slot1_talkgroups": repeater.get('slot1_talkgroups', []),
-            "slot2_talkgroups": repeater.get('slot2_talkgroups', []),
+            "slot1_talkgroups": repeater.get('slot1_talkgroups') if 'slot1_talkgroups' in repeater else None,
+            "slot2_talkgroups": repeater.get('slot2_talkgroups') if 'slot2_talkgroups' in repeater else None,
             "talkgroups_source": "RPTO" if repeater.get('rpto_received') else "Pattern/Config"
         },
         "metadata": {

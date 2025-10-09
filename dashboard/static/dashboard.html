@@ -1106,11 +1106,27 @@
                                 <table class="modal-table">
                                     <tr>
                                         <td>Timeslot 1:</td>
-                                        <td>${details.access_control.slot1_talkgroups.length > 0 ? details.access_control.slot1_talkgroups.join(', ') : 'None'}</td>
+                                        <td>${
+                                            details.access_control.slot1_talkgroups === "All"
+                                                ? '<span style="color: #10b981;">All TGs Allowed</span>' 
+                                                : details.access_control.slot1_talkgroups === "None"
+                                                    ? '<span style="color: #ef4444;">All TGs Denied</span>'
+                                                    : Array.isArray(details.access_control.slot1_talkgroups)
+                                                        ? details.access_control.slot1_talkgroups.join(', ')
+                                                        : '<span style="color: #6b7280;">Unknown</span>'
+                                        }</td>
                                     </tr>
                                     <tr>
                                         <td>Timeslot 2:</td>
-                                        <td>${details.access_control.slot2_talkgroups.length > 0 ? details.access_control.slot2_talkgroups.join(', ') : 'None'}</td>
+                                        <td>${
+                                            details.access_control.slot2_talkgroups === "All"
+                                                ? '<span style="color: #10b981;">All TGs Allowed</span>' 
+                                                : details.access_control.slot2_talkgroups === "None"
+                                                    ? '<span style="color: #ef4444;">All TGs Denied</span>'
+                                                    : Array.isArray(details.access_control.slot2_talkgroups)
+                                                        ? details.access_control.slot2_talkgroups.join(', ')
+                                                        : '<span style="color: #6b7280;">Unknown</span>'
+                                        }</td>
                                     </tr>
                                 </table>
                             </div>
@@ -1302,7 +1318,17 @@
                                         <span>${(parseFloat(r.tx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
                                     </div>
                                     ` : '<div></div>'}
-                                    ${r.slot1_talkgroups && r.slot1_talkgroups.length > 0 ? `
+                                    ${r.slot1_talkgroups === "All" ? `
+                                    <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
+                                        <span class="repeater-meta-label">TS1 TGs:</span>
+                                        <span style="color: #10b981;">All</span>
+                                    </div>
+                                    ` : r.slot1_talkgroups === "None" ? `
+                                    <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
+                                        <span class="repeater-meta-label">TS1 TGs:</span>
+                                        <span style="color: #ef4444;">None</span>
+                                    </div>
+                                    ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length > 0 ? `
                                     <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
                                         <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS1 TGs:</span>
                                         <span>${r.slot1_talkgroups.join(', ')}</span>
@@ -1320,7 +1346,17 @@
                                         <span>${(parseFloat(r.rx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
                                     </div>
                                     ` : '<div></div>'}
-                                    ${r.slot2_talkgroups && r.slot2_talkgroups.length > 0 ? `
+                                    ${r.slot2_talkgroups === "All" ? `
+                                    <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
+                                        <span class="repeater-meta-label">TS2 TGs:</span>
+                                        <span style="color: #10b981;">All</span>
+                                    </div>
+                                    ` : r.slot2_talkgroups === "None" ? `
+                                    <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
+                                        <span class="repeater-meta-label">TS2 TGs:</span>
+                                        <span style="color: #ef4444;">None</span>
+                                    </div>
+                                    ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length > 0 ? `
                                     <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
                                         <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS2 TGs:</span>
                                         <span>${r.slot2_talkgroups.join(', ')}</span>
