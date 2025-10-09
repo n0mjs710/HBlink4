@@ -62,8 +62,9 @@ class BlacklistMatch:
 class RepeaterConfig:
     """Configuration settings for a matched repeater"""
     passphrase: str
-    slot1_talkgroups: List[int] = field(default_factory=list)
-    slot2_talkgroups: List[int] = field(default_factory=list)
+    # None = allow all TGs, [] = deny all TGs, [1,2,3] = specific TGs
+    slot1_talkgroups: Optional[List[int]] = None
+    slot2_talkgroups: Optional[List[int]] = None
 
 @dataclass
 class PatternMatch:
