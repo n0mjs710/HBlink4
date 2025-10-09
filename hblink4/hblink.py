@@ -1808,6 +1808,11 @@ def main():
 
     load_config(sys.argv[1])
     setup_logging()
+    
+    # Startup banner
+    LOGGER.info('🚀 ═══════════════════════════════════════════════════════════════')
+    LOGGER.info('🚀 HBLINK4 STARTING UP')
+    LOGGER.info('🚀 ═══════════════════════════════════════════════════════════════')
 
     # Create protocol instance so we can access it for cleanup
     protocol = HBProtocol()
