@@ -120,8 +120,9 @@ class RepeaterState:
     package_id: bytes = b''
     
     # Talkgroup access control (stored as sets for O(1) lookup)
-    slot1_talkgroups: set = field(default_factory=set)
-    slot2_talkgroups: set = field(default_factory=set)
+    # None = no restrictions (allow all), empty set = deny all, non-empty set = allow only those TGs
+    slot1_talkgroups: Optional[set] = None
+    slot2_talkgroups: Optional[set] = None
     rpto_received: bool = False  # True if repeater sent RPTO to override config TGs
     
     # Active stream tracking per slot
@@ -495,7 +496,6 @@ class HBProtocol(DatagramProtocol):
         Check if a repeater is allowed to send traffic on this TS/TGID.
         
         Uses cached TG sets in RepeaterState for O(1) lookup.
-        If not configured, all traffic is allowed (backward compatibility).
         
         Args:
             repeater_id: Repeater ID to check
@@ -513,9 +513,13 @@ class HBProtocol(DatagramProtocol):
         # Get slot-specific talkgroup set from repeater state
         allowed_tgids = repeater.slot1_talkgroups if slot == 1 else repeater.slot2_talkgroups
         
-        # Empty set means accept all (backward compatibility)
-        if not allowed_tgids:
+        # None means no restrictions (allow all)
+        if allowed_tgids is None:
             return True
+        
+        # Empty set means deny all
+        if not allowed_tgids:
+            return False
         
         # O(1) set membership check
         return tgid in allowed_tgids
@@ -543,9 +547,13 @@ class HBProtocol(DatagramProtocol):
         # Get slot-specific talkgroup set from repeater state
         allowed_tgids = repeater.slot1_talkgroups if slot == 1 else repeater.slot2_talkgroups
         
-        # Empty set means accept all (symmetric with inbound)
-        if not allowed_tgids:
+        # None means no restrictions (allow all)
+        if allowed_tgids is None:
             return True
+        
+        # Empty set means deny all
+        if not allowed_tgids:
+            return False
         
         # O(1) set membership check
         return tgid in allowed_tgids
@@ -1099,12 +1107,14 @@ class HBProtocol(DatagramProtocol):
                     int.from_bytes(repeater_id, 'big'),
                     repeater.callsign.decode().strip() if repeater.callsign else None
                 )
+                # Convert lists to sets. Empty lists become empty sets (deny all).
                 repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups)
                 repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups)
             except Exception as e:
                 LOGGER.warning(f'Could not load TG config for repeater {int.from_bytes(repeater_id, "big")}: {e}')
-                repeater.slot1_talkgroups = set()
-                repeater.slot2_talkgroups = set()
+                # No config = None (allow all for backward compatibility)
+                repeater.slot1_talkgroups = None
+                repeater.slot2_talkgroups = None
             
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             LOGGER.info(f'Repeater {int.from_bytes(repeater_id, "big")} ({repeater.callsign.decode().strip()}) configured successfully')
