@@ -1107,9 +1107,10 @@ class HBProtocol(DatagramProtocol):
                     int.from_bytes(repeater_id, 'big'),
                     repeater.callsign.decode().strip() if repeater.callsign else None
                 )
-                # Convert lists to sets. Empty lists become empty sets (deny all).
-                repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups)
-                repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups)
+                # Convert config to internal representation:
+                # None stays None (allow all), lists become sets
+                repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
+                repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
             except Exception as e:
                 LOGGER.warning(f'Could not load TG config for repeater {int.from_bytes(repeater_id, "big")}: {e}')
                 # No config = None (allow all for backward compatibility)
