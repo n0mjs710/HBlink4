@@ -819,12 +819,13 @@ class HBProtocol(DatagramProtocol):
             if current_stream.stream_id == stream_id:
                 return True
             
-            # Special case: If current stream is an assumed (TX) stream and we're receiving
+            # Special case: If current stream is an ACTIVE assumed (TX) stream and we're receiving
             # a real (RX) stream from the same repeater, the repeater wins.
             # Remove this repeater from any active route-caches to stop wasting bandwidth.
-            if current_stream.is_assumed:
-                LOGGER.info(f'Repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
-                           f'starting RX while we have assumed TX stream - repeater wins, '
+            # Note: Ended assumed streams should go through normal hang time logic instead.
+            if current_stream.is_assumed and not current_stream.ended:
+                LOGGER.info(f'Repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
+                           f'starting RX while we have active assumed TX stream - repeater wins, '
                            f'removing from active route-caches')
                 
                 # Remove this repeater from all active stream route-caches
@@ -836,9 +837,9 @@ class HBProtocol(DatagramProtocol):
                             other_stream.target_repeaters and
                             repeater.repeater_id in other_stream.target_repeaters):
                             other_stream.target_repeaters.discard(repeater.repeater_id)
-                            LOGGER.debug(f'Removed repeater {int.from_bytes(repeater.repeater_id, "big")} '
+                            LOGGER.debug(f'Removed repeater {self._rid_to_int(repeater.repeater_id)} '
                                        f'from route-cache of stream on repeater '
-                                       f'{int.from_bytes(other_repeater.repeater_id, "big")} slot {other_slot}')
+                                       f'{self._rid_to_int(other_repeater.repeater_id)} slot {other_slot}')
                 
                 # Clear the assumed stream - real stream takes precedence
                 # Fall through to create new real stream
