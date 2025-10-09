@@ -1124,16 +1124,21 @@ class HBProtocol(DatagramProtocol):
             self._emit_repeater_details(repeater_id, repeater)
             
             # Emit repeater_connected event (lightweight, will be sent on ping updates)
-            try:
-                repeater_config = self._matcher.get_repeater_config(
-                    int.from_bytes(repeater_id, 'big'),
-                    repeater.callsign.decode().strip() if repeater.callsign else None
-                )
-                slot1_talkgroups = repeater_config.slot1_talkgroups if repeater_config else []
-                slot2_talkgroups = repeater_config.slot2_talkgroups if repeater_config else []
-            except:
+            # Convert internal state (None/set) to JSON-serializable format
+            # None = no restrictions (allow all), [] = deny all, [list] = specific TGs
+            if repeater.slot1_talkgroups is None:
+                slot1_talkgroups = None
+            elif not repeater.slot1_talkgroups:
                 slot1_talkgroups = []
+            else:
+                slot1_talkgroups = sorted(list(repeater.slot1_talkgroups))
+            
+            if repeater.slot2_talkgroups is None:
+                slot2_talkgroups = None
+            elif not repeater.slot2_talkgroups:
                 slot2_talkgroups = []
+            else:
+                slot2_talkgroups = sorted(list(repeater.slot2_talkgroups))
             
             self._events.emit('repeater_connected', {
                 'repeater_id': int.from_bytes(repeater_id, 'big'),
