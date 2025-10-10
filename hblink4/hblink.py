@@ -981,7 +981,9 @@ class HBProtocol(DatagramProtocol):
             current_time = time()
             time_since_last_packet = current_time - current_stream.last_seen
             
-            if time_since_last_packet > 0.2:  # 200ms threshold
+            # Only use fast terminator for active streams that never got a proper terminator
+            # If stream is already ended (in hang time), skip to hang time check
+            if not current_stream.ended and time_since_last_packet > 0.2:  # 200ms threshold
                 # Old stream appears terminated - use unified ending logic
                 # Log the fast terminator detection first
                 LOGGER.info(f'Fast terminator: stream on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
@@ -996,8 +998,8 @@ class HBProtocol(DatagramProtocol):
                 # Don't clear the stream - let _handle_stream_start check hang time
                 # It will create the new stream and replace this one if allowed
                 return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id, call_type_bit)
-            else:
-                # Real contention - stream still active
+            elif not current_stream.ended:
+                # Real contention - stream still active (within 200ms)
                 LOGGER.warning(f'Stream contention on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
                               f'existing stream (src={int.from_bytes(current_stream.rf_src, "big")}, '
                               f'dst={int.from_bytes(current_stream.dst_id, "big")}, '
@@ -1005,6 +1007,9 @@ class HBProtocol(DatagramProtocol):
                               f'vs new stream (src={int.from_bytes(rf_src, "big")}, '
                               f'dst={int.from_bytes(dst_id, "big")})')
                 return False
+            else:
+                # Stream already ended (in hang time) - let _handle_stream_start check hang time rules
+                return self._handle_stream_start(repeater, rf_src, dst_id, slot, stream_id, call_type_bit)
         
         # Update stream state
         current_stream.last_seen = time()
