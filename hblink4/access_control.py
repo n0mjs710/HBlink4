@@ -65,6 +65,7 @@ class RepeaterConfig:
     # None = allow all TGs, [] = deny all TGs, [1,2,3] = specific TGs
     slot1_talkgroups: Optional[List[int]] = None
     slot2_talkgroups: Optional[List[int]] = None
+    trust: bool = False  # If True, use requested TGs as-is (config = defaults only)
 
 @dataclass
 class PatternMatch:
@@ -98,11 +99,12 @@ class RepeaterMatcher:
         self.blacklist = self._parse_blacklist(config.get('blacklist', {"patterns": []}))
         repeater_config = config.get('repeater_configurations', config.get('repeaters', {}))
         self.patterns = self._parse_patterns(repeater_config.get('patterns', []))
-        self.default_config = RepeaterConfig(**repeater_config.get('default', {
-            "passphrase": "passw0rd",
-            "slot1_talkgroups": [8],
-            "slot2_talkgroups": [8]
-        }))
+        
+        # Make default config optional - only use if explicitly provided
+        if 'default' in repeater_config:
+            self.default_config = RepeaterConfig(**repeater_config['default'])
+        else:
+            self.default_config = None
 
     def _parse_blacklist(self, blacklist_config: Dict[str, Any]) -> List[BlacklistMatch]:
         """Parse blacklist patterns from config - supports multiple match types per pattern"""
@@ -174,13 +176,15 @@ class RepeaterMatcher:
             if self._match_pattern(radio_id, callsign, pattern):
                 raise BlacklistError(pattern.name, pattern.reason)
 
-    def get_repeater_config(self, radio_id: int, callsign: Optional[str] = None) -> RepeaterConfig:
+    def get_repeater_config(self, radio_id: int, callsign: Optional[str] = None) -> Optional[RepeaterConfig]:
         """
         Get the configuration for a connecting repeater based on its ID and/or callsign.
         First checks blacklist, then checks patterns in order (first match wins).
         Within each pattern, match priority is: specific IDs -> ID ranges -> callsign patterns
         
         Patterns can now contain multiple match types (ids, id_ranges, callsigns) for flexibility.
+        
+        Returns None if no patterns match and no default configuration is defined.
         
         Raises:
             BlacklistError: If the repeater matches any blacklist pattern
@@ -193,7 +197,7 @@ class RepeaterMatcher:
             if self._match_pattern(radio_id, callsign, pattern):
                 return pattern.config
 
-        # If no patterns match, return default configuration
+        # If no patterns match, return default configuration (or None if not defined)
         return self.default_config
 
     def get_pattern_for_repeater(self, radio_id: int, callsign: Optional[str] = None) -> Optional[PatternMatch]:

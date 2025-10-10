@@ -292,21 +292,20 @@ class HBProtocol(DatagramProtocol):
         """
         Load and cache TG configuration for a repeater.
         Converts config lists to sets for O(1) routing lookups.
+        
+        Note: Config must exist - repeater was already authenticated with this config.
+        If this fails, it indicates a bug in authentication logic that must be fixed.
         """
-        try:
-            repeater_config = self._matcher.get_repeater_config(
-                self._rid_to_int(repeater_id),
-                repeater.get_callsign_str()
-            )
-            # Convert config to internal representation:
-            # None stays None (allow all), lists become sets
-            repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
-            repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
-        except Exception as e:
-            LOGGER.warning(f'Could not load TG config for repeater {self._rid_to_int(repeater_id)}: {e}')
-            # No config = None (allow all for backward compatibility)
-            repeater.slot1_talkgroups = None
-            repeater.slot2_talkgroups = None
+        repeater_config = self._matcher.get_repeater_config(
+            self._rid_to_int(repeater_id),
+            repeater.get_callsign_str()
+        )
+        
+        # Convert config to internal representation:
+        # None stays None (allow all), lists become sets
+        repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
+        repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
+
     
     # ========== END HELPER METHODS ==========
         
@@ -784,25 +783,6 @@ class HBProtocol(DatagramProtocol):
             
         return repeater
     
-    def _is_talkgroup_allowed(self, repeater: RepeaterState, dst_id: bytes) -> bool:
-        """Check if a talkgroup is allowed for this repeater based on its configuration"""
-        try:
-            # Get the repeater's configuration
-            repeater_config = self._matcher.get_repeater_config(
-                int.from_bytes(repeater.repeater_id, 'big'),
-                repeater.callsign.decode().strip() if repeater.callsign else None
-            )
-            
-            # Convert dst_id to int for comparison
-            talkgroup = int.from_bytes(dst_id, 'big')
-            
-            # Check if this talkgroup is in the allowed list
-            return talkgroup in repeater_config.talkgroups
-            
-        except Exception as e:
-            LOGGER.error(f'Error checking talkgroup permissions: {e}')
-            return False
-    
     def _handle_stream_start(self, repeater: RepeaterState, rf_src: bytes, dst_id: bytes, 
                              slot: int, stream_id: bytes, call_type_bit: int = 1) -> bool:
         """
@@ -1103,6 +1083,13 @@ class HBProtocol(DatagramProtocol):
                 repeater.get_callsign_str()
             )
             
+            # If no matching configuration found, reject the connection
+            if repeater_config is None:
+                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} does not match any configured patterns and no default is set')
+                self._send_nak(repeater_id, addr, reason="No matching configuration")
+                self._remove_repeater(repeater_id, "no_config_match")
+                return
+            
             # Validate the hash
             salt_bytes = repeater.salt.to_bytes(4, 'big')
             calc_hash = bytes.fromhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest())
@@ -1261,6 +1248,7 @@ class HBProtocol(DatagramProtocol):
                 self._rid_to_int(repeater_id),
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
+            
             # Convert config to sets, handling None (allow all) properly
             # None = allow all TGs, [] = deny all, [1,2,3] = specific TGs
             config_ts1 = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
@@ -1284,31 +1272,51 @@ class HBProtocol(DatagramProtocol):
                     requested_ts2 = {int(tg.strip()) for tg in value.split(',') 
                                      if tg.strip().isdigit()}
             
-            # Filter: only accept TGs that are in config (intersection)
-            # If config is None (allow all), any RPTO request is valid (subset of "all")
-            # If config is a set, only grant intersection (RPTO can restrict, not expand)
-            if config_ts1 is None:
-                # Config allows all TGs, so grant whatever repeater requested
-                final_ts1 = requested_ts1 if requested_ts1 else None  # None = keep "allow all"
-            else:
-                # Config has specific TGs, filter RPTO to only those in config
-                final_ts1 = requested_ts1 & config_ts1 if requested_ts1 else config_ts1
-            
-            if config_ts2 is None:
-                final_ts2 = requested_ts2 if requested_ts2 else None
-            else:
-                final_ts2 = requested_ts2 & config_ts2 if requested_ts2 else config_ts2
-            
-            # Log any requested TGs that were rejected (only when config has restrictions)
-            if config_ts1 is not None:
-                rejected_ts1 = requested_ts1 - config_ts1
-            else:
-                rejected_ts1 = set()  # No rejections when config allows all
-            
-            if config_ts2 is not None:
-                rejected_ts2 = requested_ts2 - config_ts2
-            else:
+            # Check if this repeater is trusted
+            if repeater_config.trust:
+                # Trusted repeater: use requested TGs as-is, config TGs become defaults
+                final_ts1 = requested_ts1 if requested_ts1 else (config_ts1 if config_ts1 else None)
+                final_ts2 = requested_ts2 if requested_ts2 else (config_ts2 if config_ts2 else None)
+                
+                # Log trust usage - show any TGs beyond config (informational, not warning)
+                if config_ts1 is not None and requested_ts1:
+                    extra_ts1 = requested_ts1 - config_ts1
+                    if extra_ts1:
+                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS1 TGs: {sorted(extra_ts1)}')
+                if config_ts2 is not None and requested_ts2:
+                    extra_ts2 = requested_ts2 - config_ts2
+                    if extra_ts2:
+                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS2 TGs: {sorted(extra_ts2)}')
+                
+                rejected_ts1 = set()
                 rejected_ts2 = set()
+            else:
+                # Standard behavior: intersection of requested and config
+                # If config is None (allow all), any RPTO request is valid (subset of "all")
+                # If config is a set, only grant intersection (RPTO can restrict, not expand)
+                if config_ts1 is None:
+                    # Config allows all TGs, so grant whatever repeater requested
+                    final_ts1 = requested_ts1 if requested_ts1 else None  # None = keep "allow all"
+                else:
+                    # Config has specific TGs, filter RPTO to only those in config
+                    final_ts1 = requested_ts1 & config_ts1 if requested_ts1 else config_ts1
+                
+                if config_ts2 is None:
+                    final_ts2 = requested_ts2 if requested_ts2 else None
+                else:
+                    final_ts2 = requested_ts2 & config_ts2 if requested_ts2 else config_ts2
+            
+                # Log any requested TGs that were rejected (only when config has restrictions)
+                if config_ts1 is not None:
+                    rejected_ts1 = requested_ts1 - config_ts1
+                else:
+                    rejected_ts1 = set()  # No rejections when config allows all
+                
+                if config_ts2 is not None:
+                    rejected_ts2 = requested_ts2 - config_ts2
+                else:
+                    rejected_ts2 = set()
+            
             if rejected_ts1:
                 LOGGER.warning(f'⚠️  TS1 TG(s) {sorted(rejected_ts1)} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
             if rejected_ts2:

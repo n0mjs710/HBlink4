@@ -31,21 +31,6 @@
         "unix_socket": "/tmp/hblink4.sock",
         "buffer_size": 65536
     },
-    "global_alternate_example": {
-        "comment": "Alternative configuration showing longer hang time for slower operators",
-        "max_missed": 5,
-        "use_ipv6": false,
-        "bind_ip": "0.0.0.0",
-        "bind_port": 62031,
-        "logging": {
-            "file": "logs/hblink.log",
-            "console_level": "INFO",
-            "file_level": "DEBUG",
-            "retention_days": 30
-        },
-        "stream_timeout": 2.0,
-        "stream_hang_time": 20.0
-    },
     "blacklist": {
         "patterns": [
             {
@@ -85,27 +70,16 @@
     "repeater_configurations": {
         "patterns": [
             {
-                "name": "KS-DMR Network",
-                "description": "All repeaters in the KS-DMR network",
+                "name": "Core Network Repeaters (Trusted)",
+                "description": "Trusted repeaters managed by core team - can use any TG",
                 "match": {
-                    "id_ranges": [[312000, 312099]]
+                    "ids": [312000, 312001]
                 },
                 "config": {
-                    "passphrase": "ks-dmr-network-key",
+                    "passphrase": "core-network-key",
+                    "trust": true,
                     "slot1_talkgroups": [8, 9],
                     "slot2_talkgroups": [3120, 3121, 3122]
-                }
-            },
-            {
-                "name": "WA0EDA Repeaters",
-                "description": "All WA0EDA club repeaters",
-                "match": {
-                    "callsigns": ["WA0EDA*"]
-                },
-                "config": {
-                    "passphrase": "wa0eda-network-key",
-                    "slot1_talkgroups": [8],
-                    "slot2_talkgroups": [31201, 31202]
                 }
             },
             {
@@ -116,6 +90,7 @@
                 },
                 "config": {
                     "passphrase": "regional-network-key",
+                    "trust": false,
                     "slot1_talkgroups": [1, 2, 3, 8],
                     "slot2_talkgroups": [3100, 3110, 3120]
                 }
@@ -135,30 +110,8 @@
         ],
         "default": {
             "passphrase": "passw0rd",
-            "slot1_talkgroups": [1],
-            "slot2_talkgroups": [2]
-        }
-    },
-    "talkgroups": {
-        "8": {
-            "name": "Local",
-            "bridge": false
-        },
-        "9": {
-            "name": "Alternate KS-DMR",
-            "bridge": true
-        },
-        "3120": {
-            "name": "KS Statewide",
-            "bridge": true
-        },
-        "3122": {
-            "name": "KS-DMR Tech",
-            "bridge": false
-        },
-        "31202": {
-            "name": "WA0EDA Event",
-            "bridge": false
+            "slot1_talkgroups": [8],
+            "slot2_talkgroups": [8]
         }
     }
 }

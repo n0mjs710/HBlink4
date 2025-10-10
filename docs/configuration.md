@@ -323,7 +323,7 @@ Multiple match types in a single pattern are combined with OR logic (any match t
 
 ## Repeater Configurations
 
-The `repeater_configurations` section defines patterns for matching repeaters and their configurations. It includes a default configuration and specific patterns.
+The `repeater_configurations` section defines patterns for matching repeaters and their configurations. It includes an optional default configuration and specific patterns.
 
 ```json
 {
@@ -337,6 +337,8 @@ The `repeater_configurations` section defines patterns for matching repeaters an
     }
 }
 ```
+
+**Note:** The `default` configuration is **optional**. If omitted, repeaters that don't match any pattern will be rejected during authentication. This provides better security by requiring explicit configuration for all connecting repeaters.
 
 ### Pattern Structure
 
@@ -438,6 +440,7 @@ Multiple match types in a single pattern are combined with OR logic (any match t
 | `passphrase` | string | Authentication key for the repeater (required) |
 | `slot1_talkgroups` | array | List of allowed talkgroup IDs for timeslot 1 (bidirectional) |
 | `slot2_talkgroups` | array | List of allowed talkgroup IDs for timeslot 2 (bidirectional) |
+| `trust` | boolean | If true, repeater can use any TG (config TGs become defaults) |
 
 **Symmetric Routing:**
 The same talkgroup lists control BOTH directions:
@@ -480,6 +483,45 @@ The same talkgroup lists control BOTH directions:
     // No slot1_talkgroups or slot2_talkgroups = allow all TGs
 }
 ```
+
+### Trusted Repeaters
+
+The `trust` flag allows designated repeaters to bypass talkgroup restrictions. This is useful for core network repeaters managed by trusted operators.
+
+**Normal Behavior (trust: false or not set):**
+- Repeater requests TGs via OPTIONS packet
+- Server uses **intersection** of (requested TGs) ∩ (configured TGs)
+- Repeater limited to only configured TGs
+
+**Trusted Behavior (trust: true):**
+- Repeater requests TGs via OPTIONS packet
+- Server uses requested TGs **as-is** (no intersection)
+- If no TGs requested, configured TGs used as **defaults**
+- Trusted repeaters can dynamically access any TG without server reconfiguration
+
+**Example:**
+```json
+{
+    "name": "Core Network Repeaters",
+    "description": "Trusted repeaters managed by core team",
+    "match": {
+        "ids": [312000, 312001]
+    },
+    "config": {
+        "passphrase": "core-secret-key",
+        "trust": true,
+        "slot1_talkgroups": [8, 9],      // Defaults if OPTIONS not sent
+        "slot2_talkgroups": [3120, 3121] // Defaults if OPTIONS not sent
+    }
+}
+```
+
+**Use Cases:**
+- **Core network repeaters** - Full access for network management
+- **Testing/development** - Trusted test repeaters can access any TG
+- **Administrative repeaters** - Network monitoring and troubleshooting
+
+**Security Note:** Only assign `trust: true` to repeaters under your direct control. Trusted repeaters have unrestricted access to all talkgroups on the network.
 
 ### Pattern Matching Priority
 
