@@ -789,6 +789,13 @@ class HBProtocol(DatagramProtocol):
         Handle the start of a new stream on a repeater slot.
         Returns True if the stream can proceed, False if there's a contention.
         """
+        # Check if this is a unit/private call (call_type_bit == 1)
+        if call_type_bit == 1:
+            LOGGER.info(f'UNIT CALL received on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
+                       f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
+                       f'stream_id={stream_id.hex()} [NOT ROUTED - unit call handling not yet implemented]')
+            return False  # Reject the stream - don't process unit calls yet
+        
         current_stream = repeater.get_slot_stream(slot)
         current_time = time()
         fast_tg_switch = False  # Track if this is a fast talkgroup switch
