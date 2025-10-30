@@ -632,31 +632,33 @@ class EventReceiver:
             if not data.get('is_assumed', False):
                 # RX streams: actual traffic being received from repeaters
                 state.stats['total_calls_today'] += 1
+                
+                # Add/update user in last_heard immediately with "active" status
+                # Only for actual received calls, not retransmitted calls
+                if src_id:
+                    # Find existing entry or create new one
+                    existing_idx = next((i for i, u in enumerate(state.last_heard) if u['radio_id'] == src_id), None)
+                    user_entry = {
+                        'radio_id': src_id,
+                        'callsign': callsign,
+                        'repeater_id': data['repeater_id'],
+                        'slot': data['slot'],
+                        'talkgroup': data.get('dst_id', 0),
+                        'last_heard': event['timestamp'],
+                        'active': True  # Mark as currently active
+                    }
+                    
+                    if existing_idx is not None:
+                        state.last_heard[existing_idx] = user_entry
+                    else:
+                        state.last_heard.insert(0, user_entry)  # Add to front
+                    
+                    # Keep only most recent 10 entries
+                    state.last_heard = state.last_heard[:10]
             else:
                 # TX streams: traffic being retransmitted to repeaters
+                # Don't add to last_heard - these represent the same call being forwarded
                 state.stats['retransmitted_calls'] += 1
-            
-            # Add/update user in last_heard immediately with "active" status
-            if src_id:
-                # Find existing entry or create new one
-                existing_idx = next((i for i, u in enumerate(state.last_heard) if u['radio_id'] == src_id), None)
-                user_entry = {
-                    'radio_id': src_id,
-                    'callsign': callsign,
-                    'repeater_id': data['repeater_id'],
-                    'slot': data['slot'],
-                    'talkgroup': data.get('dst_id', 0),
-                    'last_heard': event['timestamp'],
-                    'active': True  # Mark as currently active
-                }
-                
-                if existing_idx is not None:
-                    state.last_heard[existing_idx] = user_entry
-                else:
-                    state.last_heard.insert(0, user_entry)  # Add to front
-                
-                # Keep only most recent 10 entries
-                state.last_heard = state.last_heard[:10]
             
             # Update repeater last activity
             if data['repeater_id'] in state.repeaters:
