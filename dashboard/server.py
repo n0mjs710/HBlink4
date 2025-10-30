@@ -112,19 +112,18 @@ class DashboardState:
         self.websocket_clients: Set[WebSocket] = set()
         self.hblink_connected: bool = False  # Track HBlink4 connection status
         self.stats = {
-            'total_streams_today': 0,
-            'total_duration_today': 0.0,  # Total duration in seconds
-            'active_calls': 0,  # Currently active forwarded calls
-            'total_calls_today': 0,  # Total calls forwarded today
+            'total_calls_today': 0,      # Total RX calls (streams) received today
+            'total_duration_today': 0.0,  # Total duration of RX streams only (seconds)
+            'retransmitted_calls': 0,    # Total calls retransmitted today (may be higher than received)
             'start_time': datetime.now().isoformat(),
             'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
     
     def reset_daily_stats(self):
         """Reset daily statistics at midnight"""
-        self.stats['total_streams_today'] = 0
-        self.stats['total_duration_today'] = 0.0
         self.stats['total_calls_today'] = 0
+        self.stats['total_duration_today'] = 0.0
+        self.stats['retransmitted_calls'] = 0
         self.stats['last_reset_date'] = date.today().isoformat()
         logger.info(f"📊 Daily stats reset at midnight (server time)")
 
@@ -419,7 +418,10 @@ class EventReceiver:
                 'duration': 0,
                 'status': 'active'
             }
-            state.stats['total_streams_today'] += 1
+            
+            # Only count RX streams (not assumed/TX streams) in daily totals
+            if not data.get('is_assumed', False):
+                state.stats['total_calls_today'] += 1
             
             # Add/update user in last_heard immediately with "active" status
             if src_id:
@@ -463,8 +465,10 @@ class EventReceiver:
                 stream['duration'] = data['duration']
                 stream['end_reason'] = data.get('end_reason', 'unknown')
                 stream['hang_time'] = data.get('hang_time', 0)
-                # Accumulate total duration when stream ends
-                state.stats['total_duration_today'] += data['duration']
+                
+                # Only accumulate duration for RX streams (not assumed/TX streams)
+                if not data.get('is_assumed', False):
+                    state.stats['total_duration_today'] += data['duration']
                 
                 # Update last_heard entry to mark as no longer active
                 src_id = stream.get('src_id')
@@ -483,9 +487,10 @@ class EventReceiver:
         
         elif event_type == 'forwarding_stats':
             # Update forwarding statistics (don't add to events log)
-            state.stats['active_calls'] = data.get('active_calls', 0)
-            state.stats['total_calls_today'] = data.get('total_calls_today', 0)
-            logger.debug(f"Forwarding stats updated: Active={data.get('active_calls', 0)}, Total Today={data.get('total_calls_today', 0)}")
+            # active_calls from hblink represents currently active assumed (TX) streams
+            # total_calls_today from hblink represents total retransmitted calls
+            state.stats['retransmitted_calls'] = data.get('total_calls_today', 0)
+            logger.debug(f"Forwarding stats updated: Retransmitted Today={data.get('total_calls_today', 0)}")
             # Send to WebSocket clients but skip adding to events log
             await self.send_to_clients(event)
             return

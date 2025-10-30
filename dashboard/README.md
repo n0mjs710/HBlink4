@@ -19,136 +19,31 @@ Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 
 ## Configuration
 
-The dashboard has two configuration files:
+The dashboard uses two configuration files:
+- **HBlink4 config** (`config/config.json`) - Controls event sending
+- **Dashboard config** (`dashboard/config.json`) - Controls dashboard behavior and event receiving
 
-### 1. HBlink4 Config (`config/config.json`)
+Both configs must use the same transport settings (Unix socket for local, TCP for remote).
 
-This configures how HBlink4 **sends** events to the dashboard:
-
-```json
-{
-    "dashboard": {
-        "enabled": true,
-        "disable_ipv6": false,
-        "transport": "unix",
-        "host_ipv4": "127.0.0.1",
-        "host_ipv6": "::1",
-        "port": 8765,
-        "unix_socket": "/tmp/hblink4.sock",
-        "buffer_size": 65536
-    }
-}
-```
-
-### 2. Dashboard Config (`dashboard/config.json`)
-
-This configures the dashboard application itself and how it **receives** events:
-
-```json
-{
-    "server_name": "My HBlink4 Server",
-    "server_description": "Amateur Radio DMR Network",
-    "dashboard_title": "HBlink4 Dashboard",
-    "announcement": "Server maintenance scheduled for Sunday 3-5pm UTC",
-    "refresh_interval": 1000,
-    "max_events": 50,
-    "event_receiver": {
-        "disable_ipv6": false,
-        "transport": "unix",
-        "host_ipv4": "127.0.0.1",
-        "host_ipv6": "::1",
-        "port": 8765,
-        "unix_socket": "/tmp/hblink4.sock",
-        "buffer_size": 65536
-    }
-}
-```
-
-**Dashboard Display Options:**
-- `server_name`: Displayed below the dashboard title (e.g., "KD0ABC Repeater Network")
-- `server_description`: Reserved for future use
-- `dashboard_title`: Main page title and browser tab text
-- `announcement`: High-visibility announcement banner text (leave empty "" to hide banner)
-- `refresh_interval`: WebSocket update interval in milliseconds (default: 1000)
-- `max_events`: Maximum events to retain in event log (default: 50)
-
-**Event Receiver Options:**
-- `disable_ipv6`: Disable IPv6 (must match HBlink4 config)
-- `transport`: Transport type: `"unix"` or `"tcp"` (must match HBlink4 config)
-- `host_ipv4`: IPv4 address to listen on (for TCP transport)
-- `host_ipv6`: IPv6 address to listen on (for TCP transport)
-- `port`: Port number (for TCP transport)
-- `unix_socket`: Unix socket path (for Unix transport)
-- `buffer_size`: Socket receive buffer size (default: 65536)
-
-**CRITICAL**: Both config files must use the **same transport type and connection details**, or the dashboard won't receive events from HBlink4.
-
-### Transport Selection
-
-**Unix Socket (`"unix"`)** - Recommended for local deployment:
-```json
-// Both configs:
-"transport": "unix",
-"unix_socket": "/tmp/hblink4.sock"
-```
-
-**TCP (`"tcp"`)** - Required for remote dashboard:
-```json
-// Both configs:
-"transport": "tcp",
-"host_ipv4": "127.0.0.1",  // Use dashboard server's IP in HBlink4 config
-"host_ipv6": "::1",        // Optional IPv6 address
+For complete configuration details, see the [Configuration Guide](../docs/configuration.md#dashboard-configuration).
 "port": 8765
 ```
 
 The config file is created automatically with defaults on first run. Edit `dashboard/config.json` and restart the dashboard to apply changes.
 
-## Installation
-
-Install dashboard dependencies:
-```bash
-pip install -r requirements-dashboard.txt
-```
-
-Dependencies:
-- `fastapi>=0.104.0` - Modern async web framework
-- `uvicorn[standard]>=0.24.0` - ASGI server with WebSocket support
-- `websockets>=12.0` - WebSocket protocol support
-
 ## Usage
 
-### Start Dashboard Only
-```bash
-python3 run_dashboard.py [host] [port]
-
-# Examples:
-python3 run_dashboard.py                    # Default: 0.0.0.0:8080
-python3 run_dashboard.py 127.0.0.1 8080    # Localhost only
-python3 run_dashboard.py 0.0.0.0 3000      # Custom port
-```
-
-### Start All Services Together (Recommended)
-```bash
-./run_all.sh
-```
-
-This script starts both HBlink4 and the dashboard in the background.
-
-### Access the Dashboard
-Open your browser and navigate to:
-- Local: http://localhost:8080
-- Network: http://YOUR_SERVER_IP:8080
-
-The dashboard will automatically connect via WebSocket and start displaying real-time data.
+The dashboard is started automatically with `./run_all.sh` or can be started separately with `python3 run_dashboard.py`. Access at http://localhost:8080 (or your server IP for remote access).
 
 ## Dashboard Components
 
 ### Statistics Cards
 Top row displays key metrics:
-- Connected repeaters count
-- Active streams count
-- Total streams processed
-- Total packets received
+- **Connected Repeaters**: Number of repeaters currently connected
+- **Active Streams**: Number of streams currently in progress (RX and TX)
+- **Total Calls Today**: Number of calls received from repeaters today (RX only)
+- **Retransmitted Calls Today**: Number of calls forwarded to other repeaters today (TX)
+- **Total Traffic Today**: Duration of received traffic today (RX only)
 
 ### Last Heard Table
 Shows the 10 most recent users:

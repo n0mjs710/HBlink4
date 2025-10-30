@@ -730,16 +730,12 @@
                 <div class="stat-value" id="statStreams">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Total Streams Today</div>
-                <div class="stat-value" id="statTotalStreams">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Active Forwarded Calls</div>
-                <div class="stat-value" id="statActiveCalls">0</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-label">Total Calls Today</div>
                 <div class="stat-value" id="statTotalCalls">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Retransmitted Calls Today</div>
+                <div class="stat-value" id="statRetransmittedCalls">0</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Total Traffic Today</div>
@@ -796,10 +792,9 @@
             last_heard: [],
             last_heard_stats: {},
             stats: {
-                total_streams_today: 0,
+                total_calls_today: 0,
                 total_duration_today: 0,
-                active_calls: 0,
-                total_calls_today: 0
+                retransmitted_calls: 0
             },
             config: {}
         };
@@ -1253,14 +1248,12 @@
             document.getElementById('statStreams').textContent = 
                 Array.isArray(streams) ? streams.filter(s => s.status === 'active').length :
                 (streams ? Object.keys(streams).length : 0);
-            document.getElementById('statTotalStreams').textContent = 
-                stats.total_streams_today.toLocaleString();
-            document.getElementById('statTotalDuration').textContent = 
-                formatDuration(stats.total_duration_today || 0);
-            document.getElementById('statActiveCalls').textContent = 
-                (stats.active_calls || 0).toLocaleString();
             document.getElementById('statTotalCalls').textContent = 
                 (stats.total_calls_today || 0).toLocaleString();
+            document.getElementById('statRetransmittedCalls').textContent = 
+                (stats.retransmitted_calls || 0).toLocaleString();
+            document.getElementById('statTotalDuration').textContent = 
+                formatDuration(stats.total_duration_today || 0);
         }
         
         function updateRepeaters(repeaters) {
@@ -1651,9 +1644,8 @@
                     break;
                     
                 case 'forwarding_stats':
-                    // Update forwarding statistics
-                    state.stats.active_calls = data.active_calls || 0;
-                    state.stats.total_calls_today = data.total_calls_today || 0;
+                    // Update retransmission statistics
+                    state.stats.retransmitted_calls = data.total_calls_today || 0;
                     updateStats(state.stats);
                     break;
                     
@@ -1757,7 +1749,8 @@
                 state.stats = data.stats;
                 document.getElementById('statRepeaters').textContent = data.repeaters_connected;
                 document.getElementById('statStreams').textContent = data.active_streams;
-                document.getElementById('statTotalStreams').textContent = data.stats.total_streams_today.toLocaleString();
+                document.getElementById('statTotalCalls').textContent = data.stats.total_calls_today.toLocaleString();
+                document.getElementById('statRetransmittedCalls').textContent = data.stats.retransmitted_calls.toLocaleString();
                 document.getElementById('statTotalDuration').textContent = formatDuration(data.stats.total_duration_today || 0);
             });
         }
