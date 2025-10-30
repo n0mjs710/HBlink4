@@ -1660,11 +1660,7 @@
                     updateLastHeard(state.last_heard);
                     break;
                     
-                case 'forwarding_stats':
-                    // Update retransmission statistics
-                    state.stats.retransmitted_calls = data.total_calls_today || 0;
-                    updateStats(state.stats);
-                    break;
+
                     
                 case 'repeater_connected':
                     // Update repeater info (especially missed_pings for yellow warning indicator)

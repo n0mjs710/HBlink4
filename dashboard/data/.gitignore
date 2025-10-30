@@ -1,0 +1,4 @@
+# Dashboard persistence files
+# These files contain runtime data and should not be versioned
+*.json
+*.tmp

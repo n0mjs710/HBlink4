@@ -16,7 +16,6 @@ import pathlib
 import ipaddress
 from typing import Dict, Any, Optional, Tuple, Union, List
 from time import time
-from datetime import date
 from random import randint
 from hashlib import sha256
 
@@ -196,7 +195,7 @@ class HBProtocol(DatagramProtocol):
         self._stream_timeout_task = None
         self._user_cache_cleanup_task = None
         self._user_cache_send_task = None
-        self._forwarding_stats_send_task = None
+
         self._port = None  # Store the port instance instead of transport
         
         # Initialize dashboard event emitter with config
@@ -215,13 +214,8 @@ class HBProtocol(DatagramProtocol):
         # Register reconnect callback to send current state when dashboard connects
         self._events.on_reconnect = self._send_initial_state
         
-        # Forwarding statistics
-        self._forwarding_stats = {
-            'active_calls': 0,        # Currently active forwarded calls
-            'total_calls_today': 0,   # Total calls forwarded today
-            'start_time': time(),
-            'last_reset_date': date.today().isoformat()  # Track when stats were last reset
-        }
+        # Active call tracking for contention management
+        self._active_calls = 0  # Currently active forwarded calls
         
         # Track denied streams to avoid repeated logging
         # Key: (repeater_id, slot, stream_id), Value: timestamp of first denial
@@ -346,15 +340,7 @@ class HBProtocol(DatagramProtocol):
         self._user_cache_cleanup_task.start(60)  # Cleanup every 60 seconds
         LOGGER.info('User cache cleanup task started (every 60s)')
         
-        # Send forwarding stats to dashboard every 5 seconds
-        self._forwarding_stats_send_task = LoopingCall(self._send_forwarding_stats)
-        self._forwarding_stats_send_task.start(5.0)
-        LOGGER.info('Forwarding stats send task started (every 5s)')
-        
-        # Check for daily stats reset every minute
-        self._daily_reset_task = LoopingCall(self._reset_daily_stats)
-        self._daily_reset_task.start(60.0)
-        LOGGER.info('Daily stats reset task started (checks every 60s)')
+
 
     def stopProtocol(self):
         """Called when transport is disconnected"""
@@ -366,10 +352,10 @@ class HBProtocol(DatagramProtocol):
             self._user_cache_cleanup_task.stop()
         if self._user_cache_send_task and self._user_cache_send_task.running:
             self._user_cache_send_task.stop()
-        if self._forwarding_stats_send_task and self._forwarding_stats_send_task.running:
-            self._forwarding_stats_send_task.stop()
-        if self._daily_reset_task and self._daily_reset_task.running:
-            self._daily_reset_task.stop()
+        
+        # Stop event emitter
+        if hasattr(self, '_events') and self._events:
+            self._events.close()
             
     def _check_repeater_timeouts(self):
         """Check for and handle repeater timeouts. Repeaters should send periodic RPTPING/RPTP."""
@@ -458,9 +444,9 @@ class HBProtocol(DatagramProtocol):
             'is_assumed': stream.is_assumed
         })
         
-        # Decrement forwarding stats if this was an assumed (TX) stream
+        # Decrement active calls counter if this was an assumed (TX) stream
         if stream.is_assumed:
-            self._forwarding_stats['active_calls'] -= 1
+            self._active_calls -= 1
     
     def _check_slot_timeout(self, repeater_id: bytes, repeater: RepeaterState, slot: int, 
                            stream: StreamState, current_time: float, stream_timeout: float, 
@@ -527,22 +513,7 @@ class HBProtocol(DatagramProtocol):
             if removed > 0:
                 LOGGER.debug(f'User cache cleanup: removed {removed} expired entries')
     
-    def _send_forwarding_stats(self):
-        """Send forwarding statistics to dashboard"""
-        self._events.emit('forwarding_stats', {
-            'active_calls': self._forwarding_stats['active_calls'],
-            'total_calls_today': self._forwarding_stats['total_calls_today'],
-            'uptime_seconds': time() - self._forwarding_stats['start_time']
-        })
-    
-    def _reset_daily_stats(self):
-        """Reset daily statistics at midnight"""
-        current_date = date.today().isoformat()
-        if current_date != self._forwarding_stats.get('last_reset_date'):
-            self._forwarding_stats['total_calls_today'] = 0
-            self._forwarding_stats['last_reset_date'] = current_date
-            LOGGER.info(f'📊 Daily forwarding stats reset at midnight (server time)')
-    
+
     def _send_initial_state(self):
         """Send current state of all connected repeaters to dashboard (called on reconnect)"""
         try:
@@ -1652,9 +1623,8 @@ class HBProtocol(DatagramProtocol):
                 'is_assumed': True
             })
             
-            # Update forwarding stats
-            self._forwarding_stats['active_calls'] += 1
-            self._forwarding_stats['total_calls_today'] += 1
+            # Update active calls counter
+            self._active_calls += 1
         else:
             # Update existing assumed stream
             current_stream.last_seen = current_time

@@ -10,7 +10,9 @@ import csv
 import socket
 import os
 import ipaddress
-from datetime import datetime, date
+import signal
+import atexit
+from datetime import datetime, date, timedelta
 from collections import deque
 from typing import Dict, List, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -118,6 +120,15 @@ class DashboardState:
             'start_time': datetime.now().isoformat(),
             'last_reset_date': date.today().isoformat()  # Track when stats were last reset
         }
+        
+        # Persistence file paths
+        self._data_dir = Path(__file__).parent / "data"
+        self._stats_file = self._data_dir / "stats.json"
+        self._last_heard_file = self._data_dir / "last_heard.json"
+        self._persistence_disabled = False  # Will be set to True if write permissions fail
+        
+        # Load persisted data
+        self._load_persisted_data()
     
     def reset_daily_stats(self):
         """Reset daily statistics at midnight"""
@@ -126,6 +137,204 @@ class DashboardState:
         self.stats['retransmitted_calls'] = 0
         self.stats['last_reset_date'] = date.today().isoformat()
         logger.info(f"📊 Daily stats reset at midnight (server time)")
+    
+    def _load_persisted_data(self):
+        """Load persisted statistics and last heard data on startup, purge old data"""
+        try:
+            # Test write permissions early
+            self._check_write_permissions()
+            self._cleanup_temp_files()
+            self._load_stats()
+            self._load_last_heard()
+            self._purge_old_data()
+            logger.info("📁 Loaded persisted dashboard data")
+        except PermissionError as e:
+            logger.error(f"❌ No write permissions for persistence directory: {e}")
+            logger.error("💡 Dashboard will run without persistence - restart data will not be saved")
+            self._persistence_disabled = True
+        except Exception as e:
+            logger.warning(f"⚠️ Could not load persisted data: {e}")
+    
+    def _check_write_permissions(self):
+        """Test write permissions to data directory"""
+        try:
+            # Create data directory if needed
+            self._data_dir.mkdir(exist_ok=True)
+            
+            # Test write permissions with a temp file
+            test_file = self._data_dir / ".write_test"
+            test_file.write_text("test")
+            test_file.unlink()
+            
+            # Set flag to enable persistence
+            self._persistence_disabled = False
+            
+        except (PermissionError, OSError) as e:
+            logger.error(f"❌ Cannot write to persistence directory {self._data_dir}: {e}")
+            raise PermissionError(f"No write access to {self._data_dir}")
+    
+    def _cleanup_temp_files(self):
+        """Remove any orphaned temp files from previous unclean shutdown"""
+        try:
+            if not self._data_dir.exists():
+                return
+                
+            removed_count = 0
+            for temp_file in self._data_dir.glob("*.tmp"):
+                try:
+                    temp_file.unlink()
+                    removed_count += 1
+                    logger.debug(f"🗑️ Removed orphaned temp file: {temp_file.name}")
+                except OSError as e:
+                    logger.warning(f"⚠️ Could not remove temp file {temp_file.name}: {e}")
+            
+            if removed_count > 0:
+                logger.info(f"🧹 Cleaned up {removed_count} orphaned temp file(s) from previous session")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not cleanup temp files: {e}")
+    
+    def _purge_old_data(self):
+        """Remove old data files to prevent accumulation"""
+        if self._persistence_disabled:
+            return
+            
+        try:
+            # Check if stats file is from a previous day and remove it
+            if self._stats_file.exists():
+                try:
+                    with open(self._stats_file, 'r') as f:
+                        saved_stats = json.load(f)
+                    
+                    today = date.today().isoformat()
+                    if saved_stats.get('last_reset_date') != today:
+                        self._stats_file.unlink()
+                        logger.info("🗑️ Removed old stats file from previous day")
+                except (json.JSONDecodeError, KeyError) as e:
+                    # If we can't read it, try to remove it
+                    try:
+                        self._stats_file.unlink()
+                        logger.info("🗑️ Removed corrupted stats file")
+                    except OSError as remove_error:
+                        logger.warning(f"⚠️ Could not remove corrupted stats file: {remove_error}")
+                except OSError as e:
+                    logger.warning(f"⚠️ Could not read/remove old stats file: {e}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not purge old data: {e}")
+    
+    def _load_stats(self):
+        """Load statistics from file, validate date, reset if needed"""
+        if not self._stats_file.exists():
+            logger.debug("No stats file found, using fresh stats")
+            return
+        
+        try:
+            with open(self._stats_file, 'r') as f:
+                saved_stats = json.load(f)
+            
+            # Check if stats are from today
+            today = date.today().isoformat()
+            if saved_stats.get('last_reset_date') == today:
+                # Stats are still valid for today, load them
+                self.stats.update(saved_stats)
+                logger.info(f"📊 Loaded today's stats: {self.stats['total_calls_today']} calls, {self.stats['retransmitted_calls']} retransmitted")
+            else:
+                # Stats are from a previous day, keep fresh stats but log
+                logger.info(f"📊 Previous day's stats found ({saved_stats.get('last_reset_date')}), using fresh daily stats")
+        
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"⚠️ Could not parse stats file: {e}")
+    
+    def _load_last_heard(self):
+        """Load last heard users, filtering out entries older than 4 hours (more aggressive)"""
+        if not self._last_heard_file.exists():
+            logger.debug("No last heard file found, starting fresh")
+            return
+        
+        try:
+            with open(self._last_heard_file, 'r') as f:
+                saved_data = json.load(f)
+            
+            # More aggressive filtering - only keep entries from last 4 hours
+            cutoff_time = datetime.now() - timedelta(hours=4)
+            valid_users = []
+            
+            for user in saved_data.get('users', []):
+                try:
+                    last_seen = datetime.fromisoformat(user['last_seen'])
+                    if last_seen > cutoff_time:
+                        valid_users.append(user)
+                except (ValueError, KeyError):
+                    continue  # Skip malformed entries
+            
+            # Only keep data if we have recent users, otherwise start fresh
+            if valid_users:
+                self.last_heard = valid_users
+                self.last_heard_stats = saved_data.get('stats', {})
+                logger.info(f"📻 Loaded {len(valid_users)} recent users from last heard")
+            else:
+                logger.info("📻 No recent users found, starting fresh last heard list")
+        
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"⚠️ Could not parse last heard file: {e}")
+    
+    def save_stats(self):
+        """Save current statistics to file with atomic write (called only on shutdown)"""
+        if self._persistence_disabled:
+            logger.debug("📁 Persistence disabled - skipping stats save")
+            return
+            
+        try:
+            self._data_dir.mkdir(exist_ok=True)
+            temp_file = self._stats_file.with_suffix('.tmp')
+            
+            with open(temp_file, 'w') as f:
+                json.dump(self.stats, f, indent=2)
+            
+            # Atomic operation - replace file only if write succeeded
+            temp_file.rename(self._stats_file)
+            logger.debug(f"📁 Saved stats to {self._stats_file}")
+            
+        except PermissionError as e:
+            logger.error(f"❌ Permission denied saving stats: {e}")
+            logger.error("💡 Dashboard will exit gracefully without saving persistence data")
+        except Exception as e:
+            logger.error(f"❌ Failed to save stats: {e}")
+    
+    def save_last_heard(self):
+        """Save last heard users and stats to file with atomic write (called only on shutdown)"""
+        if self._persistence_disabled:
+            logger.debug("📁 Persistence disabled - skipping last heard save")
+            return
+            
+        try:
+            self._data_dir.mkdir(exist_ok=True)
+            temp_file = self._last_heard_file.with_suffix('.tmp')
+            
+            data = {
+                'timestamp': datetime.now().isoformat(),
+                'users': self.last_heard,
+                'stats': self.last_heard_stats
+            }
+            
+            with open(temp_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            # Atomic operation - replace file only if write succeeded
+            temp_file.rename(self._last_heard_file)
+            logger.debug(f"📁 Saved last heard to {self._last_heard_file}")
+            
+        except PermissionError as e:
+            logger.error(f"❌ Permission denied saving last heard: {e}")
+            logger.error("💡 Dashboard will exit gracefully without saving persistence data")
+        except Exception as e:
+            logger.error(f"❌ Failed to save last heard: {e}")
+    
+    def save_all_data(self):
+        """Save all persistent data"""
+        self.save_stats()
+        self.save_last_heard()
 
 state = DashboardState()
 
@@ -419,9 +628,13 @@ class EventReceiver:
                 'status': 'active'
             }
             
-            # Only count RX streams (not assumed/TX streams) in daily totals
+            # Count different stream types
             if not data.get('is_assumed', False):
+                # RX streams: actual traffic being received from repeaters
                 state.stats['total_calls_today'] += 1
+            else:
+                # TX streams: traffic being retransmitted to repeaters
+                state.stats['retransmitted_calls'] += 1
             
             # Add/update user in last_heard immediately with "active" status
             if src_id:
@@ -485,15 +698,7 @@ class EventReceiver:
                 del state.streams[key]
                 logger.debug(f"Hang time expired for {key}")
         
-        elif event_type == 'forwarding_stats':
-            # Update forwarding statistics (don't add to events log)
-            # active_calls from hblink represents currently active assumed (TX) streams
-            # total_calls_today from hblink represents total retransmitted calls
-            state.stats['retransmitted_calls'] = data.get('total_calls_today', 0)
-            logger.debug(f"Forwarding stats updated: Retransmitted Today={data.get('total_calls_today', 0)}")
-            # Send to WebSocket clients but skip adding to events log
-            await self.send_to_clients(event)
-            return
+
         
         # Add to event log (only for user-facing on-air activity events)
         # Skip system events like repeater_connected, repeater_disconnected, hang_time_expired, repeater_keepalive
@@ -771,6 +976,33 @@ async def send_stats_update():
     
     # Remove disconnected clients
     state.websocket_clients -= disconnected
+
+
+# ========== GRACEFUL SHUTDOWN HANDLING ==========
+
+def save_persistent_data():
+    """Save all persistent data on shutdown - called by signal handlers and atexit"""
+    try:
+        if state._persistence_disabled:
+            logger.info("💾 Dashboard shutdown complete (persistence was disabled)")
+            return
+            
+        state.save_all_data()
+        logger.info("💾 Dashboard data saved on shutdown")
+    except Exception as e:
+        logger.error(f"❌ Failed to save data on shutdown: {e}")
+        logger.info("💾 Dashboard shutdown complete (with save errors)")
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    logger.info(f"📡 Received signal {signum}, saving data...")
+    save_persistent_data()
+    exit(0)
+
+# Register shutdown handlers
+atexit.register(save_persistent_data)
+signal.signal(signal.SIGTERM, signal_handler)  # Systemd stop
+signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
 
 
 if __name__ == "__main__":
