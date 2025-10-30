@@ -1557,7 +1557,24 @@
                 } else if (elapsed < 3600) {
                     timeDisplay = `${Math.floor(elapsed / 60)}m ago`;
                 } else {
-                    timeDisplay = lastHeardDate.toLocaleTimeString();
+                    // For times over an hour, check if it's today
+                    const today = new Date();
+                    const isToday = lastHeardDate.toDateString() === today.toDateString();
+                    
+                    if (isToday) {
+                        // Same day - show time only
+                        timeDisplay = lastHeardDate.toLocaleTimeString();
+                    } else {
+                        // Different day - show date and time
+                        const options = { 
+                            month: 'short', 
+                            day: 'numeric', 
+                            hour: 'numeric', 
+                            minute: '2-digit',
+                            hour12: true
+                        };
+                        timeDisplay = lastHeardDate.toLocaleDateString('en-US', options);
+                    }
                 }
                 
                 const callsign = user.callsign || '-';
