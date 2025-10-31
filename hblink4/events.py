@@ -133,12 +133,38 @@ class EventEmitter:
         self.last_connect_attempt = now
         
         try:
+            # Ensure we have a socket object to call connect() on. Some code paths
+            # (e.g. recv detected closed connection) set self.sock = None. Create a
+            # fresh socket here when needed.
+            if not self.sock:
+                if self.transport == 'tcp':
+                    # Create either IPv6 or IPv4 socket depending on configuration
+                    if self.host_ipv6 and self.using_ipv6:
+                        self.sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                    else:
+                        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.sock.setblocking(False)
+                    try:
+                        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
+                        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                    except Exception:
+                        # Non-fatal if setsockopt not supported in environment
+                        pass
+                elif self.transport == 'unix':
+                    self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    self.sock.setblocking(False)
+                    try:
+                        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
+                    except Exception:
+                        pass
+
             if self.transport == 'tcp':
                 host = self.host_ipv6 if self.using_ipv6 else self.host_ipv4
                 self.sock.connect((host, self.port))
             elif self.transport == 'unix':
                 self.sock.connect(self.unix_socket)
-            
+
             self.connected = True
             logger.info(f"✅ Connected to dashboard ({self.transport})")
         except BlockingIOError:
@@ -185,6 +211,10 @@ class EventEmitter:
         Public method to check for incoming sync requests.
         Should be called periodically by HBlink's event loop.
         """
+        # Attempt reconnection if disconnected
+        if not self.connected and self.transport in ('tcp', 'unix'):
+            self._try_connect()
+        
         if self.connected:
             self._check_sync_request()
     
@@ -196,6 +226,16 @@ class EventEmitter:
         try:
             # Use MSG_DONTWAIT to make recv non-blocking
             data = self.sock.recv(1024, socket.MSG_DONTWAIT)
+            
+            # Empty bytes means connection closed
+            if data == b'':
+                logger.warning("Dashboard connection closed (recv returned empty bytes)")
+                self.connected = False
+                self.sock.close()
+                self.sock = None
+                self.recv_buffer = b''
+                return
+            
             if data:
                 self.recv_buffer += data
                 
@@ -224,8 +264,17 @@ class EventEmitter:
         except BlockingIOError:
             # No data available, normal case
             pass
-        except Exception as e:
-            logger.debug(f"Error checking for sync request: {e}")
+        except (OSError, ConnectionResetError, BrokenPipeError) as e:
+            # Socket error indicates connection is broken
+            logger.warning(f"Dashboard connection error detected: {e}")
+            self.connected = False
+            if self.sock:
+                try:
+                    self.sock.close()
+                except:
+                    pass
+                self.sock = None
+            self.recv_buffer = b''
     
     def _send_stream(self, data: bytes):
         """Send via TCP or Unix socket (connection-oriented)"""

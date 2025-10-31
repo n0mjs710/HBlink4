@@ -948,7 +948,16 @@
             };
             
             ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+                // Ignore plain-text keepalive responses from server
+                if (event.data === 'pong') return;
+
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    console.warn('Received non-JSON WebSocket message:', event.data);
+                    return;
+                }
                 
                 if (data.type === 'initial_state') {
                     state.repeaters = data.data.repeaters;
@@ -1291,22 +1300,25 @@
         function updateRepeaters(repeaters) {
             const container = document.getElementById('repeatersContainer');
             const countElement = document.getElementById('repeaterCount');
-            
+
+            // Accept either an array or an object map for repeaters
+            const repeaterList = Array.isArray(repeaters) ? repeaters : Object.values(repeaters || {});
+
             // Update the count in the header
-            const connectedCount = repeaters.filter(r => r.status === 'connected').length;
+            const connectedCount = repeaterList.filter(r => r.status === 'connected').length;
             if (countElement) {
                 countElement.textContent = connectedCount > 0 ? `(${connectedCount})` : '';
             }
             
-            if (repeaters.length === 0) {
+            if (repeaterList.length === 0) {
                 container.innerHTML = '<p style="color: #64748b; text-align: center; padding: 20px;">No repeaters connected</p>';
                 return;
             }
             
             // Get streams data to show on slots
             const streams = state.streams || [];
-            
-            container.innerHTML = repeaters
+
+            container.innerHTML = repeaterList
                 .filter(r => r.status === 'connected')
                 .map(r => {
                     // Find active streams for this repeater (only active or hang_time, not ended)

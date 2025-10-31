@@ -398,6 +398,9 @@ class TCPProtocol(asyncio.Protocol):
         state.repeaters.clear()
         state.streams.clear()
         
+        # Set connection status synchronously (async broadcast may be delayed)
+        state.hblink_connected = True
+        
         # Notify all browser clients that HBlink4 is connected
         asyncio.create_task(broadcast_hblink_status(True))
     
@@ -428,6 +431,9 @@ class TCPProtocol(asyncio.Protocol):
         else:
             logger.info("HBlink4 TCP connection closed")
         
+        # Set connection status synchronously (async broadcast may be delayed)
+        state.hblink_connected = False
+        
         # Notify all browser clients that HBlink4 is disconnected
         asyncio.create_task(broadcast_hblink_status(False))
 
@@ -450,6 +456,9 @@ class UnixProtocol(asyncio.Protocol):
         logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
         state.streams.clear()
+        
+        # Set connection status synchronously (async broadcast may be delayed)
+        state.hblink_connected = True
         
         # Send sync request to HBlink4 to trigger initial state send
         try:
@@ -490,6 +499,9 @@ class UnixProtocol(asyncio.Protocol):
             logger.warning(f"⚠️ HBlink4 Unix socket connection lost: {exc}")
         else:
             logger.info("HBlink4 Unix socket connection closed")
+        
+        # Set connection status synchronously (async broadcast may be delayed)
+        state.hblink_connected = False
         
         # Notify all browser clients that HBlink4 is disconnected
         asyncio.create_task(broadcast_hblink_status(False))
@@ -906,7 +918,10 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket connection for real-time updates"""
     await websocket.accept()
     state.websocket_clients.add(websocket)
-    logger.debug(f"WebSocket client connected (total: {len(state.websocket_clients)})")
+    logger.info(f"🌐 WebSocket client connected (total: {len(state.websocket_clients)})")
+    
+    # Log current state for debugging
+    logger.info(f"📊 Sending initial_state: hblink_connected={state.hblink_connected}, repeaters={len(state.repeaters)}, streams={len(state.streams)}")
     
     # Send initial state
     await websocket.send_json({
