@@ -101,6 +101,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. Do not sub
 
 ## License
 
+Copyright (C) 2016-2025 Cortney T. Buffington, N0MJS n0mjs@me.com
 This project is licensed under the GNU GPLv3 License - see the LICENSE file for details.
 
 ## Acknowledgments
