@@ -16,6 +16,7 @@ Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 - **Statistics**: View total streams, packets, and activity metrics
 - **Clean Design**: Dark theme with responsive layout that works on desktop and mobile
 - **Configurable Branding**: Customize server name and dashboard title
+- **Network Info Button**: Optional button linking to network information page
 
 ## Configuration
 
@@ -30,6 +31,27 @@ For complete configuration details, see the [Configuration Guide](../docs/config
 ```
 
 The config file is created automatically with defaults on first run. Edit `dashboard/config.json` and restart the dashboard to apply changes.
+
+### Network Info Button
+
+Add an optional "Network Info" button to the dashboard header that links users to your network's information page:
+
+```json
+{
+  "network_info": {
+    "enabled": true,
+    "button_text": "Network Info",
+    "url": "https://your-network-site.com/info"
+  }
+}
+```
+
+**Configuration Options:**
+- `enabled`: Set to `true` to show the button, `false` to hide it
+- `button_text`: Custom text for the button (e.g., "Network Info", "TG List", "Help")
+- `url`: Target URL that opens in a new tab when clicked
+
+The button appears as the first item in the header status area with a light blue color to distinguish it from system status indicators. Perfect for linking to talkgroup lists, network rules, connection information, or help pages.
 
 ## Usage
 
