@@ -394,12 +394,22 @@ class TCPProtocol(asyncio.Protocol):
         
         # Clear dashboard state on reconnect
         # HBlink4 will re-send all current repeaters via repeater_connected events
-        logger.info("🔄 Clearing dashboard state - HBlink4 will resync current state")
+        logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
         state.streams.clear()
         
         # Set connection status synchronously (async broadcast may be delayed)
         state.hblink_connected = True
+        
+        # Send sync request to HBlink4 to trigger initial state send
+        try:
+            sync_request = json.dumps({'type': 'sync_request'}).encode('utf-8')
+            length = len(sync_request)
+            frame = length.to_bytes(4, byteorder='big') + sync_request
+            transport.write(frame)
+            logger.info("📤 Sent sync_request to HBlink4")
+        except Exception as e:
+            logger.error(f"Failed to send sync_request: {e}")
         
         # Notify all browser clients that HBlink4 is connected
         asyncio.create_task(broadcast_hblink_status(True))
