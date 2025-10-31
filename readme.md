@@ -30,7 +30,7 @@ HBlink4 focuses on being an efficient **endpoint network server** with the follo
 
 ## Installation
 
-> **⚠️ IMPORTANT**: Clone and run HBlink4 as the same user account. The systemd service files are configured to run as the user who owns the installation directory.
+> **⚠️ IMPORTANT**: Clone and run HBlink4 as the same user account. The systemd service files are configured to run as the user who owns the installation directory. The dashboard writes files for persistence across restarts and needs write access as well.
 
 1. Clone this repository:
 ```bash
