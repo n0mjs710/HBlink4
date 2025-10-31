@@ -54,6 +54,7 @@ class EventEmitter:
         self.last_connect_attempt = 0
         self.connect_retry_interval = 10.0  # Retry every 10 seconds
         self.using_ipv6 = False  # Track which protocol connected
+        self.recv_buffer = b''  # Buffer for incoming framed data
         
         if disable_ipv6 and transport == 'tcp':
             logger.warning('⚠️  IPv6 disabled for dashboard connection - using IPv4 only')
@@ -179,6 +180,53 @@ class EventEmitter:
             # Never raise - dashboard is optional
             logger.debug(f"Event emit failed: {e}")
     
+    def check_for_sync_request(self):
+        """
+        Public method to check for incoming sync requests.
+        Should be called periodically by HBlink's event loop.
+        """
+        if self.connected:
+            self._check_sync_request()
+    
+    def _check_sync_request(self):
+        """Check for incoming sync_request from dashboard (non-blocking)"""
+        if not self.sock:
+            return
+        
+        try:
+            # Use MSG_DONTWAIT to make recv non-blocking
+            data = self.sock.recv(1024, socket.MSG_DONTWAIT)
+            if data:
+                self.recv_buffer += data
+                
+                # Process all complete frames in buffer
+                while len(self.recv_buffer) >= 4:
+                    # Read length prefix (4 bytes, big-endian)
+                    length = int.from_bytes(self.recv_buffer[:4], byteorder='big')
+                    
+                    # Check if we have complete frame
+                    if len(self.recv_buffer) < 4 + length:
+                        break  # Wait for more data
+                    
+                    # Extract frame
+                    frame = self.recv_buffer[4:4+length]
+                    self.recv_buffer = self.recv_buffer[4+length:]
+                    
+                    # Parse and handle message
+                    try:
+                        message = json.loads(frame.decode('utf-8'))
+                        if message.get('type') == 'sync_request':
+                            logger.info("📥 Received sync_request from dashboard - sending initial state")
+                            if hasattr(self, 'on_reconnect'):
+                                self.on_reconnect()
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Received invalid JSON from dashboard: {e}")
+        except BlockingIOError:
+            # No data available, normal case
+            pass
+        except Exception as e:
+            logger.debug(f"Error checking for sync request: {e}")
+    
     def _send_stream(self, data: bytes):
         """Send via TCP or Unix socket (connection-oriented)"""
         # Try to reconnect if disconnected
@@ -189,6 +237,9 @@ class EventEmitter:
         if not self.connected:
             return  # Still not connected, drop event
         
+        # Check for incoming sync requests from dashboard (non-blocking)
+        self._check_sync_request()
+        
         try:
             # Frame message with length prefix (4 bytes, big-endian)
             length = len(data)
@@ -197,12 +248,10 @@ class EventEmitter:
             # Non-blocking send
             self.sock.sendall(frame)
             
-            # If we just reconnected, trigger state sync callback
-            if was_disconnected and hasattr(self, 'on_reconnect'):
-                try:
-                    self.on_reconnect()
-                except Exception as e:
-                    logger.debug(f"Reconnect callback failed: {e}")
+            # If we just reconnected, check immediately for sync request
+            # Dashboard sends sync_request as soon as connection is made
+            if was_disconnected:
+                self._check_sync_request()
             
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             # Connection lost

@@ -486,6 +486,10 @@ class HBProtocol(DatagramProtocol):
         stream_timeout = CONFIG.get('global', {}).get('stream_timeout', 2.0)
         hang_time = CONFIG.get('global', {}).get('stream_hang_time', 3.0)
         
+        # Check for dashboard sync requests (non-blocking)
+        if hasattr(self, '_events') and self._events:
+            self._events.check_for_sync_request()
+        
         for repeater_id, repeater in self._repeaters.items():
             if repeater.connection_state != 'connected':
                 continue

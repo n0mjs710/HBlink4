@@ -27,5 +27,6 @@ if __name__ == '__main__':
         host=host,
         port=port,
         log_level="info",
-        access_log=False  # Disable access logging to reduce log clutter
+        access_log=False,  # Disable access logging to reduce log clutter
+        loop="asyncio"  # Disable uvloop - it breaks Unix socket connections
     )

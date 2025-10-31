@@ -355,6 +355,21 @@ async def broadcast_hblink_status(connected: bool):
     for client in state.websocket_clients:
         try:
             await client.send_json(message)
+            
+            # If HBlink just connected, also send full current state to ensure browser has everything
+            if connected:
+                await client.send_json({
+                    'type': 'initial_state',
+                    'data': {
+                        'repeaters': list(state.repeaters.values()),
+                        'repeater_details': state.repeater_details,
+                        'streams': list(state.streams.values()),
+                        'events': list(state.events)[-50:],
+                        'stats': state.stats,
+                        'last_heard': state.last_heard,
+                        'hblink_connected': state.hblink_connected
+                    }
+                })
         except Exception as e:
             logger.debug(f"Failed to send status to client: {e}")
             disconnected_clients.add(client)
@@ -432,9 +447,19 @@ class UnixProtocol(asyncio.Protocol):
         
         # Clear dashboard state on reconnect
         # HBlink4 will re-send all current repeaters via repeater_connected events
-        logger.info("🔄 Clearing dashboard state - HBlink4 will resync current state")
+        logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
         state.streams.clear()
+        
+        # Send sync request to HBlink4 to trigger initial state send
+        try:
+            sync_request = json.dumps({'type': 'sync_request'}).encode('utf-8')
+            length = len(sync_request)
+            frame = length.to_bytes(4, byteorder='big') + sync_request
+            transport.write(frame)
+            logger.info("📤 Sent sync_request to HBlink4")
+        except Exception as e:
+            logger.error(f"Failed to send sync_request: {e}")
         
         # Notify all browser clients that HBlink4 is connected
         asyncio.create_task(broadcast_hblink_status(True))
