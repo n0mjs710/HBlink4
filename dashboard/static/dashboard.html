@@ -900,9 +900,9 @@
                 document.getElementById('dashboardTitle').textContent = config.dashboard_title || 'HBlink4 Dashboard';
                 document.getElementById('serverName').textContent = config.server_name || '';
                 
-                // Show announcement banner if announcement text exists
-                if (config.announcement && config.announcement.trim()) {
-                    document.getElementById('announcementText').textContent = config.announcement;
+                // Show announcement banner if enabled and text exists
+                if (config.announcement && config.announcement.enabled && config.announcement.text && config.announcement.text.trim()) {
+                    document.getElementById('announcementText').textContent = config.announcement.text;
                     document.getElementById('announcementBanner').style.display = 'block';
                 } else {
                     document.getElementById('announcementBanner').style.display = 'none';
