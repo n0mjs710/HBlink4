@@ -69,6 +69,27 @@
             border-color: #4b5563;
         }
         
+        .network-info-btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-block;
+            background: #0ea5e9;
+            color: #ffffff;
+            border: 1px solid #38bdf8;
+        }
+        
+        .network-info-btn:hover {
+            background: #0284c7;
+            border-color: #0ea5e9;
+            transform: translateY(-1px);
+        }
+        
         /* Modal styles */
         .modal-overlay {
             position: fixed;
@@ -708,6 +729,7 @@
                 </div>
             </div>
             <div class="status-badges">
+                <a class="network-info-btn" id="networkInfoBtn" style="display: none;" target="_blank">🌐 Network Info</a>
                 <div class="connection-status clickable warning" id="wsStatus" title="Connecting to dashboard server...">Connecting...</div>
                 <div class="connection-status warning" id="hblinkStatus" title="Waiting for connection status...">Unknown</div>
                 <div class="audio-toggle disabled" id="audioToggle" title="Click to enable audio notifications">🔇 Audio Off</div>
@@ -884,6 +906,16 @@
                     document.getElementById('announcementBanner').style.display = 'block';
                 } else {
                     document.getElementById('announcementBanner').style.display = 'none';
+                }
+                
+                // Configure network info button
+                const networkInfoBtn = document.getElementById('networkInfoBtn');
+                if (config.network_info && config.network_info.enabled && config.network_info.url) {
+                    networkInfoBtn.textContent = config.network_info.button_text || '🌐 Network Info';
+                    networkInfoBtn.href = config.network_info.url;
+                    networkInfoBtn.style.display = 'inline-block';
+                } else {
+                    networkInfoBtn.style.display = 'none';
                 }
             } catch (error) {
                 console.error('Failed to load config:', error);
@@ -1190,13 +1222,13 @@
             const el = document.getElementById('wsStatus');
             
             if (connected) {
-                el.textContent = '✓ Dashboard';
+                el.textContent = '✓ Live Data';
                 el.className = 'connection-status clickable connected';
-                el.title = 'Connected to dashboard server - Click to reload';
+                el.title = 'Live Data: Browser connected to the dashboard providing real-time updates - Click to reload';
             } else {
                 el.textContent = '🔄 Click to Reconnect';
                 el.className = 'connection-status clickable disconnected';
-                el.title = 'Disconnected from dashboard server';
+                el.title = 'Live Data: Browser disconnected from dashboard server - Click to reconnect';
             }
         }
         
@@ -1204,13 +1236,13 @@
             const el = document.getElementById('hblinkStatus');
             
             if (connected) {
-                el.textContent = '✓ HBlink4';
+                el.textContent = '✓ DMR Server';
                 el.className = 'connection-status connected';
-                el.title = 'Dashboard connected to HBlink4 server';
+                el.title = 'DMR Server: Dashboard is connected to the DMR server';
             } else {
-                el.textContent = '✗ HBlink4';
+                el.textContent = '✗ DMR Server';
                 el.className = 'connection-status warning';
-                el.title = 'Dashboard not connected to HBlink4';
+                el.title = 'DMR Server: Dashboard is not connected to the DMR server';
                 
                 // Clear stale data from display
                 console.log('🧹 Clearing stale data - HBlink4 disconnected');
