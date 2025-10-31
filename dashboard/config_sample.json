@@ -2,7 +2,10 @@
     "server_name": "HBlink4 Server",
     "server_description": "Amateur Radio DMR Network",
     "dashboard_title": "HBlink4 Dashboard",
-    "announcement": "",
+    "announcement": {
+        "enabled": false,
+        "text": ""
+    },
     "network_info": {
         "enabled": false,
         "button_text": "Network Info",

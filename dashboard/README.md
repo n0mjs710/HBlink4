@@ -32,6 +32,32 @@ For complete configuration details, see the [Configuration Guide](../docs/config
 
 The config file is created automatically with defaults on first run. Edit `dashboard/config.json` and restart the dashboard to apply changes.
 
+### Announcement Banner
+
+Display an optional announcement banner at the top of the dashboard to communicate important messages to users:
+
+```json
+{
+  "announcement": {
+    "enabled": true,
+    "text": "Welcome to the network! Please review the talkgroup list before transmitting."
+  }
+}
+```
+
+**Configuration Options:**
+- `enabled`: Set to `true` to show the banner, `false` to hide it
+- `text`: The message to display in the banner
+
+The banner appears as an eye-catching orange gradient banner at the top of the page, perfect for:
+- Welcome messages
+- Network announcements
+- Maintenance notices
+- Operational reminders
+- Important policy updates
+
+The banner only displays when both `enabled` is `true` and `text` contains content.
+
 ### Network Info Button
 
 Add an optional "Network Info" button to the dashboard header that links users to your network's information page:
