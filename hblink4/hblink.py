@@ -1405,7 +1405,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # - Header (format, length)
             # - Text blocks (7-bit encoded callsign/name)
             # For now, just acknowledge receipt
-            LOGGER.info(f'📻 Talker Alias from {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
+            LOGGER.debug(f'📻 Talker Alias from {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
             
             # TODO: Future enhancement - parse talker alias blocks and emit to dashboard
             # Talker alias format: https://github.com/g4klx/MMDVMHost/wiki/Talker-Alias
