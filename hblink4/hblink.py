@@ -32,8 +32,8 @@ import sys
 # Try package-relative imports first, fall back to direct imports
 try:
     from .constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO
+        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
+        MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA
     )
     from .access_control import RepeaterMatcher
     from .events import EventEmitter
@@ -41,8 +41,8 @@ try:
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL,
-        DMRD, MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO
+        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
+        MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA
     )
     from access_control import RepeaterMatcher
     from events import EventEmitter
@@ -712,6 +712,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                 repeater_id = data[4:8]
             elif _command == RPTO:
                 repeater_id = data[4:8]
+            elif _command == DMRA:
+                repeater_id = data[4:8]
             elif _command == RPTC:
                 if data[:5] == RPTCL:
                     repeater_id = data[5:9]
@@ -721,9 +723,17 @@ class HBProtocol(asyncio.DatagramProtocol):
             if repeater_id:
                 # Per-packet logging - only enable for heavy troubleshooting
                 #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={self._rid_to_int(repeater_id)}, addr={addr}')
-                pass
+                pass  # Keep pass for valid if statement syntax
             else:
-                LOGGER.warning(f'Packet received with unknown command: cmd={_command}, repeater_id={self._rid_to_int(repeater_id)}, addr={addr}')   
+                # Unknown packet type - log full details for investigation
+                try:
+                    cmd_str = _command.decode('utf-8', errors='replace')
+                except:
+                    cmd_str = _command.hex()
+                LOGGER.warning(f'⚠️  UNKNOWN PACKET TYPE from {ip}:{port}')
+                LOGGER.warning(f'    Command: {cmd_str} (hex: {_command.hex()})')
+                LOGGER.warning(f'    Full packet (first 60 bytes): {data[:60].hex()}')
+                LOGGER.warning(f'    Packet length: {len(data)} bytes')
                 return
 
             # If repeater is not registered and this is not a login or auth packet, send NAK and return
@@ -770,8 +780,19 @@ class HBProtocol(asyncio.DatagramProtocol):
             elif _command == RPTO:
                 LOGGER.info(f'Received RPTO from {ip}:{port} - Options/TG Configuration')
                 self._handle_options(repeater_id, data[8:], addr)
+            elif _command == DMRA:
+                LOGGER.debug(f'Received DMRA from {ip}:{port} - DMR Talker Alias (packet length: {len(data)})')
+                if repeater_id:
+                    self._handle_talker_alias(repeater_id, data[8:], addr)
+                else:
+                    LOGGER.warning(f'DMRA packet from {ip}:{port} has no repeater_id - packet hex: {data[:20].hex()}')
             else:
-                LOGGER.warning(f'Unknown command received from {ip}:{port}: {_command}')
+                # Try to decode the command as ASCII for better logging
+                try:
+                    cmd_str = _command.decode('utf-8', errors='replace')
+                except:
+                    cmd_str = _command.hex()
+                LOGGER.warning(f'Unknown command received from {ip}:{port}: {cmd_str} (hex: {_command.hex()})')
         except Exception as e:
             LOGGER.error(f'Error processing datagram from {ip}:{port}: {str(e)}')
 
@@ -1367,6 +1388,36 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Still send ACK to avoid retries
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
+    def _handle_talker_alias(self, repeater_id: bytes, data: bytes, addr: PeerAddress) -> None:
+        """
+        Handle DMRA message - Talker Alias information from repeater.
+        This provides DMR Talker Alias data blocks (typically callsign/name).
+        
+        Format is DMR Talker Alias protocol - we acknowledge but don't process yet.
+        Future enhancement: parse and display talker alias in dashboard.
+        """
+        repeater = self._validate_repeater(repeater_id, addr)
+        if not repeater:
+            return
+        
+        try:
+            # Talker alias data is variable length, typically contains:
+            # - Header (format, length)
+            # - Text blocks (7-bit encoded callsign/name)
+            # For now, just acknowledge receipt
+            LOGGER.info(f'📻 Talker Alias from {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
+            
+            # TODO: Future enhancement - parse talker alias blocks and emit to dashboard
+            # Talker alias format: https://github.com/g4klx/MMDVMHost/wiki/Talker-Alias
+            
+            # Send ACK to confirm receipt
+            self._send_packet(b''.join([RPTACK, repeater_id]), addr)
+            
+        except Exception as e:
+            LOGGER.error(f'Error processing DMRA from {self._rid_to_int(repeater_id)}: {e}')
+            # Still send ACK to avoid retries
+            self._send_packet(b''.join([RPTACK, repeater_id]), addr)
+
     def _handle_ping(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle ping (RPTPING/RPTP) from the repeater as a keepalive."""
         repeater = self._validate_repeater(repeater_id, addr)
@@ -1842,22 +1893,27 @@ async def async_main():
         sys.exit(1)
     
     # Setup signal handlers (Linux/Unix native asyncio pattern)
+    shutdown_event = asyncio.Event()
+    
     def handle_shutdown(signum):
         signame = signal.Signals(signum).name
         LOGGER.info(f"Received shutdown signal {signame}")
-        # Cleanup all protocols
+        # Cleanup all protocols (cleanup() logs "Starting graceful shutdown...")
         for protocol in protocols:
             protocol.cleanup()
-        loop.stop()
+        # Signal the event loop to exit
+        shutdown_event.set()
     
     loop.add_signal_handler(signal.SIGINT, lambda: handle_shutdown(signal.SIGINT))
     loop.add_signal_handler(signal.SIGTERM, lambda: handle_shutdown(signal.SIGTERM))
     
-    # Run forever
+    # Run until shutdown signal received
     try:
-        await asyncio.Event().wait()
+        await shutdown_event.wait()
     except asyncio.CancelledError:
         pass
+    
+    LOGGER.info("Shutdown complete")
 
 def main():
     """Main program entry point"""
