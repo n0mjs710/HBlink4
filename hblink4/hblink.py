@@ -49,7 +49,8 @@ except ImportError:
     from user_cache import UserCache
 
 # Type definitions
-PeerAddress = Tuple[str, int]
+# Address tuple can be IPv4 (host, port) or IPv6 (host, port, flowinfo, scopeid)
+PeerAddress = Union[Tuple[str, int], Tuple[str, int, int, int]]
 
 from dataclasses import dataclass, field
 
@@ -231,6 +232,19 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Cache for repeater_id bytes to int conversions (for logging efficiency)
         self._rid_cache: Dict[bytes, int] = {}
+    
+    @staticmethod
+    def _normalize_addr(addr: PeerAddress) -> Tuple[str, int]:
+        """
+        Normalize address tuple to (ip, port) regardless of IPv4/IPv6 format.
+        IPv4: (ip, port)
+        IPv6: (ip, port, flowinfo, scopeid) -> (ip, port)
+        """
+        return (addr[0], addr[1])
+    
+    def _addr_matches(self, addr1: PeerAddress, addr2: PeerAddress) -> bool:
+        """Compare two addresses, normalizing for IPv4/IPv6 differences"""
+        return self._normalize_addr(addr1) == self._normalize_addr(addr2)
         
     # ========== HELPER METHODS ==========
     
@@ -312,7 +326,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                 if repeater.connection_state == 'yes':
                     try:
                         LOGGER.info(f"Sending disconnect to repeater {self._rid_to_int(repeater_id)}")
-                        self._port.write(MSTCL, repeater.sockaddr)
+                        # asyncio uses sendto() instead of write(data, addr)
+                        self._port.sendto(MSTCL, repeater.sockaddr)
                     except Exception as e:
                         LOGGER.error(f"Error sending disconnect to repeater {self._rid_to_int(repeater_id)}: {e}")
 
@@ -673,7 +688,9 @@ class HBProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
-        ip, port = addr
+        # Handle both IPv4 (ip, port) and IPv6 (ip, port, flowinfo, scopeid) address formats
+        ip = addr[0]
+        port = addr[1]
         
         # Debug log the raw packet
         #LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
@@ -770,7 +787,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'Validating repeater {self._rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
-        if repeater.sockaddr != addr:
+        if not self._addr_matches(repeater.sockaddr, addr):
             LOGGER.warning(f'Message from wrong IP for repeater {self._rid_to_int(repeater_id)}')
             self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
             return None
@@ -1027,13 +1044,15 @@ class HBProtocol(asyncio.DatagramProtocol):
 
     def _handle_repeater_login(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater login request"""
-        ip, port = addr
+        # Handle both IPv4 (ip, port) and IPv6 (ip, port, flowinfo, scopeid) address formats
+        ip = addr[0]
+        port = addr[1]
         
         LOGGER.debug(f'Processing login for repeater ID {self._rid_to_int(repeater_id)} from {ip}:{port}')
         
         if repeater_id in self._repeaters:
             repeater = self._repeaters[repeater_id]
-            if repeater.sockaddr != addr:
+            if not self._addr_matches(repeater.sockaddr, addr):
                 LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
                 # Remove the old registration first
                 old_addr = repeater.sockaddr
@@ -1662,7 +1681,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         cmd = data[:4]
         #if cmd != DMRD:  # Don't log DMR data packets
         #    LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
-        self.transport.write(data, addr)
+        # asyncio uses sendto() instead of write(data, addr)
+        self.transport.sendto(data, self._normalize_addr(addr))
 
     def _send_nak(self, repeater_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
         """Send NAK to specified address
