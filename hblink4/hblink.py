@@ -20,9 +20,7 @@ from random import randint
 from hashlib import sha256
 
 import signal
-from twisted.internet import reactor
-from twisted.internet.protocol import DatagramProtocol
-from twisted.internet.task import LoopingCall
+import asyncio
 
 # Global configuration dictionary
 CONFIG: Dict[str, Any] = {}
@@ -184,7 +182,7 @@ class RepeaterState:
         elif slot == 2:
             self.slot2_stream = stream
 
-class HBProtocol(DatagramProtocol):
+class HBProtocol(asyncio.DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Server Protocol"""
     def __init__(self, *args, **kwargs):
         super().__init__()
@@ -195,6 +193,7 @@ class HBProtocol(DatagramProtocol):
         self._stream_timeout_task = None
         self._user_cache_cleanup_task = None
         self._user_cache_send_task = None
+        self._tasks = []  # List to track all async tasks
 
         self._port = None  # Store the port instance instead of transport
         
@@ -321,37 +320,57 @@ class HBProtocol(DatagramProtocol):
         import time
         time.sleep(0.5)  # 500ms should be enough for UDP packets to be sent
 
-    def startProtocol(self):
+    async def _run_periodic(self, interval: float, func, name: str):
+        """
+        Generic periodic task runner.
+        
+        Args:
+            interval: Seconds between executions
+            func: Synchronous function to call
+            name: Task name for logging
+        """
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    func()
+                except Exception as e:
+                    LOGGER.error(f"Error in {name}: {e}", exc_info=True)
+        except asyncio.CancelledError:
+            LOGGER.debug(f"{name} task cancelled")
+            raise
+
+    def connection_made(self, transport):
         """Called when the protocol starts"""
         # Get the port instance for sending data
+        self.transport = transport
         self._port = self.transport
         """Called when transport is connected"""
         # Start timeout checker
         timeout_interval = CONFIG.get('timeout', {}).get('repeater', 30)
-        self._timeout_task = LoopingCall(self._check_repeater_timeouts)
-        self._timeout_task.start(timeout_interval)
+        self._tasks.append(
+            asyncio.create_task(self._run_periodic(timeout_interval, self._check_repeater_timeouts, "repeater timeout checker"))
+        )
         
         # Start stream timeout checker (check more frequently than repeater timeout)
-        self._stream_timeout_task = LoopingCall(self._check_stream_timeouts)
-        self._stream_timeout_task.start(1.0)  # Check every second
+        self._tasks.append(
+            asyncio.create_task(self._run_periodic(1.0, self._check_stream_timeouts, "stream timeout checker"))
+        )
         
         # Start user cache cleanup (fixed at 60s for optimal efficiency)
-        self._user_cache_cleanup_task = LoopingCall(self._cleanup_user_cache)
-        self._user_cache_cleanup_task.start(60)  # Cleanup every 60 seconds
-        LOGGER.info('User cache cleanup task started (every 60s)')
+        self._tasks.append(
+            asyncio.create_task(self._run_periodic(60, self._cleanup_user_cache, "user cache cleanup"))
+        )
+        LOGGER.info('Periodic tasks started (repeater timeout, stream timeout, user cache cleanup)')
         
 
 
-    def stopProtocol(self):
+    def connection_lost(self, exc):
         """Called when transport is disconnected"""
-        if self._timeout_task and self._timeout_task.running:
-            self._timeout_task.stop()
-        if self._stream_timeout_task and self._stream_timeout_task.running:
-            self._stream_timeout_task.stop()
-        if self._user_cache_cleanup_task and self._user_cache_cleanup_task.running:
-            self._user_cache_cleanup_task.stop()
-        if self._user_cache_send_task and self._user_cache_send_task.running:
-            self._user_cache_send_task.stop()
+        # Cancel all periodic tasks
+        for task in self._tasks:
+            task.cancel()
+        self._tasks.clear()
         
         # Stop event emitter
         if hasattr(self, '_events') and self._events:
@@ -652,7 +671,7 @@ class HBProtocol(DatagramProtocol):
         # Slot is busy with a different active stream or protected by hang time
         return True
 
-    def datagramReceived(self, data: bytes, addr: tuple):
+    def datagram_received(self, data: bytes, addr: tuple):
         """Handle received UDP datagram"""
         ip, port = addr
         
@@ -1737,6 +1756,89 @@ def load_config(config_file: str):
         LOGGER.error(f'Error loading configuration: {e}')
         sys.exit(1)
 
+async def async_main():
+    """Main async entry point"""
+    loop = asyncio.get_running_loop()
+    
+    # Load config values
+    bind_ipv4 = CONFIG['global'].get('bind_ipv4', '0.0.0.0')
+    bind_ipv6 = CONFIG['global'].get('bind_ipv6', '::')
+    port_ipv4 = CONFIG['global'].get('port_ipv4', 62031)
+    port_ipv6 = CONFIG['global'].get('port_ipv6', 62031)
+    disable_ipv6 = CONFIG['global'].get('disable_ipv6', False)
+    
+    if disable_ipv6:
+        LOGGER.warning('⚠️  IPv6 is globally disabled - only binding to IPv4')
+        bind_ipv6 = None
+    
+    transports = []
+    protocols = []
+    
+    # Create IPv4 endpoint
+    if bind_ipv4:
+        try:
+            protocol_v4 = HBProtocol()
+            transport_v4, _ = await loop.create_datagram_endpoint(
+                lambda: protocol_v4,
+                local_addr=(bind_ipv4, port_ipv4)
+            )
+            transports.append(transport_v4)
+            protocols.append(protocol_v4)
+            LOGGER.info(f'✓ HBlink4 listening on {bind_ipv4}:{port_ipv4} (UDP, IPv4)')
+        except Exception as e:
+            LOGGER.error(f'✗ Failed to bind IPv4 to {bind_ipv4}:{port_ipv4}: {e}')
+            if bind_ipv4 == '0.0.0.0':
+                # Critical failure on wildcard bind
+                sys.exit(1)
+    
+    # Create IPv6 endpoint
+    if bind_ipv6 and not disable_ipv6:
+        try:
+            protocol_v6 = HBProtocol()
+            transport_v6, _ = await loop.create_datagram_endpoint(
+                lambda: protocol_v6,
+                local_addr=(bind_ipv6, port_ipv6)
+            )
+            transports.append(transport_v6)
+            protocols.append(protocol_v6)
+            LOGGER.info(f'✓ HBlink4 listening on [{bind_ipv6}]:{port_ipv6} (UDP, IPv6)')
+        except OSError as e:
+            error_msg = str(e)
+            if 'address already in use' in error_msg.lower() or 'address in use' in error_msg.lower():
+                if port_ipv4 == port_ipv6 and bind_ipv4 and bind_ipv6 == '::':
+                    LOGGER.warning(f'⚠️  IPv6 bind to [::]:{port_ipv6} failed (port in use by IPv4)')
+                    LOGGER.warning(f'⚠️  This is normal on dual-stack systems')
+                    LOGGER.warning(f'⚠️  Solutions: 1) Use different ports (port_ipv4: {port_ipv4}, port_ipv6: {port_ipv4+1})')
+                    LOGGER.warning(f'⚠️             2) Set disable_ipv6: true to use IPv4-only')
+                    LOGGER.warning(f'⚠️             3) Set bind_ipv4: "" to let IPv6 handle both')
+                else:
+                    LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
+            else:
+                LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
+    
+    # Verify we have at least one listener
+    if not transports:
+        LOGGER.error('Failed to bind to any interface')
+        sys.exit(1)
+    
+    # Setup signal handlers (Linux/Unix native asyncio pattern)
+    def handle_shutdown(signum):
+        signame = signal.Signals(signum).name
+        LOGGER.info(f"Received shutdown signal {signame}")
+        # Cleanup all protocols
+        for protocol in protocols:
+            protocol.cleanup()
+        loop.stop()
+    
+    loop.add_signal_handler(signal.SIGINT, lambda: handle_shutdown(signal.SIGINT))
+    loop.add_signal_handler(signal.SIGTERM, lambda: handle_shutdown(signal.SIGTERM))
+    
+    # Run forever
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        pass
+
 def main():
     """Main program entry point"""
     if len(sys.argv) < 2:
@@ -1752,87 +1854,8 @@ def main():
     LOGGER.info('🚀 ═══════════════════════════════════════════════════════════════')
     LOGGER.info('🚀 HBLINK4 STARTING UP')
     LOGGER.info('🚀 ═══════════════════════════════════════════════════════════════')
-
-    # Create protocol instance so we can access it for cleanup
-    protocol = HBProtocol()
-
-    # Check global IPv6 disable flag
-    disable_ipv6 = CONFIG['global'].get('disable_ipv6', False)
     
-    # Dual-stack support: Bind to both IPv4 and IPv6 if configured
-    port_ipv4 = CONFIG['global'].get('port_ipv4', 62031)
-    port_ipv6 = CONFIG['global'].get('port_ipv6', 62031)
-    bind_ipv4 = CONFIG['global'].get('bind_ipv4', '0.0.0.0')
-    bind_ipv6 = CONFIG['global'].get('bind_ipv6', '::')
-    
-    if disable_ipv6:
-        LOGGER.warning('⚠️  IPv6 is globally disabled - only binding to IPv4')
-        bind_ipv6 = None
-    
-    listeners = []
-    
-    # Bind to IPv4 if configured (and not empty)
-    if bind_ipv4:
-        try:
-            listener = reactor.listenUDP(port_ipv4, protocol, interface=bind_ipv4)
-            listeners.append(listener)
-            LOGGER.info(f'✓ HBlink4 listening on {bind_ipv4}:{port_ipv4} (UDP, IPv4)')
-        except Exception as e:
-            LOGGER.error(f'✗ Failed to bind IPv4 to {bind_ipv4}:{port_ipv4}: {e}')
-            if bind_ipv4 != '0.0.0.0':
-                # If specific address failed, don't exit - maybe IPv6 will work
-                pass
-            else:
-                sys.exit(1)
-    
-    # Bind to IPv6 if configured, enabled, and not empty
-    if bind_ipv6 and not disable_ipv6:
-        try:
-            # Create new protocol instance for IPv6 (each listener needs its own)
-            protocol_v6 = HBProtocol()
-            listener = reactor.listenUDP(port_ipv6, protocol_v6, interface=bind_ipv6)
-            listeners.append(listener)
-            LOGGER.info(f'✓ HBlink4 listening on [{bind_ipv6}]:{port_ipv6} (UDP, IPv6)')
-        except Exception as e:
-            error_msg = str(e)
-            # Check if this is the common dual-stack port conflict
-            if 'address already in use' in error_msg.lower() or 'address in use' in error_msg.lower():
-                if port_ipv4 == port_ipv6 and bind_ipv4 and bind_ipv6 == '::':
-                    LOGGER.warning(f'⚠️  IPv6 bind to [::]:{port_ipv6} failed (port already in use by IPv4)')
-                    LOGGER.warning(f'⚠️  This is normal if your system uses dual-stack IPv6 (IPv6 handles both IPv4 and IPv6)')
-                    LOGGER.warning(f'⚠️  Solutions: 1) Use different ports (port_ipv4: {port_ipv4}, port_ipv6: {port_ipv4+1})')
-                    LOGGER.warning(f'⚠️             2) Set disable_ipv6: true to use IPv4-only')
-                    LOGGER.warning(f'⚠️             3) Set bind_ipv4: "" to let IPv6 handle both (if dual-stack works)')
-                else:
-                    LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
-            else:
-                LOGGER.error(f'✗ Failed to bind IPv6 to [{bind_ipv6}]:{port_ipv6}: {e}')
-            
-            if bind_ipv6 != '::':
-                # If specific address failed, don't exit - maybe IPv4 worked
-                pass
-            else:
-                # If neither worked, exit
-                if not listeners:
-                    sys.exit(1)
-    
-    if not listeners:
-        LOGGER.error('Failed to bind to any interface')
-        sys.exit(1)
-    
-    # Set up signal handlers for graceful shutdown
-    def signal_handler(signum, frame):
-        """Handle shutdown signals by cleaning up and stopping reactor"""
-        signame = signal.Signals(signum).name
-        LOGGER.info(f"Received shutdown signal {signame}")
-        protocol.cleanup()
-        reactor.stop()
-
-    # Register handlers for SIGINT (Ctrl+C) and SIGTERM
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    reactor.run()
+    asyncio.run(async_main())
 
 if __name__ == '__main__':
     main()
