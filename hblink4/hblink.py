@@ -871,13 +871,38 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Send MSTCL to all connected repeaters
         if self._port:  # Only attempt to send if we have a port
             for repeater_id, repeater in self._repeaters.items():
-                if repeater.connection_state == 'yes':
+                if repeater.connection_state == 'connected':
                     try:
                         LOGGER.info(f"Sending disconnect to repeater {self._rid_to_int(repeater_id)}")
                         # asyncio uses sendto() instead of write(data, addr)
                         self._port.sendto(MSTCL, repeater.sockaddr)
                     except Exception as e:
                         LOGGER.error(f"Error sending disconnect to repeater {self._rid_to_int(repeater_id)}: {e}")
+        
+        # Send RPTCL (disconnect) to all outbound connections
+        for conn_name, outbound in list(self._outbounds.items()):
+            if outbound.authenticated and outbound.transport:
+                try:
+                    LOGGER.info(f"Sending disconnect to outbound connection '{conn_name}'")
+                    our_id_bytes = outbound.config.our_id.to_bytes(4, 'big')
+                    outbound.transport.sendto(RPTCL + our_id_bytes)
+                    
+                    # Emit disconnection event
+                    self._events.emit('outbound_disconnected', {
+                        'connection_name': conn_name,
+                        'our_id': outbound.config.our_id,
+                        'remote_address': outbound.ip,
+                        'remote_port': outbound.port,
+                        'reason': 'Server shutdown'
+                    })
+                except Exception as e:
+                    LOGGER.error(f"Error sending disconnect to outbound '{conn_name}': {e}")
+        
+        # Cancel all outbound connection tasks
+        for conn_name, outbound in self._outbounds.items():
+            if outbound.connection_task and not outbound.connection_task.done():
+                LOGGER.info(f"Cancelling connection task for '{conn_name}'")
+                outbound.connection_task.cancel()
 
         # Give time for disconnects to be sent
         import time
