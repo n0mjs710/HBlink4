@@ -14,7 +14,7 @@ import logging
 import logging.handlers
 import pathlib
 import ipaddress
-from typing import Dict, Any, Optional, Tuple, Union, List
+from typing import Dict, Any, Optional, Tuple, Union, List, Set
 from time import time
 from random import randint
 from hashlib import sha256
@@ -53,6 +53,40 @@ except ImportError:
 PeerAddress = Union[Tuple[str, int], Tuple[str, int, int, int]]
 
 from dataclasses import dataclass, field
+
+@dataclass
+class OutboundConnectionConfig:
+    """Configuration for an outbound connection to another server"""
+    enabled: bool
+    name: str
+    address: str
+    port: int
+    our_id: int
+    password: str
+    options: str = ""
+    
+    # Metadata fields with defaults
+    callsign: str = ""
+    rx_frequency: int = 0
+    tx_frequency: int = 0
+    power: int = 0
+    latitude: float = 0.0
+    longitude: float = 0.0
+    height: int = 0
+    location: str = ""
+    description: str = ""
+    url: str = ""
+    
+    def __post_init__(self):
+        """Validate required fields"""
+        if not self.name:
+            raise ValueError("Outbound connection must have a name")
+        if not self.address:
+            raise ValueError(f"Outbound connection '{self.name}' must have an address")
+        if not self.password:
+            raise ValueError(f"Outbound connection '{self.name}' must have a password")
+        if self.port <= 0 or self.port > 65535:
+            raise ValueError(f"Outbound connection '{self.name}' has invalid port: {self.port}")
 
 @dataclass
 class StreamState:
@@ -188,6 +222,12 @@ class HBProtocol(asyncio.DatagramProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__()
         self._repeaters: Dict[bytes, RepeaterState] = {}
+        
+        # Outbound connection state management (Phase 2)
+        self._outbounds: Dict[str, 'OutboundState'] = {}  # keyed by connection name
+        self._outbound_by_addr: Dict[Tuple[str, int], str] = {}  # (ip, port) -> name for O(1) routing
+        self._outbound_ids: Set[int] = set()  # reserved IDs to prevent DoS
+        
         self._config = CONFIG
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
@@ -1827,6 +1867,47 @@ def load_config(config_file: str):
         LOGGER.error(f'Error loading configuration: {e}')
         sys.exit(1)
 
+def parse_outbound_connections() -> List[OutboundConnectionConfig]:
+    """Parse outbound connections from config"""
+    outbound_configs = []
+    
+    raw_outbounds = CONFIG.get('outbound_connections', [])
+    if not raw_outbounds:
+        LOGGER.info('No outbound connections configured')
+        return outbound_configs
+    
+    for idx, conn_dict in enumerate(raw_outbounds):
+        try:
+            config = OutboundConnectionConfig(
+                enabled=conn_dict.get('enabled', True),
+                name=conn_dict['name'],
+                address=conn_dict['address'],
+                port=conn_dict['port'],
+                our_id=conn_dict['our_id'],
+                password=conn_dict['password'],
+                options=conn_dict.get('options', ''),
+                callsign=conn_dict.get('callsign', ''),
+                rx_frequency=conn_dict.get('rx_frequency', 0),
+                tx_frequency=conn_dict.get('tx_frequency', 0),
+                power=conn_dict.get('power', 0),
+                latitude=conn_dict.get('latitude', 0.0),
+                longitude=conn_dict.get('longitude', 0.0),
+                height=conn_dict.get('height', 0),
+                location=conn_dict.get('location', ''),
+                description=conn_dict.get('description', ''),
+                url=conn_dict.get('url', '')
+            )
+            outbound_configs.append(config)
+            LOGGER.info(f'✓ Loaded outbound connection: {config.name} → {config.address}:{config.port}')
+        except KeyError as e:
+            LOGGER.error(f'✗ Outbound connection #{idx} missing required field: {e}')
+            sys.exit(1)
+        except ValueError as e:
+            LOGGER.error(f'✗ Outbound connection #{idx} validation error: {e}')
+            sys.exit(1)
+    
+    return outbound_configs
+
 async def async_main():
     """Main async entry point"""
     loop = asyncio.get_running_loop()
@@ -1891,6 +1972,25 @@ async def async_main():
     if not transports:
         LOGGER.error('Failed to bind to any interface')
         sys.exit(1)
+    
+    # Parse and validate outbound connections
+    outbound_configs = parse_outbound_connections()
+    
+    # Reserve outbound IDs and initialize connections (all protocols share the state)
+    if outbound_configs and protocols:
+        # Use first protocol for outbound connection management
+        primary_protocol = protocols[0]
+        for config in outbound_configs:
+            if config.enabled:
+                # Reserve the ID to prevent DoS
+                if config.our_id in primary_protocol._outbound_ids:
+                    LOGGER.error(f'✗ Duplicate outbound ID {config.our_id} for "{config.name}"')
+                    sys.exit(1)
+                primary_protocol._outbound_ids.add(config.our_id)
+                LOGGER.info(f'Reserved ID {config.our_id} for outbound "{config.name}"')
+                
+                # TODO Phase 3: Create outbound connection task
+                # TODO Phase 4: Setup keepalive management
     
     # Setup signal handlers (Linux/Unix native asyncio pattern)
     shutdown_event = asyncio.Event()
