@@ -1651,6 +1651,15 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         LOGGER.debug(f'Processing login for repeater ID {self._rid_to_int(repeater_id)} from {ip}:{port}')
         
+        # ID Conflict Protection: Check if this ID is reserved for an outbound connection
+        # Outbound connections (admin-configured) have priority over inbound repeaters (untrusted)
+        repeater_id_int = self._rid_to_int(repeater_id)
+        if repeater_id_int in self._outbound_ids:
+            LOGGER.warning(f'⛔ Rejecting inbound repeater {repeater_id_int} from {ip}:{port} '
+                         f'- ID reserved for outbound connection')
+            self._send_nak(repeater_id, addr, reason="ID reserved for outbound connection")
+            return
+        
         if repeater_id in self._repeaters:
             repeater = self._repeaters[repeater_id]
             if not self._addr_matches(repeater.sockaddr, addr):
