@@ -139,6 +139,11 @@ class OutboundState:
     slot1_talkgroups: Optional[set] = None
     slot2_talkgroups: Optional[set] = None
     
+    # TDMA slot tracking - we're acting as a repeater with 2 timeslots
+    # Each slot can only carry ONE talkgroup stream at a time (air interface constraint)
+    slot1_stream: Optional['StreamState'] = None
+    slot2_stream: Optional['StreamState'] = None
+    
     @property
     def sockaddr(self) -> Tuple[str, int]:
         """Get socket address tuple"""
@@ -152,6 +157,21 @@ class OutboundState:
         # Allow 3 keepalive intervals before declaring dead
         keepalive = CONFIG.get('global', {}).get('ping_time', 5)
         return (time() - self.last_pong) < (keepalive * 3)
+    
+    def get_slot_stream(self, slot: int) -> Optional['StreamState']:
+        """Get the active stream for a given slot (TDMA timeslot)"""
+        if slot == 1:
+            return self.slot1_stream
+        elif slot == 2:
+            return self.slot2_stream
+        return None
+    
+    def set_slot_stream(self, slot: int, stream: Optional['StreamState']) -> None:
+        """Set the active stream for a given slot (TDMA timeslot)"""
+        if slot == 1:
+            self.slot1_stream = stream
+        elif slot == 2:
+            self.slot2_stream = stream
 
 @dataclass
 class RepeaterState:
@@ -629,8 +649,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # DMRD - DMR Data (voice/data from remote server)
             elif _command == DMRD:
-                # TODO Phase 5: Forward to local repeaters based on routing rules
-                LOGGER.debug(f'[{conn_name}] Received DMRD packet (routing TODO)')
+                # Forward to local repeaters based on routing rules
+                self._handle_outbound_dmr_data(data, state)
             
             else:
                 try:
@@ -676,6 +696,112 @@ class HBProtocol(asyncio.DatagramProtocol):
         packet = RPTO + our_id_bytes + options_bytes
         state.transport.sendto(packet)
         LOGGER.info(f'[{state.config.name}] Sent RPTO (options): {state.config.options}')
+    
+    def _handle_outbound_dmr_data(self, data: bytes, outbound_state: OutboundState):
+        """
+        Handle DMR data received from an outbound server.
+        Track stream state on outbound TDMA slots and forward to local repeaters.
+        
+        Args:
+            data: Complete DMRD packet from outbound server
+            outbound_state: State of the outbound connection
+        """
+        if len(data) < 55:
+            LOGGER.warning(f'[{outbound_state.config.name}] Invalid DMRD packet length: {len(data)}')
+            return
+        
+        # Extract packet information (same format as local repeater packets)
+        _seq = data[4]
+        _rf_src = data[5:8]
+        _dst_id = data[8:11]
+        _repeater_id = data[11:15]  # Source repeater ID from remote server
+        _bits = data[15]
+        _slot = 2 if (_bits & 0x80) else 1
+        _call_type = (_bits & 0x40) >> 6
+        _frame_type = (_bits & 0x30) >> 4
+        _stream_id = data[16:20]
+        
+        tgid = int.from_bytes(_dst_id, 'big')
+        src_id = int.from_bytes(_rf_src, 'big')
+        remote_repeater_id = int.from_bytes(_repeater_id, 'big')
+        _is_terminator = self._is_dmr_terminator(data, _frame_type)
+        
+        # Check if this talkgroup is allowed on this outbound connection
+        allowed_tgs = outbound_state.slot1_talkgroups if _slot == 1 else outbound_state.slot2_talkgroups
+        
+        # None = allow all, empty set = deny all, non-empty set = specific TGs
+        if allowed_tgs is not None and (not allowed_tgs or tgid not in allowed_tgs):
+            LOGGER.debug(f'[{outbound_state.config.name}] Dropping packet for unauthorized TG {tgid} on slot {_slot}')
+            return
+        
+        # Track stream state on outbound connection's TDMA slot (RX stream from remote server)
+        current_stream = outbound_state.get_slot_stream(_slot)
+        current_time = time()
+        
+        if not current_stream or current_stream.stream_id != _stream_id:
+            # New RX stream from remote server - check if slot is busy with assumed (TX) stream
+            if current_stream and current_stream.is_assumed and not current_stream.ended:
+                # Slot busy with active TX stream - remote server wins, clear TX stream
+                LOGGER.info(f'[{outbound_state.config.name}] TS{_slot} TX stream cleared by incoming RX stream')
+                outbound_state.set_slot_stream(_slot, None)
+                self._active_calls -= 1
+            
+            # Start new RX stream tracking
+            dummy_id = outbound_state.config.our_id.to_bytes(4, 'big')
+            new_stream = StreamState(
+                repeater_id=dummy_id,
+                rf_src=_rf_src,
+                dst_id=_dst_id,
+                slot=_slot,
+                start_time=current_time,
+                last_seen=current_time,
+                stream_id=_stream_id,
+                packet_count=1,
+                call_type="private" if _call_type else "group",
+                is_assumed=False  # Real RX stream
+            )
+            outbound_state.set_slot_stream(_slot, new_stream)
+            
+            LOGGER.info(f'[{outbound_state.config.name}] RX stream started on TS{_slot}: '
+                       f'src={src_id}, dst={tgid}, from remote repeater {remote_repeater_id}')
+        else:
+            # Update existing stream
+            current_stream.last_seen = current_time
+            current_stream.packet_count += 1
+        
+        # Handle terminator
+        if _is_terminator and current_stream:
+            dummy_id = outbound_state.config.our_id.to_bytes(4, 'big')
+            self._end_stream(current_stream, dummy_id, _slot, current_time, 'terminator')
+        
+        # Find local repeaters that should receive this traffic
+        forwarded_count = 0
+        for local_repeater_id, local_repeater in self._repeaters.items():
+            # Only forward to connected repeaters
+            if local_repeater.connection_state != 'connected':
+                continue
+            
+            # Check if this local repeater allows this TG on this slot
+            if not self._check_outbound_routing(local_repeater_id, _slot, tgid):
+                continue
+            
+            # Check slot availability (don't hijack active streams)
+            if self._is_slot_busy(local_repeater_id, _slot, _stream_id, _rf_src, _dst_id):
+                continue
+            
+            # Forward the packet unchanged (repeater_id stays as remote source)
+            self._send_packet(data, local_repeater.sockaddr)
+            forwarded_count += 1
+            
+            # Track assumed stream state on local repeater
+            self._update_assumed_stream(local_repeater, _slot, _rf_src, _dst_id,
+                                       _stream_id, _is_terminator, remote_repeater_id)
+        
+        # Log forwarding at DEBUG level
+        if forwarded_count > 0:
+            LOGGER.debug(f'[{outbound_state.config.name}] Forwarded DMRD '
+                        f'(slot {_slot}, src {src_id}, dst {tgid}) '
+                        f'to {forwarded_count} local repeater(s)')
 
     
     # ========== END HELPER METHODS ==========
@@ -1865,10 +1991,10 @@ class HBProtocol(asyncio.DatagramProtocol):
     def _calculate_stream_targets(self, source_repeater_id: bytes, slot: int, 
                                   dst_id: bytes, stream_id: bytes, rf_src: bytes) -> set:
         """
-        Calculate which repeaters should receive this ENTIRE transmission.
+        Calculate which repeaters AND outbound connections should receive this ENTIRE transmission.
         
         Checks both routing rules AND current slot availability at stream start.
-        If a slot is busy now, that repeater is excluded from THIS transmission,
+        If a slot is busy now, that target is excluded from THIS transmission,
         but will be reconsidered for the NEXT transmission.
         
         This "calculate once per stream" approach provides:
@@ -1877,11 +2003,14 @@ class HBProtocol(asyncio.DatagramProtocol):
         - Simpler code: Deterministic routing per transmission
         
         Returns:
-            Set of repeater_ids (bytes) that will receive ALL packets in this stream
+            Set of target identifiers:
+            - repeater_ids (bytes) for local repeaters
+            - ('outbound', name) tuples for outbound connections
         """
         tgid = int.from_bytes(dst_id, 'big')
         target_set = set()
         
+        # Calculate local repeater targets
         for target_repeater_id, target_repeater in self._repeaters.items():
             # Skip source repeater
             if target_repeater_id == source_repeater_id:
@@ -1904,6 +2033,48 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Passed all checks - will receive entire transmission
             target_set.add(target_repeater_id)
+        
+        # Calculate outbound connection targets
+        for conn_name, outbound in self._outbounds.items():
+            # Only forward to authenticated connections
+            if not outbound.authenticated:
+                continue
+            
+            # Check TG routing (is this TG allowed on this outbound connection?)
+            allowed_tgs = outbound.slot1_talkgroups if slot == 1 else outbound.slot2_talkgroups
+            
+            # None = allow all, empty set = deny all, non-empty set = specific TGs
+            if allowed_tgs is not None and (not allowed_tgs or tgid not in allowed_tgs):
+                continue
+            
+            # Check TDMA slot availability - outbound connections are like repeaters
+            # Each slot can only carry ONE talkgroup stream at a time (air interface constraint)
+            current_stream = outbound.get_slot_stream(slot)
+            if current_stream:
+                # Same stream continuing
+                if current_stream.stream_id == stream_id:
+                    pass  # Same stream, ok to continue
+                # Different stream - check if in hang time or still active
+                elif current_stream.ended:
+                    # Stream ended, check hang time (protects TG conversations)
+                    hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+                    time_since_end = time() - current_stream.end_time if current_stream.end_time else 0
+                    if time_since_end < hang_time:
+                        # In hang time - only allow same TG or original user
+                        same_tg = (current_stream.dst_id == dst_id)
+                        same_user = (current_stream.rf_src == rf_src)
+                        if not (same_tg or same_user):
+                            LOGGER.debug(f'Outbound {conn_name} TS{slot} in hang time, '
+                                       f'excluded from this transmission')
+                            continue
+                else:
+                    # Different active stream - slot is busy
+                    LOGGER.debug(f'Outbound {conn_name} TS{slot} busy with different stream, '
+                               f'excluded from this transmission')
+                    continue
+            
+            # Passed all checks - will receive entire transmission
+            target_set.add(('outbound', conn_name))
         
         return target_set
     
@@ -1949,18 +2120,39 @@ class HBProtocol(asyncio.DatagramProtocol):
         is_terminator = self._is_dmr_terminator(data, _frame_type)
         
         # Simple loop through cached targets - no per-packet checks!
-        for target_repeater_id in source_stream.target_repeaters:
-            target_repeater = self._repeaters.get(target_repeater_id)
-            if not target_repeater:
-                continue  # Repeater disconnected mid-stream
-            
-            # Forward packet (no routing or slot checks - already approved!)
-            self._send_packet(data, target_repeater.sockaddr)
-            
-            # Track assumed stream state on target repeater
-            self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, 
-                                       stream_id, is_terminator, 
-                                       int.from_bytes(source_repeater_id, 'big'))
+        for target in source_stream.target_repeaters:
+            # Check if target is an outbound connection or local repeater
+            if isinstance(target, tuple) and target[0] == 'outbound':
+                # Target is an outbound connection (we're acting as a repeater to remote server)
+                conn_name = target[1]
+                outbound = self._outbounds.get(conn_name)
+                if not outbound or not outbound.authenticated:
+                    continue  # Connection dropped mid-stream
+                
+                # Forward packet to outbound server
+                outbound.transport.sendto(data)
+                LOGGER.debug(f'Forwarded to outbound [{conn_name}]')
+                
+                # Track assumed stream state on outbound slot (TDMA constraint)
+                # We must track what we're transmitting on each timeslot
+                self._update_assumed_stream_outbound(outbound, slot, rf_src, dst_id, 
+                                                    stream_id, is_terminator,
+                                                    int.from_bytes(source_repeater_id, 'big'))
+                
+            else:
+                # Target is a local repeater (bytes)
+                target_repeater_id = target
+                target_repeater = self._repeaters.get(target_repeater_id)
+                if not target_repeater:
+                    continue  # Repeater disconnected mid-stream
+                
+                # Forward packet (no routing or slot checks - already approved!)
+                self._send_packet(data, target_repeater.sockaddr)
+                
+                # Track assumed stream state on target repeater
+                self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, 
+                                           stream_id, is_terminator, 
+                                           int.from_bytes(source_repeater_id, 'big'))
     
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
@@ -2097,6 +2289,66 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Handle terminator
         if is_terminator and current_stream:
             self._end_stream(current_stream, repeater.repeater_id, slot, current_time, 'terminator')
+
+    def _update_assumed_stream_outbound(self, outbound: OutboundState, slot: int, rf_src: bytes,
+                                       dst_id: bytes, stream_id: bytes, is_terminator: bool,
+                                       source_repeater_id: int) -> None:
+        """
+        Update or create assumed stream state on an outbound connection's TDMA slot.
+        
+        Since we're acting as a repeater to the remote server and forwarding traffic,
+        we must track what we're transmitting on each timeslot (TDMA air interface constraint).
+        
+        Args:
+            outbound: Target outbound connection state
+            slot: Timeslot (1 or 2)
+            rf_src: Source subscriber ID
+            dst_id: Destination TGID
+            stream_id: Stream identifier
+            is_terminator: Whether this packet is a terminator
+            source_repeater_id: ID of source repeater (for logging)
+        """
+        current_stream = outbound.get_slot_stream(slot)
+        current_time = time()
+        
+        if not current_stream or current_stream.stream_id != stream_id:
+            # New assumed stream starting on this outbound timeslot
+            # Use a dummy repeater_id for outbound streams (can't use bytes for outbound)
+            dummy_id = outbound.config.our_id.to_bytes(4, 'big')
+            
+            new_stream = StreamState(
+                repeater_id=dummy_id,  # Our ID when acting as repeater
+                rf_src=rf_src,
+                dst_id=dst_id,
+                slot=slot,
+                start_time=current_time,
+                last_seen=current_time,
+                stream_id=stream_id,
+                packet_count=1,
+                call_type="group",  # Assume group call for forwarded streams
+                is_assumed=True  # Mark as assumed stream (TX, not RX)
+            )
+            outbound.set_slot_stream(slot, new_stream)
+            
+            # Log at DEBUG level - TX streams to outbounds
+            LOGGER.debug(f'TX stream started on outbound [{outbound.config.name}] TS{slot}: '
+                       f'from repeater {source_repeater_id}, '
+                       f'src={int.from_bytes(rf_src, "big")}, '
+                       f'dst={int.from_bytes(dst_id, "big")}')
+            
+            # Increment active calls counter
+            self._active_calls += 1
+        else:
+            # Update existing assumed stream
+            current_stream.last_seen = current_time
+            current_stream.packet_count += 1
+        
+        # Handle terminator - end the stream and start hang time
+        if is_terminator and current_stream:
+            # For outbound streams, use a synthetic repeater_id for logging
+            dummy_id = outbound.config.our_id.to_bytes(4, 'big')
+            self._end_stream(current_stream, dummy_id, slot, current_time, 'terminator')
+
 
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
