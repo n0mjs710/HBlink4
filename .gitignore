@@ -40,6 +40,7 @@ logs/
 
 # Configuration files
 config/config.json
+config/config_bak.json
 dashboard/config.json
 
 # OS
