@@ -117,6 +117,41 @@ class StreamState:
         time_since_end = time() - self.end_time
         return time_since_end < hang_time
 
+@dataclass
+class OutboundState:
+    """Data class for tracking outbound server connection state"""
+    config: OutboundConnectionConfig  # Configuration object
+    ip: str  # Resolved IP address
+    port: int  # Remote port
+    connected: bool = False
+    authenticated: bool = False
+    config_sent: bool = False  # RPTC sent and acked
+    options_sent: bool = False  # RPTO sent
+    last_ping: float = 0.0  # Last RPTPING sent
+    last_pong: float = 0.0  # Last MSTPONG received
+    missed_pongs: int = 0  # Consecutive missed pongs
+    salt: int = 0  # Challenge salt from MSTCL
+    connection_task: Optional[asyncio.Task] = None  # Connection management task
+    transport: Optional[asyncio.DatagramTransport] = None  # UDP transport
+    
+    # Talkgroup filtering (parsed from config.options)
+    # None = no restrictions (allow all), empty set = deny all
+    slot1_talkgroups: Optional[set] = None
+    slot2_talkgroups: Optional[set] = None
+    
+    @property
+    def sockaddr(self) -> Tuple[str, int]:
+        """Get socket address tuple"""
+        return (self.ip, self.port)
+    
+    @property
+    def is_alive(self) -> bool:
+        """Check if connection is healthy (recent pong received)"""
+        if not self.connected or not self.authenticated:
+            return False
+        # Allow 3 keepalive intervals before declaring dead
+        keepalive = CONFIG.get('global', {}).get('ping_time', 5)
+        return (time() - self.last_pong) < (keepalive * 3)
 
 @dataclass
 class RepeaterState:
