@@ -478,6 +478,16 @@ class HBProtocol(asyncio.DatagramProtocol):
                     LOGGER.info(f'[{config.name}] Resolved {config.address} → {ip}:{port}')
                 except Exception as e:
                     LOGGER.error(f'[{config.name}] DNS resolution failed: {e}')
+                    
+                    # Emit error event
+                    self._events.emit('outbound_error', {
+                        'connection_name': config.name,
+                        'our_id': config.our_id,
+                        'remote_address': config.address,
+                        'remote_port': config.port,
+                        'error_message': f'DNS resolution failed: {e}'
+                    })
+                    
                     await asyncio.sleep(keepalive_interval)
                     continue
                 
@@ -491,6 +501,16 @@ class HBProtocol(asyncio.DatagramProtocol):
                     LOGGER.info(f'[{config.name}] UDP endpoint created to {ip}:{port}')
                 except Exception as e:
                     LOGGER.error(f'[{config.name}] Failed to create UDP endpoint: {e}')
+                    
+                    # Emit error event
+                    self._events.emit('outbound_error', {
+                        'connection_name': config.name,
+                        'our_id': config.our_id,
+                        'remote_address': ip,
+                        'remote_port': port,
+                        'error_message': f'Failed to create UDP endpoint: {e}'
+                    })
+                    
                     await asyncio.sleep(keepalive_interval)
                     continue
                 
@@ -542,6 +562,16 @@ class HBProtocol(asyncio.DatagramProtocol):
                                 if state.missed_pongs >= 3:
                                     LOGGER.error(f'[{config.name}] Connection lost (3 missed pongs)')
                                     state.connected = False
+                                    
+                                    # Emit disconnection event
+                                    self._events.emit('outbound_disconnected', {
+                                        'connection_name': config.name,
+                                        'our_id': config.our_id,
+                                        'remote_address': state.ip,
+                                        'remote_port': state.port,
+                                        'reason': 'Connection timeout (3 missed pongs)'
+                                    })
+                                    
                                     break
                 
             except asyncio.CancelledError:
@@ -627,6 +657,16 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Options ACK
                     state.options_sent = True
                     LOGGER.info(f'[{conn_name}] Received RPTACK - Options accepted, connection complete')
+                    
+                    # Emit connection established event
+                    self._events.emit('outbound_connected', {
+                        'connection_name': conn_name,
+                        'our_id': state.config.our_id,
+                        'remote_address': state.ip,
+                        'remote_port': state.port,
+                        'slot1_talkgroups': list(state.slot1_talkgroups) if state.slot1_talkgroups else None,
+                        'slot2_talkgroups': list(state.slot2_talkgroups) if state.slot2_talkgroups else None
+                    })
                 else:
                     # Generic ACK
                     LOGGER.debug(f'[{conn_name}] Received RPTACK')
@@ -635,6 +675,15 @@ class HBProtocol(asyncio.DatagramProtocol):
             elif _command == MSTNAK:
                 LOGGER.error(f'[{conn_name}] Received MSTNAK - Connection rejected by server')
                 state.connected = False
+                
+                # Emit error event
+                self._events.emit('outbound_error', {
+                    'connection_name': conn_name,
+                    'our_id': state.config.our_id,
+                    'remote_address': state.ip,
+                    'remote_port': state.port,
+                    'error_message': 'Connection rejected by server (MSTNAK)'
+                })
             
             # MSTPONG - Keepalive response
             elif _command == MSTPONG:
@@ -646,6 +695,15 @@ class HBProtocol(asyncio.DatagramProtocol):
             elif _command[:5] == MSTCL:
                 LOGGER.info(f'[{conn_name}] Received MSTCL - Server initiated disconnect')
                 state.connected = False
+                
+                # Emit disconnection event
+                self._events.emit('outbound_disconnected', {
+                    'connection_name': conn_name,
+                    'our_id': state.config.our_id,
+                    'remote_address': state.ip,
+                    'remote_port': state.port,
+                    'reason': 'Server initiated disconnect'
+                })
             
             # DMRD - DMR Data (voice/data from remote server)
             elif _command == DMRD:
