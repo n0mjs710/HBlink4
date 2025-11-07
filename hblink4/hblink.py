@@ -388,6 +388,145 @@ class HBProtocol(asyncio.DatagramProtocol):
         repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
         repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
 
+    # ========== OUTBOUND CONNECTION METHODS (Phase 3) ==========
+    
+    def _parse_options(self, options: str) -> Tuple[Optional[set], Optional[set]]:
+        """
+        Parse Options= string into slot TG sets.
+        Returns: (slot1_tgs, slot2_tgs)
+        - None = allow all (*)
+        - empty set = deny all (missing TS or empty)
+        - non-empty set = allow only those TGs
+        """
+        if not options or options.strip() == '*':
+            return (None, None)  # Allow all
+        
+        slot1_tgs = set()  # Default: deny all
+        slot2_tgs = set()  # Default: deny all
+        
+        try:
+            for part in options.split(';'):
+                part = part.strip()
+                if not part:
+                    continue
+                if 'TS1_' in part:
+                    tgs_str = part.split('=')[1] if '=' in part else ''
+                    if tgs_str:
+                        slot1_tgs.update(int(tg) for tg in tgs_str.split(',') if tg.strip())
+                elif 'TS2_' in part:
+                    tgs_str = part.split('=')[1] if '=' in part else ''
+                    if tgs_str:
+                        slot2_tgs.update(int(tg) for tg in tgs_str.split(',') if tg.strip())
+        except Exception as e:
+            LOGGER.warning(f'Error parsing options "{options}": {e}')
+            return (set(), set())  # Deny all on parse error
+        
+        # If "*", both will be None (allow all)
+        # If empty or missing TS, sets will be empty (deny all)
+        # Otherwise sets contain specific TGs
+        return (slot1_tgs if slot1_tgs else None if options == '*' else set(),
+                slot2_tgs if slot2_tgs else None if options == '*' else set())
+    
+    async def _connect_outbound(self, config: OutboundConnectionConfig, loop=None):
+        """
+        Manage outbound connection lifecycle.
+        Runs indefinitely, reconnecting on failure.
+        """
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        
+        keepalive_interval = CONFIG.get('global', {}).get('ping_time', 5)
+        
+        while True:
+            try:
+                # Phase 1: DNS Resolution
+                LOGGER.info(f'[{config.name}] Resolving {config.address}...')
+                try:
+                    # Use getaddrinfo for DNS resolution
+                    addr_info = await loop.getaddrinfo(
+                        config.address, config.port,
+                        family=0,  # AF_UNSPEC - allow IPv4 or IPv6
+                        type=asyncio.SOCK_DGRAM
+                    )
+                    if not addr_info:
+                        raise Exception(f'DNS resolution failed for {config.address}')
+                    
+                    # Use first result
+                    family, socktype, proto, canonname, sockaddr = addr_info[0]
+                    ip = sockaddr[0]
+                    port = sockaddr[1]
+                    LOGGER.info(f'[{config.name}] Resolved {config.address} → {ip}:{port}')
+                except Exception as e:
+                    LOGGER.error(f'[{config.name}] DNS resolution failed: {e}')
+                    await asyncio.sleep(keepalive_interval)
+                    continue
+                
+                # Phase 2: Create UDP endpoint
+                try:
+                    # Create a connected UDP socket (allows send() instead of sendto())
+                    transport, protocol = await loop.create_datagram_endpoint(
+                        lambda: asyncio.DatagramProtocol(),
+                        remote_addr=(ip, port)
+                    )
+                    LOGGER.info(f'[{config.name}] UDP endpoint created to {ip}:{port}')
+                except Exception as e:
+                    LOGGER.error(f'[{config.name}] Failed to create UDP endpoint: {e}')
+                    await asyncio.sleep(keepalive_interval)
+                    continue
+                
+                # Create outbound state
+                slot1_tgs, slot2_tgs = self._parse_options(config.options)
+                state = OutboundState(
+                    config=config,
+                    ip=ip,
+                    port=port,
+                    transport=transport,
+                    slot1_talkgroups=slot1_tgs,
+                    slot2_talkgroups=slot2_tgs
+                )
+                
+                # Store in dictionaries
+                self._outbounds[config.name] = state
+                self._outbound_by_addr[(ip, port)] = config.name
+                
+                # Phase 3: Login (RPTL)
+                our_id_bytes = config.our_id.to_bytes(4, 'big')
+                rptl_packet = RPTL + our_id_bytes
+                transport.sendto(rptl_packet)
+                LOGGER.info(f'[{config.name}] Sent RPTL (login) with ID {config.our_id}')
+                
+                # Wait for MSTCL (challenge) with salt
+                # TODO: Implement packet reception and state machine
+                # For now, just keep the connection alive
+                state.connected = True
+                
+                LOGGER.info(f'[{config.name}] Connection established (state machine TODO)')
+                
+                # Keep connection alive until error
+                while state.connected:
+                    await asyncio.sleep(keepalive_interval)
+                    # TODO Phase 4: Send RPTPING, check for MSTPONG
+                
+            except asyncio.CancelledError:
+                LOGGER.info(f'[{config.name}] Connection task cancelled')
+                break
+            except Exception as e:
+                LOGGER.error(f'[{config.name}] Connection error: {e}')
+            finally:
+                # Cleanup
+                if config.name in self._outbounds:
+                    state = self._outbounds[config.name]
+                    if state.transport:
+                        state.transport.close()
+                    del self._outbounds[config.name]
+                    if (state.ip, state.port) in self._outbound_by_addr:
+                        del self._outbound_by_addr[(state.ip, state.port)]
+                    LOGGER.info(f'[{config.name}] Cleaned up connection state')
+            
+            # Wait before reconnecting
+            LOGGER.info(f'[{config.name}] Waiting {keepalive_interval}s before reconnect...')
+            await asyncio.sleep(keepalive_interval)
+
     
     # ========== END HELPER METHODS ==========
         
@@ -2022,10 +2161,14 @@ async def async_main():
                     LOGGER.error(f'✗ Duplicate outbound ID {config.our_id} for "{config.name}"')
                     sys.exit(1)
                 primary_protocol._outbound_ids.add(config.our_id)
-                LOGGER.info(f'Reserved ID {config.our_id} for outbound "{config.name}"')
+                LOGGER.info(f'✓ Reserved ID {config.our_id} for outbound "{config.name}"')
                 
-                # TODO Phase 3: Create outbound connection task
-                # TODO Phase 4: Setup keepalive management
+                # Start connection task
+                task = asyncio.create_task(
+                    primary_protocol._connect_outbound(config, loop),
+                    name=f'outbound_{config.name}'
+                )
+                LOGGER.info(f'✓ Started outbound connection task for "{config.name}"')
     
     # Setup signal handlers (Linux/Unix native asyncio pattern)
     shutdown_event = asyncio.Event()
