@@ -496,16 +496,33 @@ class HBProtocol(asyncio.DatagramProtocol):
                 LOGGER.info(f'[{config.name}] Sent RPTL (login) with ID {config.our_id}')
                 
                 # Wait for MSTCL (challenge) with salt
-                # TODO: Implement packet reception and state machine
-                # For now, just keep the connection alive
+                # State machine is driven by _handle_outbound_packet() receiving packets
                 state.connected = True
                 
-                LOGGER.info(f'[{config.name}] Connection established (state machine TODO)')
+                LOGGER.info(f'[{config.name}] Connection initiated, waiting for MSTCL...')
                 
-                # Keep connection alive until error
+                # Phase 4: Keepalive loop
                 while state.connected:
                     await asyncio.sleep(keepalive_interval)
-                    # TODO Phase 4: Send RPTPING, check for MSTPONG
+                    
+                    # Send RPTPING if authenticated
+                    if state.authenticated:
+                        ping_packet = RPTPING + our_id_bytes
+                        state.transport.sendto(ping_packet)
+                        state.last_ping = time()
+                        LOGGER.debug(f'[{config.name}] Sent RPTPING')
+                        
+                        # Check for missed pongs
+                        if state.last_pong > 0:
+                            time_since_pong = time() - state.last_pong
+                            if time_since_pong > (keepalive_interval * 3):
+                                state.missed_pongs += 1
+                                LOGGER.warning(f'[{config.name}] Missed pong #{state.missed_pongs} '
+                                             f'({time_since_pong:.1f}s since last pong)')
+                                if state.missed_pongs >= 3:
+                                    LOGGER.error(f'[{config.name}] Connection lost (3 missed pongs)')
+                                    state.connected = False
+                                    break
                 
             except asyncio.CancelledError:
                 LOGGER.info(f'[{config.name}] Connection task cancelled')
@@ -526,6 +543,139 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Wait before reconnecting
             LOGGER.info(f'[{config.name}] Waiting {keepalive_interval}s before reconnect...')
             await asyncio.sleep(keepalive_interval)
+    
+    def _handle_outbound_packet(self, data: bytes, addr: tuple):
+        """
+        Handle packets received from outbound server connections.
+        Implements client-side HomeBrew protocol state machine.
+        """
+        ip = addr[0]
+        port = addr[1]
+        addr_key = (ip, port)
+        
+        # Get outbound state
+        conn_name = self._outbound_by_addr.get(addr_key)
+        if not conn_name or conn_name not in self._outbounds:
+            LOGGER.warning(f'Received packet from unknown outbound address {ip}:{port}')
+            return
+        
+        state = self._outbounds[conn_name]
+        _command = data[:4]
+        
+        try:
+            # MSTCL - Challenge (response to RPTL)
+            if _command == MSTCL:
+                if len(data) < 8:
+                    LOGGER.error(f'[{conn_name}] Invalid MSTCL packet length: {len(data)}')
+                    return
+                
+                # Extract salt from challenge
+                state.salt = int.from_bytes(data[4:8], 'big')
+                LOGGER.info(f'[{conn_name}] Received MSTCL (challenge) with salt: {state.salt}')
+                
+                # Send RPTK (auth response)
+                our_id_bytes = state.config.our_id.to_bytes(4, 'big')
+                salt_bytes = state.salt.to_bytes(4, 'big')
+                calc_hash = bytes.fromhex(
+                    sha256(salt_bytes + state.config.password.encode()).hexdigest()
+                )
+                rptk_packet = RPTK + our_id_bytes + calc_hash
+                state.transport.sendto(rptk_packet)
+                LOGGER.info(f'[{conn_name}] Sent RPTK (auth response)')
+            
+            # RPTACK - Acknowledgment
+            elif _command == RPTACK:
+                if not state.authenticated:
+                    # Auth ACK
+                    state.authenticated = True
+                    LOGGER.info(f'[{conn_name}] Received RPTACK - Authentication successful')
+                    
+                    # Send RPTC (config)
+                    self._send_outbound_config(state, (ip, port))
+                elif not state.config_sent:
+                    # Config ACK
+                    state.config_sent = True
+                    LOGGER.info(f'[{conn_name}] Received RPTACK - Config accepted')
+                    
+                    # Send RPTO (options) if configured
+                    if state.config.options:
+                        self._send_outbound_options(state, (ip, port))
+                    else:
+                        state.options_sent = True
+                        LOGGER.info(f'[{conn_name}] No options configured, connection complete')
+                elif not state.options_sent:
+                    # Options ACK
+                    state.options_sent = True
+                    LOGGER.info(f'[{conn_name}] Received RPTACK - Options accepted, connection complete')
+                else:
+                    # Generic ACK
+                    LOGGER.debug(f'[{conn_name}] Received RPTACK')
+            
+            # MSTNAK - Negative Acknowledgment
+            elif _command == MSTNAK:
+                LOGGER.error(f'[{conn_name}] Received MSTNAK - Connection rejected by server')
+                state.connected = False
+            
+            # MSTPONG - Keepalive response
+            elif _command == MSTPONG:
+                state.last_pong = time()
+                state.missed_pongs = 0
+                LOGGER.debug(f'[{conn_name}] Received MSTPONG')
+            
+            # MSTCL - Server disconnect
+            elif _command[:5] == MSTCL:
+                LOGGER.info(f'[{conn_name}] Received MSTCL - Server initiated disconnect')
+                state.connected = False
+            
+            # DMRD - DMR Data (voice/data from remote server)
+            elif _command == DMRD:
+                # TODO Phase 5: Forward to local repeaters based on routing rules
+                LOGGER.debug(f'[{conn_name}] Received DMRD packet (routing TODO)')
+            
+            else:
+                try:
+                    cmd_str = _command.decode('utf-8', errors='replace')
+                except:
+                    cmd_str = _command.hex()
+                LOGGER.warning(f'[{conn_name}] Unknown command from outbound server: {cmd_str}')
+                
+        except Exception as e:
+            LOGGER.error(f'[{conn_name}] Error processing outbound packet: {e}')
+    
+    def _send_outbound_config(self, state: OutboundState, addr: tuple):
+        """Send RPTC (configuration) to outbound server"""
+        config = state.config
+        our_id_bytes = config.our_id.to_bytes(4, 'big')
+        
+        # Build config packet (same format as repeater sends to us)
+        # Pad/truncate strings to exact field lengths
+        packet = RPTC + our_id_bytes
+        packet += config.callsign.encode().ljust(8, b'\x00')[:8]
+        packet += str(config.rx_frequency).encode().ljust(9, b'\x00')[:9]
+        packet += str(config.tx_frequency).encode().ljust(9, b'\x00')[:9]
+        packet += str(config.power).encode().ljust(2, b'\x00')[:2]
+        packet += b'01'  # Color code (placeholder)
+        packet += str(config.latitude).encode().ljust(8, b'\x00')[:8]
+        packet += str(config.longitude).encode().ljust(9, b'\x00')[:9]
+        packet += str(config.height).encode().ljust(3, b'\x00')[:3]
+        packet += config.location.encode().ljust(20, b'\x00')[:20]
+        packet += config.description.encode().ljust(19, b'\x00')[:19]
+        packet += b'3'  # Slots (placeholder)
+        packet += config.url.encode().ljust(124, b'\x00')[:124]
+        packet += b'HBlink4'.ljust(40, b'\x00')[:40]  # Software ID
+        packet += b'v2.0'.ljust(40, b'\x00')[:40]  # Package ID
+        
+        state.transport.sendto(packet)
+        LOGGER.info(f'[{config.name}] Sent RPTC (config)')
+    
+    def _send_outbound_options(self, state: OutboundState, addr: tuple):
+        """Send RPTO (options) to outbound server"""
+        our_id_bytes = state.config.our_id.to_bytes(4, 'big')
+        options_bytes = state.config.options.encode().ljust(300, b'\x00')[:300]
+        
+        packet = RPTO + our_id_bytes + options_bytes
+        state.transport.sendto(packet)
+        LOGGER.info(f'[{state.config.name}] Sent RPTO (options): {state.config.options}')
 
     
     # ========== END HELPER METHODS ==========
@@ -905,6 +1055,13 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Handle both IPv4 (ip, port) and IPv6 (ip, port, flowinfo, scopeid) address formats
         ip = addr[0]
         port = addr[1]
+        
+        # Check if this is from an outbound connection (O(1) lookup)
+        addr_key = (ip, port)
+        if addr_key in self._outbound_by_addr:
+            # Route to outbound handler
+            self._handle_outbound_packet(data, addr)
+            return
         
         # Debug log the raw packet
         #LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
