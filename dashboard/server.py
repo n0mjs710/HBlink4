@@ -956,6 +956,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         state.websocket_clients.discard(websocket)
         logger.debug(f"WebSocket client disconnected (remaining: {len(state.websocket_clients)})")
+    except asyncio.CancelledError:
+        # Graceful shutdown - task was cancelled
+        state.websocket_clients.discard(websocket)
+        logger.debug(f"WebSocket client closed during shutdown (remaining: {len(state.websocket_clients)})")
+        raise  # Re-raise to allow proper cleanup
+    except Exception as e:
+        state.websocket_clients.discard(websocket)
+        logger.error(f"WebSocket error: {e}")
 
 
 # Serve frontend
@@ -992,6 +1000,25 @@ async def startup_event():
     logger.info("🚀 HBlink4 Dashboard started!")
     logger.info(f"📡 Event transport: {receiver_config.get('transport', 'unix').upper()}")
     logger.info("📊 Access dashboard at http://localhost:8080")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean shutdown - save data and close connections"""
+    logger.info("💾 Dashboard shutting down, saving data...")
+    save_persistent_data()
+    
+    # Close all WebSocket connections gracefully
+    if state.websocket_clients:
+        logger.info(f"🔌 Closing {len(state.websocket_clients)} WebSocket connections...")
+        for websocket in list(state.websocket_clients):
+            try:
+                await websocket.close(code=1001, reason="Server shutdown")
+            except Exception as e:
+                logger.debug(f"Error closing websocket: {e}")
+        state.websocket_clients.clear()
+    
+    logger.info("✅ Dashboard shutdown complete")
 
 
 async def midnight_reset_task():
@@ -1047,12 +1074,13 @@ def save_persistent_data():
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
-    logger.info(f"📡 Received signal {signum}, saving data...")
-    save_persistent_data()
-    exit(0)
+    # Note: Don't save here - let the shutdown_event handler do it
+    # This prevents double-saving and allows async cleanup
+    logger.info(f"📡 Received signal {signum}, triggering graceful shutdown...")
+    raise KeyboardInterrupt  # Trigger uvicorn shutdown
 
 # Register shutdown handlers
-atexit.register(save_persistent_data)
+atexit.register(save_persistent_data)  # Fallback if normal shutdown fails
 signal.signal(signal.SIGTERM, signal_handler)  # Systemd stop
 signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
 
