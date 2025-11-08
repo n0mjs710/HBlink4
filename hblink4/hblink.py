@@ -490,7 +490,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     addr_info = await loop.getaddrinfo(
                         config.address, config.port,
                         family=0,  # AF_UNSPEC - allow IPv4 or IPv6
-                        type=asyncio.SOCK_DGRAM
+                        type=socket.SOCK_DGRAM
                     )
                     if not addr_info:
                         raise Exception(f'DNS resolution failed for {config.address}')
