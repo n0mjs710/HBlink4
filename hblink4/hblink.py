@@ -61,7 +61,7 @@ class OutboundConnectionConfig:
     name: str
     address: str
     port: int
-    our_id: int
+    radio_id: int
     password: str
     options: str = ""
     
@@ -70,12 +70,15 @@ class OutboundConnectionConfig:
     rx_frequency: int = 0
     tx_frequency: int = 0
     power: int = 0
+    colorcode: int = 1
     latitude: float = 0.0
     longitude: float = 0.0
     height: int = 0
     location: str = ""
     description: str = ""
     url: str = ""
+    software_id: str = "HBlink4"
+    package_id: str = "HBlink4 v2.0"
     
     def __post_init__(self):
         """Validate required fields"""
@@ -503,7 +506,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Emit error event
                     self._events.emit('outbound_error', {
                         'connection_name': config.name,
-                        'our_id': config.our_id,
+                        'radio_id': config.radio_id,
                         'remote_address': config.address,
                         'remote_port': config.port,
                         'error_message': f'DNS resolution failed: {e}'
@@ -526,7 +529,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Emit error event
                     self._events.emit('outbound_error', {
                         'connection_name': config.name,
-                        'our_id': config.our_id,
+                        'radio_id': config.radio_id,
                         'remote_address': ip,
                         'remote_port': port,
                         'error_message': f'Failed to create UDP endpoint: {e}'
@@ -551,10 +554,10 @@ class HBProtocol(asyncio.DatagramProtocol):
                 self._outbound_by_addr[(ip, port)] = config.name
                 
                 # Phase 3: Login (RPTL)
-                our_id_bytes = config.our_id.to_bytes(4, 'big')
+                our_id_bytes = config.radio_id.to_bytes(4, 'big')
                 rptl_packet = RPTL + our_id_bytes
                 transport.sendto(rptl_packet)
-                LOGGER.info(f'[{config.name}] Sent RPTL (login) with ID {config.our_id}')
+                LOGGER.info(f'[{config.name}] Sent RPTL (login) with ID {config.radio_id}')
                 
                 # Wait for MSTCL (challenge) with salt
                 # State machine is driven by _handle_outbound_packet() receiving packets
@@ -587,7 +590,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                                     # Emit disconnection event
                                     self._events.emit('outbound_disconnected', {
                                         'connection_name': config.name,
-                                        'our_id': config.our_id,
+                                        'radio_id': config.radio_id,
                                         'remote_address': state.ip,
                                         'remote_port': state.port,
                                         'reason': 'Connection timeout (3 missed pongs)'
@@ -645,7 +648,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 LOGGER.info(f'[{conn_name}] Received MSTCL (challenge) with salt: {state.salt}')
                 
                 # Send RPTK (auth response)
-                our_id_bytes = state.config.our_id.to_bytes(4, 'big')
+                our_id_bytes = state.config.radio_id.to_bytes(4, 'big')
                 salt_bytes = state.salt.to_bytes(4, 'big')
                 calc_hash = bytes.fromhex(
                     sha256(salt_bytes + state.config.password.encode()).hexdigest()
@@ -682,7 +685,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Emit connection established event
                     self._events.emit('outbound_connected', {
                         'connection_name': conn_name,
-                        'our_id': state.config.our_id,
+                        'radio_id': state.config.radio_id,
                         'remote_address': state.ip,
                         'remote_port': state.port,
                         'slot1_talkgroups': list(state.slot1_talkgroups) if state.slot1_talkgroups else None,
@@ -700,7 +703,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # Emit error event
                 self._events.emit('outbound_error', {
                     'connection_name': conn_name,
-                    'our_id': state.config.our_id,
+                    'radio_id': state.config.radio_id,
                     'remote_address': state.ip,
                     'remote_port': state.port,
                     'error_message': 'Connection rejected by server (MSTNAK)'
@@ -720,7 +723,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # Emit disconnection event
                 self._events.emit('outbound_disconnected', {
                     'connection_name': conn_name,
-                    'our_id': state.config.our_id,
+                    'radio_id': state.config.radio_id,
                     'remote_address': state.ip,
                     'remote_port': state.port,
                     'reason': 'Server initiated disconnect'
@@ -744,7 +747,7 @@ class HBProtocol(asyncio.DatagramProtocol):
     def _send_outbound_config(self, state: OutboundState, addr: tuple):
         """Send RPTC (configuration) to outbound server"""
         config = state.config
-        our_id_bytes = config.our_id.to_bytes(4, 'big')
+        our_id_bytes = config.radio_id.to_bytes(4, 'big')
         
         # Build config packet (same format as repeater sends to us)
         # Pad/truncate strings to exact field lengths
@@ -753,7 +756,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         packet += str(config.rx_frequency).encode().ljust(9, b'\x00')[:9]
         packet += str(config.tx_frequency).encode().ljust(9, b'\x00')[:9]
         packet += str(config.power).encode().ljust(2, b'\x00')[:2]
-        packet += b'01'  # Color code (placeholder)
+        packet += str(config.colorcode).encode().ljust(2, b'\x00')[:2]
         packet += str(config.latitude).encode().ljust(8, b'\x00')[:8]
         packet += str(config.longitude).encode().ljust(9, b'\x00')[:9]
         packet += str(config.height).encode().ljust(3, b'\x00')[:3]
@@ -761,15 +764,15 @@ class HBProtocol(asyncio.DatagramProtocol):
         packet += config.description.encode().ljust(19, b'\x00')[:19]
         packet += b'3'  # Slots (placeholder)
         packet += config.url.encode().ljust(124, b'\x00')[:124]
-        packet += b'HBlink4'.ljust(40, b'\x00')[:40]  # Software ID
-        packet += b'v2.0'.ljust(40, b'\x00')[:40]  # Package ID
+        packet += config.software_id.encode().ljust(40, b'\x00')[:40]
+        packet += config.package_id.encode().ljust(40, b'\x00')[:40]
         
         state.transport.sendto(packet)
         LOGGER.info(f'[{config.name}] Sent RPTC (config)')
     
     def _send_outbound_options(self, state: OutboundState, addr: tuple):
         """Send RPTO (options) to outbound server"""
-        our_id_bytes = state.config.our_id.to_bytes(4, 'big')
+        our_id_bytes = state.config.radio_id.to_bytes(4, 'big')
         options_bytes = state.config.options.encode().ljust(300, b'\x00')[:300]
         
         packet = RPTO + our_id_bytes + options_bytes
@@ -826,7 +829,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 self._active_calls -= 1
             
             # Start new RX stream tracking
-            dummy_id = outbound_state.config.our_id.to_bytes(4, 'big')
+            dummy_id = outbound_state.config.radio_id.to_bytes(4, 'big')
             new_stream = StreamState(
                 repeater_id=dummy_id,
                 rf_src=_rf_src,
@@ -850,7 +853,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Handle terminator
         if _is_terminator and current_stream:
-            dummy_id = outbound_state.config.our_id.to_bytes(4, 'big')
+            dummy_id = outbound_state.config.radio_id.to_bytes(4, 'big')
             self._end_stream(current_stream, dummy_id, _slot, current_time, 'terminator')
         
         # Find local repeaters that should receive this traffic
@@ -905,13 +908,13 @@ class HBProtocol(asyncio.DatagramProtocol):
             if outbound.authenticated and outbound.transport:
                 try:
                     LOGGER.info(f"Sending disconnect to outbound connection '{conn_name}'")
-                    our_id_bytes = outbound.config.our_id.to_bytes(4, 'big')
+                    our_id_bytes = outbound.config.radio_id.to_bytes(4, 'big')
                     outbound.transport.sendto(RPTCL + our_id_bytes)
                     
                     # Emit disconnection event
                     self._events.emit('outbound_disconnected', {
                         'connection_name': conn_name,
-                        'our_id': outbound.config.our_id,
+                        'radio_id': outbound.config.radio_id,
                         'remote_address': outbound.ip,
                         'remote_port': outbound.port,
                         'reason': 'Server shutdown'
@@ -2427,7 +2430,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         if not current_stream or current_stream.stream_id != stream_id:
             # New assumed stream starting on this outbound timeslot
             # Use a dummy repeater_id for outbound streams (can't use bytes for outbound)
-            dummy_id = outbound.config.our_id.to_bytes(4, 'big')
+            dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
             
             new_stream = StreamState(
                 repeater_id=dummy_id,  # Our ID when acting as repeater
@@ -2459,7 +2462,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Handle terminator - end the stream and start hang time
         if is_terminator and current_stream:
             # For outbound streams, use a synthetic repeater_id for logging
-            dummy_id = outbound.config.our_id.to_bytes(4, 'big')
+            dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
             self._end_stream(current_stream, dummy_id, slot, current_time, 'terminator')
 
 
@@ -2679,11 +2682,11 @@ async def async_main():
         for config in outbound_configs:
             if config.enabled:
                 # Reserve the ID to prevent DoS
-                if config.our_id in primary_protocol._outbound_ids:
-                    LOGGER.error(f'✗ Duplicate outbound ID {config.our_id} for "{config.name}"')
+                if config.radio_id in primary_protocol._outbound_ids:
+                    LOGGER.error(f'✗ Duplicate outbound ID {config.radio_id} for "{config.name}"')
                     sys.exit(1)
-                primary_protocol._outbound_ids.add(config.our_id)
-                LOGGER.info(f'✓ Reserved ID {config.our_id} for outbound "{config.name}"')
+                primary_protocol._outbound_ids.add(config.radio_id)
+                LOGGER.info(f'✓ Reserved ID {config.radio_id} for outbound "{config.name}"')
                 
                 # Start connection task
                 task = asyncio.create_task(

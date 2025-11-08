@@ -9,7 +9,7 @@ The configuration file consists of five main sections:
 - **Dashboard** - Web dashboard and event communication
 - **Blacklist Rules** - Access control for blocking repeaters
 - **Repeater Configurations** - Per-repeater authentication and routing
-- **Talkgroup Definitions** - Talkgroup names and bridging
+- **Outbound Connections** - Server-to-server links (optional)
 
 ## Global Settings
 
@@ -526,6 +526,169 @@ The `trust` flag allows designated repeaters to bypass talkgroup restrictions. T
 ### Pattern Matching Priority
 
 Patterns are evaluated in the order they appear in the configuration file. The first pattern that matches is used. Within each pattern, all match types (IDs, ID ranges, callsigns) are checked with OR logic.
+
+## Outbound Connections
+
+The `outbound_connections` section is **optional** and defines server-to-server links. This allows your HBlink4 server to connect to other HomeBrew Protocol servers as a client (similar to how repeaters connect to your server).
+
+```json
+{
+    "outbound_connections": [
+        {
+            "enabled": true,
+            "name": "Regional-Master-Server",
+            "address": "master.example.com",
+            "port": 62031,
+            "password": "remote-server-password",
+            "radio_id": 312999,
+            "callsign": "K0USY-L",
+            "rx_frequency": 449000000,
+            "tx_frequency": 444000000,
+            "power": 50,
+            "colorcode": 1,
+            "latitude": 38.0,
+            "longitude": -97.0,
+            "height": 100,
+            "location": "Network Link",
+            "description": "Link to regional master",
+            "url": "https://hblink.example.com",
+            "software_id": "HBlink4",
+            "package_id": "HBlink4 v2.0",
+            "options": "TS1=1,2,3,8,9;TS2=3100,3120,3121,9998"
+        }
+    ]
+}
+```
+
+### Required Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | boolean | Enable/disable this connection without removing it |
+| `name` | string | Unique name for this connection (used in logs) |
+| `address` | string | Hostname or IP address of remote server |
+| `port` | number | UDP port of remote server (typically 62031) |
+| `password` | string | Authentication password for remote server |
+| `radio_id` | number | DMR ID to use when connecting (must be unique) |
+
+### Optional Metadata Fields
+
+These fields are sent to the remote server during the RPTC (configuration) handshake. If not specified, defaults are used:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `callsign` | string | `""` | Callsign identifier |
+| `rx_frequency` | number | `0` | RX frequency in Hz |
+| `tx_frequency` | number | `0` | TX frequency in Hz |
+| `power` | number | `0` | Power in watts |
+| `colorcode` | number | `1` | DMR color code |
+| `latitude` | number | `0.0` | Latitude coordinate |
+| `longitude` | number | `0.0` | Longitude coordinate |
+| `height` | number | `0` | Height in meters |
+| `location` | string | `""` | Location description |
+| `description` | string | `""` | Connection description |
+| `url` | string | `""` | Website URL |
+| `software_id` | string | `"HBlink4"` | Software identifier |
+| `package_id` | string | `"HBlink4 v2.0"` | Package version |
+
+### Talkgroup Filtering (OPTIONS)
+
+The `options` field controls which talkgroups are accepted/forwarded on this outbound connection. It uses the same format as the HomeBrew Protocol RPTO (options) packet:
+
+**Format:** `"TS1=tg1,tg2,tg3;TS2=tg4,tg5,tg6"`
+
+**Special values:**
+- `*` - Accept all talkgroups on this timeslot
+- Empty (no TGs) - Deny all on this timeslot
+- Omit options field entirely - Accept all on both timeslots
+
+**Examples:**
+
+```json
+// Specific talkgroups on each slot
+"options": "TS1=1,2,3,8,9;TS2=3100,3120,3121,9998"
+
+// All talkgroups on both slots
+"options": "TS1=*;TS2=*"
+
+// Only TS2 active, TS1 disabled
+"options": "TS1=;TS2=3100,3120"
+
+// Only TS1 active, TS2 disabled
+"options": "TS1=1,2,3;TS2="
+
+// No options field = accept all (backward compatibility)
+// (omit the "options" field entirely)
+```
+
+### Bidirectional Traffic
+
+Outbound connections are **bidirectional**:
+- **Outbound (local → remote)**: DMR traffic from your local repeaters matching the TG filters is forwarded to the remote server
+- **Inbound (remote → local)**: DMR traffic from the remote server matching the TG filters is forwarded to your local repeaters
+
+The same talkgroup filters apply in both directions.
+
+### Connection Behavior
+
+- **Automatic reconnection**: If connection is lost, HBlink4 automatically attempts to reconnect
+- **DNS resolution**: The `address` field supports both hostnames (resolved via DNS) and IP addresses
+- **Protocol state machine**: Full HomeBrew Protocol handshake (RPTL → MSTCL → RPTK → RPTACK → RPTC → RPTACK → RPTO → RPTACK)
+- **Keepalive**: Regular RPTPING/MSTPONG exchanges maintain the connection
+- **TDMA slot tracking**: Each outbound connection tracks slot usage independently (respects TDMA constraints)
+
+### Multiple Connections
+
+You can define multiple outbound connections to link with several servers:
+
+```json
+"outbound_connections": [
+    {
+        "enabled": true,
+        "name": "Primary-Server",
+        "address": "primary.example.com",
+        "port": 62031,
+        "password": "password1",
+        "radio_id": 312999,
+        "options": "TS1=1,2,3;TS2=3100,3120"
+    },
+    {
+        "enabled": true,
+        "name": "Secondary-Server",
+        "address": "secondary.example.com",
+        "port": 62031,
+        "password": "password2",
+        "radio_id": 312998,
+        "options": "TS1=8,9;TS2=3121,3122"
+    },
+    {
+        "enabled": false,
+        "name": "Backup-Server",
+        "address": "backup.example.com",
+        "port": 62031,
+        "password": "password3",
+        "radio_id": 312997,
+        "options": "TS1=*;TS2=*"
+    }
+]
+```
+
+**Important**: Each connection must use a **unique radio_id** to avoid conflicts.
+
+### Disabling Connections
+
+Set `enabled: false` to temporarily disable a connection without removing it from the configuration:
+
+```json
+{
+    "enabled": false,
+    "name": "Disabled-Connection",
+    "address": "example.com",
+    "port": 62031,
+    "password": "password",
+    "radio_id": 312996
+}
+```
 
 ## Talkgroup Definitions
 
