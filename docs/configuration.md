@@ -690,28 +690,6 @@ Set `enabled: false` to temporarily disable a connection without removing it fro
 }
 ```
 
-## Talkgroup Definitions
-
-The `talkgroups` section defines available talkgroups and their properties.
-
-```json
-{
-    "talkgroups": {
-        "3100": {
-            "name": "Local",
-            "bridge": true
-        }
-    }
-}
-```
-
-### Talkgroup Options
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `name` | string | Human-readable name for the talkgroup |
-| `bridge` | boolean | Whether to bridge this talkgroup between repeaters |
-
 ## Example Configuration
 
 See the `config/hblink.json` file in the repository for a complete example configuration with multiple patterns and talkgroups.
