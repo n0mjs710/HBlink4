@@ -2582,19 +2582,22 @@ def parse_outbound_connections() -> List[OutboundConnectionConfig]:
                 name=conn_dict['name'],
                 address=conn_dict['address'],
                 port=conn_dict['port'],
-                our_id=conn_dict['our_id'],
+                radio_id=conn_dict['radio_id'],
                 password=conn_dict['password'],
                 options=conn_dict.get('options', ''),
                 callsign=conn_dict.get('callsign', ''),
                 rx_frequency=conn_dict.get('rx_frequency', 0),
                 tx_frequency=conn_dict.get('tx_frequency', 0),
                 power=conn_dict.get('power', 0),
+                colorcode=conn_dict.get('colorcode', 1),
                 latitude=conn_dict.get('latitude', 0.0),
                 longitude=conn_dict.get('longitude', 0.0),
                 height=conn_dict.get('height', 0),
                 location=conn_dict.get('location', ''),
                 description=conn_dict.get('description', ''),
-                url=conn_dict.get('url', '')
+                url=conn_dict.get('url', ''),
+                software_id=conn_dict.get('software_id', 'HBlink4'),
+                package_id=conn_dict.get('package_id', 'HBlink4 v2.0')
             )
             outbound_configs.append(config)
             LOGGER.info(f'✓ Loaded outbound connection: {config.name} → {config.address}:{config.port}')
