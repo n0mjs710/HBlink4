@@ -1,0 +1,89 @@
+{
+  "global": {
+    "ping_time": 5,
+    "timeout_duration": 30,
+    "max_missed": 3,
+    "stream_timeout": 2.0,
+    "stream_hang_time": 10.0,
+    "bind_ipv4": "127.0.0.1",
+    "port_ipv4": 62031,
+    "disable_ipv6": true,
+    "logging": {
+      "file": "logs/hblink_test.log",
+      "file_level": "DEBUG",
+      "console_level": "INFO",
+      "retention_days": 7
+    },
+    "user_cache": {
+      "timeout": 600
+    }
+  },
+  "dashboard": {
+    "enabled": true,
+    "transport": "unix",
+    "unix_socket": "/tmp/hblink4_test.sock"
+  },
+  "access_control": {
+    "patterns": [
+      {
+        "name": "Test Pattern",
+        "description": "Test pattern for offline testing",
+        "id_patterns": ["*"],
+        "callsign_patterns": ["*"],
+        "passphrase": "test123",
+        "slot1_talkgroups": [1, 2, 3, 9],
+        "slot2_talkgroups": [10, 20, 91]
+      }
+    ]
+  },
+  "outbound_connections": [
+    {
+      "enabled": true,
+      "name": "Link-to-Remote-1",
+      "address": "hblink.example.com",
+      "port": 62031,
+      "our_id": 999001,
+      "password": "outbound_pass1",
+      "options": "TS1=1,2,3;TS2=10,20",
+      "callsign": "TEST1",
+      "rx_frequency": 449000000,
+      "tx_frequency": 444000000,
+      "power": 50,
+      "latitude": 42.0,
+      "longitude": -88.0,
+      "height": 100,
+      "location": "Test Location 1",
+      "description": "Test Outbound 1",
+      "url": "https://test1.example.com"
+    },
+    {
+      "enabled": true,
+      "name": "Link-to-Remote-2",
+      "address": "192.168.1.100",
+      "port": 62032,
+      "our_id": 999002,
+      "password": "outbound_pass2",
+      "options": "*",
+      "callsign": "TEST2",
+      "rx_frequency": 449000000,
+      "tx_frequency": 444000000,
+      "power": 25,
+      "latitude": 43.0,
+      "longitude": -89.0,
+      "height": 50,
+      "location": "Test Location 2",
+      "description": "Test Outbound 2",
+      "url": "https://test2.example.com"
+    },
+    {
+      "enabled": false,
+      "name": "Link-Disabled",
+      "address": "disabled.example.com",
+      "port": 62033,
+      "our_id": 999003,
+      "password": "disabled_pass",
+      "options": "",
+      "callsign": "DISABLED"
+    }
+  ]
+}

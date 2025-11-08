@@ -417,35 +417,56 @@ class HBProtocol(asyncio.DatagramProtocol):
         - None = allow all (*)
         - empty set = deny all (missing TS or empty)
         - non-empty set = allow only those TGs
-        """
-        if not options or options.strip() == '*':
-            return (None, None)  # Allow all
         
-        slot1_tgs = set()  # Default: deny all
-        slot2_tgs = set()  # Default: deny all
+        Format: "TS1=1,2,3;TS2=10,20" or "TS1=*;TS2=*" or "*"
+        """
+        if not options:
+            return (None, None)  # Empty string = allow all (for backward compatibility)
+        
+        options = options.strip()
+        if options == '*':
+            return (None, None)  # Wildcard = allow all
+        
+        slot1_tgs = None  # Default: not specified (will become empty set if TS1 found but empty)
+        slot2_tgs = None  # Default: not specified (will become empty set if TS2 found but empty)
         
         try:
             for part in options.split(';'):
                 part = part.strip()
                 if not part:
                     continue
-                if 'TS1_' in part:
-                    tgs_str = part.split('=')[1] if '=' in part else ''
-                    if tgs_str:
-                        slot1_tgs.update(int(tg) for tg in tgs_str.split(',') if tg.strip())
-                elif 'TS2_' in part:
-                    tgs_str = part.split('=')[1] if '=' in part else ''
-                    if tgs_str:
-                        slot2_tgs.update(int(tg) for tg in tgs_str.split(',') if tg.strip())
+                
+                # Check for TS1=
+                if part.startswith('TS1='):
+                    tgs_str = part[4:].strip()  # Everything after 'TS1='
+                    if tgs_str == '*':
+                        slot1_tgs = None  # Wildcard on TS1
+                    else:
+                        slot1_tgs = set()  # TS1 specified, start with empty
+                        if tgs_str:
+                            slot1_tgs.update(int(tg.strip()) for tg in tgs_str.split(',') if tg.strip())
+                
+                # Check for TS2=
+                elif part.startswith('TS2='):
+                    tgs_str = part[4:].strip()  # Everything after 'TS2='
+                    if tgs_str == '*':
+                        slot2_tgs = None  # Wildcard on TS2
+                    else:
+                        slot2_tgs = set()  # TS2 specified, start with empty
+                        if tgs_str:
+                            slot2_tgs.update(int(tg.strip()) for tg in tgs_str.split(',') if tg.strip())
+        
         except Exception as e:
             LOGGER.warning(f'Error parsing options "{options}": {e}')
             return (set(), set())  # Deny all on parse error
         
-        # If "*", both will be None (allow all)
-        # If empty or missing TS, sets will be empty (deny all)
-        # Otherwise sets contain specific TGs
-        return (slot1_tgs if slot1_tgs else None if options == '*' else set(),
-                slot2_tgs if slot2_tgs else None if options == '*' else set())
+        # Convert None (not specified) to empty set (deny all) for any slot that wasn't mentioned
+        if slot1_tgs is None and 'TS1=' not in options:
+            slot1_tgs = set()  # TS1 not mentioned = deny all
+        if slot2_tgs is None and 'TS2=' not in options:
+            slot2_tgs = set()  # TS2 not mentioned = deny all
+        
+        return (slot1_tgs, slot2_tgs)
     
     async def _connect_outbound(self, config: OutboundConnectionConfig, loop=None):
         """
