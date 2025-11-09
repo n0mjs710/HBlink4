@@ -63,7 +63,7 @@ class OutboundConnectionConfig:
     address: str
     port: int
     radio_id: int
-    password: str
+    passphrase: str
     options: str = ""
     
     # Metadata fields with defaults
@@ -87,8 +87,8 @@ class OutboundConnectionConfig:
             raise ValueError("Outbound connection must have a name")
         if not self.address:
             raise ValueError(f"Outbound connection '{self.name}' must have an address")
-        if not self.password:
-            raise ValueError(f"Outbound connection '{self.name}' must have a password")
+        if not self.passphrase:
+            raise ValueError(f"Outbound connection '{self.name}' must have a passphrase")
         if self.port <= 0 or self.port > 65535:
             raise ValueError(f"Outbound connection '{self.name}' has invalid port: {self.port}")
 
@@ -129,6 +129,7 @@ class OutboundState:
     port: int  # Remote port
     connected: bool = False
     authenticated: bool = False
+    auth_sent: bool = False  # RPTK sent (waiting for auth ACK)
     config_sent: bool = False  # RPTC sent and acked
     options_sent: bool = False  # RPTO sent
     last_ping: float = 0.0  # Last RPTPING sent
@@ -276,6 +277,17 @@ class RepeaterState:
         elif slot == 2:
             self.slot2_stream = stream
 
+class OutboundProtocol(asyncio.DatagramProtocol):
+    """Protocol instance for a single outbound connection"""
+    def __init__(self, hbprotocol: 'HBProtocol', connection_name: str):
+        super().__init__()
+        self.hbprotocol = hbprotocol
+        self.connection_name = connection_name
+    
+    def datagram_received(self, data: bytes, addr: tuple):
+        """Receive packet for this specific outbound connection"""
+        self.hbprotocol._handle_outbound_packet(self.connection_name, data, addr)
+
 class HBProtocol(asyncio.DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Server Protocol"""
     def __init__(self, *args, **kwargs):
@@ -284,7 +296,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Outbound connection state management (Phase 2)
         self._outbounds: Dict[str, 'OutboundState'] = {}  # keyed by connection name
-        self._outbound_by_addr: Dict[Tuple[str, int], str] = {}  # (ip, port) -> name for O(1) routing
+        self._outbound_by_id: Dict[bytes, str] = {}  # radio_id (4 bytes) -> name for packet routing by ID
         self._outbound_ids: Set[int] = set()  # reserved IDs to prevent DoS
         
         self._config = CONFIG
@@ -518,9 +530,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                 
                 # Phase 2: Create UDP endpoint
                 try:
-                    # Create a connected UDP socket (allows send() instead of sendto())
+                    # Create a connected UDP socket with our custom protocol that knows its connection name
                     transport, protocol = await loop.create_datagram_endpoint(
-                        lambda: asyncio.DatagramProtocol(),
+                        lambda: OutboundProtocol(self, config.name),
                         remote_addr=(ip, port)
                     )
                     LOGGER.info(f'[{config.name}] UDP endpoint created to {ip}:{port}')
@@ -531,7 +543,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     self._events.emit('outbound_error', {
                         'connection_name': config.name,
                         'radio_id': config.radio_id,
-                        'remote_address': ip,
+                        'remote_address': config.address,
                         'remote_port': port,
                         'error_message': f'Failed to create UDP endpoint: {e}'
                     })
@@ -552,7 +564,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 
                 # Store in dictionaries
                 self._outbounds[config.name] = state
-                self._outbound_by_addr[(ip, port)] = config.name
+                self._outbound_by_id[config.radio_id.to_bytes(4, 'big')] = config.name
                 
                 # Phase 3: Login (RPTL)
                 our_id_bytes = config.radio_id.to_bytes(4, 'big')
@@ -570,8 +582,13 @@ class HBProtocol(asyncio.DatagramProtocol):
                 while state.connected:
                     await asyncio.sleep(keepalive_interval)
                     
-                    # Send RPTPING if authenticated
-                    if state.authenticated:
+                    # If not authenticated yet, retry RPTL
+                    if not state.authenticated:
+                        rptl_packet = RPTL + our_id_bytes
+                        state.transport.sendto(rptl_packet)
+                        LOGGER.debug(f'[{config.name}] Retrying RPTL (login) - no response yet')
+                    else:
+                        # Send RPTPING if authenticated
                         ping_packet = RPTPING + our_id_bytes
                         state.transport.sendto(ping_packet)
                         state.last_ping = time()
@@ -592,7 +609,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                                     self._events.emit('outbound_disconnected', {
                                         'connection_name': config.name,
                                         'radio_id': config.radio_id,
-                                        'remote_address': state.ip,
+                                        'remote_address': config.address,
                                         'remote_port': state.port,
                                         'reason': 'Connection timeout (3 missed pongs)'
                                     })
@@ -608,104 +625,133 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # Cleanup
                 if config.name in self._outbounds:
                     state = self._outbounds[config.name]
+                    if state.transport and state.authenticated:
+                        # Send RPTCL (disconnect) to cleanly close connection
+                        try:
+                            our_id_bytes = config.radio_id.to_bytes(4, 'big')
+                            rptcl_packet = RPTCL + our_id_bytes
+                            state.transport.sendto(rptcl_packet)
+                            LOGGER.info(f'[{config.name}] Sent RPTCL (disconnect)')
+                            await asyncio.sleep(0.1)  # Brief delay to let packet send
+                        except Exception as e:
+                            LOGGER.debug(f'[{config.name}] Error sending RPTCL: {e}')
                     if state.transport:
                         state.transport.close()
                     del self._outbounds[config.name]
-                    if (state.ip, state.port) in self._outbound_by_addr:
-                        del self._outbound_by_addr[(state.ip, state.port)]
                     LOGGER.info(f'[{config.name}] Cleaned up connection state')
             
             # Wait before reconnecting
             LOGGER.info(f'[{config.name}] Waiting {keepalive_interval}s before reconnect...')
             await asyncio.sleep(keepalive_interval)
     
-    def _handle_outbound_packet(self, data: bytes, addr: tuple):
+    def _handle_outbound_packet(self, connection_name: str, data: bytes, addr: tuple):
         """
         Handle packets received from outbound server connections.
         Implements client-side HomeBrew protocol state machine.
         """
         ip = addr[0]
         port = addr[1]
-        addr_key = (ip, port)
         
-        # Get outbound state
-        conn_name = self._outbound_by_addr.get(addr_key)
-        if not conn_name or conn_name not in self._outbounds:
-            LOGGER.warning(f'Received packet from unknown outbound address {ip}:{port}')
+        # Get outbound state by connection name (passed from OutboundProtocol)
+        if connection_name not in self._outbounds:
+            LOGGER.warning(f'Received packet for unknown outbound connection: {connection_name}')
             return
         
-        state = self._outbounds[conn_name]
+        state = self._outbounds[connection_name]
+        
+        # Check for commands - handle longer commands first
         _command = data[:4]
+        if len(data) >= 7 and data[:7] == RPTPING:
+            _command = RPTPING
+        elif len(data) >= 7 and data[:7] == MSTPONG:
+            _command = MSTPONG
+        elif len(data) >= 6 and data[:6] == RPTACK:
+            _command = RPTACK
+        elif len(data) >= 6 and data[:6] == MSTNAK:
+            _command = MSTNAK
+        elif len(data) >= 5 and data[:5] == MSTCL:
+            _command = MSTCL
+        elif len(data) >= 5 and data[:5] == RPTCL:
+            _command = RPTCL
         
         try:
-            # MSTCL - Challenge (response to RPTL)
-            if _command == MSTCL:
-                if len(data) < 8:
-                    LOGGER.error(f'[{conn_name}] Invalid MSTCL packet length: {len(data)}')
+            # RPTACK with salt - Challenge (response to RPTL)
+            # HBlink4 server sends RPTACK + salt (not MSTCL) after receiving RPTL
+            if _command == RPTACK and not state.auth_sent:
+                if len(data) < 10:  # 6 bytes RPTACK + 4 bytes salt
+                    LOGGER.error(f'[{connection_name}] Invalid RPTACK+salt packet length: {len(data)}')
                     return
                 
                 # Extract salt from challenge
-                state.salt = int.from_bytes(data[4:8], 'big')
-                LOGGER.info(f'[{conn_name}] Received MSTCL (challenge) with salt: {state.salt}')
+                state.salt = int.from_bytes(data[6:10], 'big')
+                LOGGER.info(f'[{connection_name}] Received RPTACK with salt: {state.salt}')
                 
                 # Send RPTK (auth response)
                 our_id_bytes = state.config.radio_id.to_bytes(4, 'big')
                 salt_bytes = state.salt.to_bytes(4, 'big')
                 calc_hash = bytes.fromhex(
-                    sha256(salt_bytes + state.config.password.encode()).hexdigest()
+                    sha256(salt_bytes + state.config.passphrase.encode()).hexdigest()
                 )
                 rptk_packet = RPTK + our_id_bytes + calc_hash
                 state.transport.sendto(rptk_packet)
-                LOGGER.info(f'[{conn_name}] Sent RPTK (auth response)')
+                state.auth_sent = True  # Mark that we sent RPTK
+                LOGGER.info(f'[{connection_name}] Sent RPTK (auth response)')
             
-            # RPTACK - Acknowledgment
-            elif _command == RPTACK:
-                if not state.authenticated:
-                    # Auth ACK
+            # RPTACK - Acknowledgment (after sending RPTK/RPTC/RPTO)
+            elif _command == RPTACK and state.auth_sent:
+                if not state.config_sent:
+                    # Config ACK (after RPTK)
+                    state.config_sent = True
                     state.authenticated = True
-                    LOGGER.info(f'[{conn_name}] Received RPTACK - Authentication successful')
+                    LOGGER.info(f'[{connection_name}] Received RPTACK - Authentication successful')
                     
                     # Send RPTC (config)
                     self._send_outbound_config(state, (ip, port))
-                elif not state.config_sent:
-                    # Config ACK
-                    state.config_sent = True
-                    LOGGER.info(f'[{conn_name}] Received RPTACK - Config accepted')
+                elif not state.options_sent:
+                    # Options/Config ACK
+                    LOGGER.info(f'[{connection_name}] Received RPTACK - Config accepted')
                     
                     # Send RPTO (options) if configured
                     if state.config.options:
                         self._send_outbound_options(state, (ip, port))
+                        state.options_sent = True
                     else:
                         state.options_sent = True
-                        LOGGER.info(f'[{conn_name}] No options configured, connection complete')
-                elif not state.options_sent:
-                    # Options ACK
-                    state.options_sent = True
-                    LOGGER.info(f'[{conn_name}] Received RPTACK - Options accepted, connection complete')
+                        LOGGER.info(f'[{connection_name}] No options configured, connection complete')
+                        
+                        # Emit connection established event
+                        self._events.emit('outbound_connected', {
+                            'connection_name': connection_name,
+                            'radio_id': state.config.radio_id,
+                            'remote_address': state.config.address,  # Use original DNS name from config
+                            'remote_port': state.port,
+                            'slot1_talkgroups': list(state.slot1_talkgroups) if state.slot1_talkgroups else None,
+                            'slot2_talkgroups': list(state.slot2_talkgroups) if state.slot2_talkgroups else None
+                        })
+                else:
+                    # Final ACK after RPTO
+                    LOGGER.info(f'[{connection_name}] Received RPTACK - Options accepted, connection complete')
                     
                     # Emit connection established event
                     self._events.emit('outbound_connected', {
-                        'connection_name': conn_name,
+                        'connection_name': connection_name,
                         'radio_id': state.config.radio_id,
-                        'remote_address': state.ip,
+                        'remote_address': state.config.address,  # Use original DNS name from config
                         'remote_port': state.port,
                         'slot1_talkgroups': list(state.slot1_talkgroups) if state.slot1_talkgroups else None,
                         'slot2_talkgroups': list(state.slot2_talkgroups) if state.slot2_talkgroups else None
                     })
-                else:
-                    # Generic ACK
-                    LOGGER.debug(f'[{conn_name}] Received RPTACK')
             
             # MSTNAK - Negative Acknowledgment
             elif _command == MSTNAK:
-                LOGGER.error(f'[{conn_name}] Received MSTNAK - Connection rejected by server')
+                LOGGER.error(f'[{connection_name}] Received MSTNAK - Connection rejected by server')
                 state.connected = False
                 
                 # Emit error event
                 self._events.emit('outbound_error', {
-                    'connection_name': conn_name,
+                    'connection_name': connection_name,
                     'radio_id': state.config.radio_id,
-                    'remote_address': state.ip,
+                    'remote_address': state.config.address,
                     'remote_port': state.port,
                     'error_message': 'Connection rejected by server (MSTNAK)'
                 })
@@ -714,18 +760,18 @@ class HBProtocol(asyncio.DatagramProtocol):
             elif _command == MSTPONG:
                 state.last_pong = time()
                 state.missed_pongs = 0
-                LOGGER.debug(f'[{conn_name}] Received MSTPONG')
+                LOGGER.debug(f'[{connection_name}] Received MSTPONG')
             
             # MSTCL - Server disconnect
             elif _command[:5] == MSTCL:
-                LOGGER.info(f'[{conn_name}] Received MSTCL - Server initiated disconnect')
+                LOGGER.info(f'[{connection_name}] Received MSTCL - Server initiated disconnect')
                 state.connected = False
                 
                 # Emit disconnection event
                 self._events.emit('outbound_disconnected', {
-                    'connection_name': conn_name,
+                    'connection_name': connection_name,
                     'radio_id': state.config.radio_id,
-                    'remote_address': state.ip,
+                    'remote_address': state.config.address,
                     'remote_port': state.port,
                     'reason': 'Server initiated disconnect'
                 })
@@ -740,10 +786,10 @@ class HBProtocol(asyncio.DatagramProtocol):
                     cmd_str = _command.decode('utf-8', errors='replace')
                 except:
                     cmd_str = _command.hex()
-                LOGGER.warning(f'[{conn_name}] Unknown command from outbound server: {cmd_str}')
+                LOGGER.warning(f'[{connection_name}] Unknown command from outbound server: {cmd_str}')
                 
         except Exception as e:
-            LOGGER.error(f'[{conn_name}] Error processing outbound packet: {e}')
+            LOGGER.error(f'[{connection_name}] Error processing outbound packet: {e}')
     
     def _send_outbound_config(self, state: OutboundState, addr: tuple):
         """Send RPTC (configuration) to outbound server"""
@@ -916,7 +962,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     self._events.emit('outbound_disconnected', {
                         'connection_name': conn_name,
                         'radio_id': outbound.config.radio_id,
-                        'remote_address': outbound.ip,
+                        'remote_address': outbound.config.address,
                         'remote_port': outbound.port,
                         'reason': 'Server shutdown'
                     })
@@ -1151,14 +1197,33 @@ class HBProtocol(asyncio.DatagramProtocol):
     
 
     def _send_initial_state(self):
-        """Send current state of all connected repeaters to dashboard (called on reconnect)"""
+        """Send current state of all connected repeaters and outbound connections to dashboard (called on reconnect)"""
         try:
+            # Send all connected repeaters
             for repeater_id, repeater in self._repeaters.items():
                 if repeater.connected and repeater.connection_state == 'connected':
                     # Emit repeater_connected for each already-connected repeater
                     self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
             
-            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters')
+            # Send all outbound connections (with their current status)
+            for conn_name, outbound in self._outbounds.items():
+                status = 'connecting'  # Default status
+                if outbound.authenticated and outbound.config_sent:
+                    status = 'connected'
+                elif not outbound.connected:
+                    status = 'disconnected'
+                
+                event_type = f'outbound_{status}'
+                self._events.emit(event_type, {
+                    'connection_name': conn_name,
+                    'radio_id': outbound.config.radio_id,
+                    'remote_address': outbound.config.address,
+                    'remote_port': outbound.port,
+                    'slot1_talkgroups': list(outbound.slot1_talkgroups) if outbound.slot1_talkgroups else None,
+                    'slot2_talkgroups': list(outbound.slot2_talkgroups) if outbound.slot2_talkgroups else None
+                })
+            
+            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters, {len(self._outbounds)} outbound connections')
         except Exception as e:
             LOGGER.error(f'Error sending initial state: {e}')
     
@@ -1285,17 +1350,13 @@ class HBProtocol(asyncio.DatagramProtocol):
         return True
 
     def datagram_received(self, data: bytes, addr: tuple):
-        """Handle received UDP datagram"""
+        """Handle received UDP datagram (for inbound repeater connections only)"""
         # Handle both IPv4 (ip, port) and IPv6 (ip, port, flowinfo, scopeid) address formats
         ip = addr[0]
         port = addr[1]
         
-        # Check if this is from an outbound connection (O(1) lookup)
-        addr_key = (ip, port)
-        if addr_key in self._outbound_by_addr:
-            # Route to outbound handler
-            self._handle_outbound_packet(data, addr)
-            return
+        # Note: Outbound connections have their own protocol instances (OutboundProtocol)
+        # so they never hit this method - this is ONLY for inbound repeater connections
         
         # Debug log the raw packet
         #LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
@@ -2246,9 +2307,15 @@ class HBProtocol(asyncio.DatagramProtocol):
                 if not outbound or not outbound.authenticated:
                     continue  # Connection dropped mid-stream
                 
-                # Forward packet to outbound server
-                outbound.transport.sendto(data)
-                LOGGER.debug(f'Forwarded to outbound [{conn_name}]')
+                # CRITICAL: Rewrite repeater ID in DMRD packet (bytes 11-14)
+                # The remote server only knows us as our outbound radio_id, not the source repeater
+                # Must modify packet to replace source repeater ID with our outbound connection ID
+                modified_data = bytearray(data)
+                our_id_bytes = outbound.config.radio_id.to_bytes(4, 'big')
+                modified_data[11:15] = our_id_bytes
+                
+                # Forward modified packet to outbound server
+                outbound.transport.sendto(bytes(modified_data))
                 
                 # Track assumed stream state on outbound slot (TDMA constraint)
                 # We must track what we're transmitting on each timeslot
@@ -2447,11 +2514,18 @@ class HBProtocol(asyncio.DatagramProtocol):
             )
             outbound.set_slot_stream(slot, new_stream)
             
-            # Log at DEBUG level - TX streams to outbounds
-            LOGGER.debug(f'TX stream started on outbound [{outbound.config.name}] TS{slot}: '
-                       f'from repeater {source_repeater_id}, '
-                       f'src={int.from_bytes(rf_src, "big")}, '
-                       f'dst={int.from_bytes(dst_id, "big")}')
+            # Emit stream_start event for dashboard (using outbound connection name as identifier)
+            self._events.emit('stream_start', {
+                'connection_type': 'outbound',
+                'connection_name': outbound.config.name,
+                'slot': slot,
+                'rf_src': int.from_bytes(rf_src, 'big'),
+                'dst_id': int.from_bytes(dst_id, 'big'),
+                'stream_id': stream_id.hex(),
+                'callsign': self._user_cache.lookup(int.from_bytes(rf_src, 'big')),
+                'is_assumed': True,  # Outbound streams are assumed/TX streams
+                'is_transmitting': True  # Outbound streams are TX (we're sending to remote server)
+            })
             
             # Increment active calls counter
             self._active_calls += 1
@@ -2465,6 +2539,18 @@ class HBProtocol(asyncio.DatagramProtocol):
             # For outbound streams, use a synthetic repeater_id for logging
             dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
             self._end_stream(current_stream, dummy_id, slot, current_time, 'terminator')
+            
+            # Emit stream_end event for dashboard
+            self._events.emit('stream_end', {
+                'connection_type': 'outbound',
+                'connection_name': outbound.config.name,
+                'slot': slot,
+                'rf_src': int.from_bytes(rf_src, 'big'),
+                'dst_id': int.from_bytes(dst_id, 'big'),
+                'stream_id': stream_id.hex(),
+                'duration': current_time - current_stream.start_time,
+                'packet_count': current_stream.packet_count
+            })
 
 
     def _send_packet(self, data: bytes, addr: tuple):
@@ -2584,7 +2670,7 @@ def parse_outbound_connections() -> List[OutboundConnectionConfig]:
                 address=conn_dict['address'],
                 port=conn_dict['port'],
                 radio_id=conn_dict['radio_id'],
-                password=conn_dict['password'],
+                passphrase=conn_dict.get('passphrase', conn_dict.get('password', '')),  # Support both keys for backward compatibility
                 options=conn_dict.get('options', ''),
                 callsign=conn_dict.get('callsign', ''),
                 rx_frequency=conn_dict.get('rx_frequency', 0),
@@ -2691,6 +2777,19 @@ async def async_main():
                     sys.exit(1)
                 primary_protocol._outbound_ids.add(config.radio_id)
                 LOGGER.info(f'✓ Reserved ID {config.radio_id} for outbound "{config.name}"')
+                
+                # Parse options to get talkgroups for dashboard
+                slot1_tgs, slot2_tgs = primary_protocol._parse_options(config.options)
+                
+                # Emit initial connecting state event for dashboard
+                primary_protocol._events.emit('outbound_connecting', {
+                    'connection_name': config.name,
+                    'radio_id': config.radio_id,
+                    'remote_address': config.address,
+                    'remote_port': config.port,
+                    'slot1_talkgroups': list(slot1_tgs) if slot1_tgs else None,
+                    'slot2_talkgroups': list(slot2_tgs) if slot2_tgs else None
+                })
                 
                 # Start connection task
                 task = asyncio.create_task(

@@ -1,10 +1,10 @@
 # HBlink4 Configuration Guide
 
-HBlink4 uses a JSON configuration file to define server settings, repeater access control rules, and talkgroup definitions. This guide explains each configuration section and its options.
+HBlink4 uses a JSON configuration file (`config/config.json`) to define server settings, repeater access control rules, and talkgroup routing. This guide explains each configuration section and its options.
 
 ## Configuration File Structure
 
-The configuration file consists of five main sections:
+The HBlink4 server configuration file consists of five main sections:
 - **Global Settings** - Server-wide settings
 - **Dashboard** - Web dashboard and event communication
 - **Blacklist Rules** - Access control for blocking repeaters
@@ -447,6 +447,16 @@ The same talkgroup lists control BOTH directions:
 - **FROM repeater (inbound)**: Only listed TGIDs are accepted from the repeater
 - **TO repeater (outbound)**: Only listed TGIDs are forwarded to the repeater
 
+**Repeater OPTIONS Packet:**
+Repeaters can optionally send an OPTIONS packet (RPTO in HomeBrew Protocol) to request specific talkgroups. The server's behavior depends on whether this packet is sent:
+
+| Repeater Behavior | Server Response |
+|-------------------|-----------------|
+| **No OPTIONS sent** | Uses talkgroups from HBlink4 server configuration (`slot1_talkgroups`, `slot2_talkgroups`) |
+| **OPTIONS sent (e.g., "TS1=1,2;TS2=3100")** | Uses intersection of requested TGs and server-configured TGs (cannot expand beyond server config) |
+| **OPTIONS sent but empty (no TS specified)** | Uses talkgroups from HBlink4 server configuration |
+| **Trusted repeater (trust: true)** | Can request any TGs via OPTIONS; server config becomes defaults if no OPTIONS sent |
+
 **Talkgroup Filtering Modes:**
 
 | Configuration | Behavior | Use Case |
@@ -489,14 +499,13 @@ The same talkgroup lists control BOTH directions:
 The `trust` flag allows designated repeaters to bypass talkgroup restrictions. This is useful for core network repeaters managed by trusted operators.
 
 **Normal Behavior (trust: false or not set):**
-- Repeater requests TGs via OPTIONS packet
-- Server uses **intersection** of (requested TGs) ∩ (configured TGs)
-- Repeater limited to only configured TGs
+- If repeater sends OPTIONS packet: Server uses **intersection** of (requested TGs) ∩ (server-configured TGs)
+- If repeater does NOT send OPTIONS: Server uses the TGs from this HBlink4 server configuration
+- Repeater limited to only server-configured TGs
 
 **Trusted Behavior (trust: true):**
-- Repeater requests TGs via OPTIONS packet
-- Server uses requested TGs **as-is** (no intersection)
-- If no TGs requested, configured TGs used as **defaults**
+- If repeater sends OPTIONS packet: Server uses requested TGs **as-is** (no intersection)
+- If repeater does NOT send OPTIONS: Server uses the TGs from this HBlink4 server configuration as defaults
 - Trusted repeaters can dynamically access any TG without server reconfiguration
 
 **Example:**
@@ -510,8 +519,8 @@ The `trust` flag allows designated repeaters to bypass talkgroup restrictions. T
     "config": {
         "passphrase": "core-secret-key",
         "trust": true,
-        "slot1_talkgroups": [8, 9],      // Defaults if OPTIONS not sent
-        "slot2_talkgroups": [3120, 3121] // Defaults if OPTIONS not sent
+        "slot1_talkgroups": [8, 9],      // Used if repeater doesn't send OPTIONS
+        "slot2_talkgroups": [3120, 3121] // Used if repeater doesn't send OPTIONS
     }
 }
 ```
@@ -677,7 +686,7 @@ You can define multiple outbound connections to link with several servers:
 
 ### Disabling Connections
 
-Set `enabled: false` to temporarily disable a connection without removing it from the configuration:
+Set `enabled: false` to temporarily disable a connection without removing it from the HBlink4 server configuration:
 
 ```json
 {
@@ -689,6 +698,12 @@ Set `enabled: false` to temporarily disable a connection without removing it fro
     "radio_id": 312996
 }
 ```
+
+## Example Configuration
+
+See `config/config_sample.json` in the repository for a complete example showing all configuration sections.
+
+````
 
 ## Example Configuration
 
