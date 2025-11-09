@@ -671,8 +671,18 @@ class EventReceiver:
                 # Outbound stream - key by connection_name.slot
                 key = f"{data['connection_name']}.{data['slot']}"
             else:
+                if 'connection_type' in data:
+                    logger.debug("Stream start with connection_type=%s: %s", connection_type, event)
+                elif 'connection_name' in data:
+                    # Outbound streams should include connection_type; log if it is missing
+                    logger.warning("Stream start missing connection_type but has connection_name: %s", event)
+
+                repeater_id = data.get('repeater_id')
+                if repeater_id is None:
+                    logger.error("Stream start missing repeater_id: %s", event)
+                    return
                 # Repeater stream - key by repeater_id.slot (legacy behavior)
-                key = f"{data['repeater_id']}.{data['slot']}"
+                key = f"{repeater_id}.{data['slot']}"
             
             # Look up callsign from user database
             src_id = data.get('rf_src') or data.get('src_id')  # Handle both field names

@@ -1157,6 +1157,41 @@ class HBProtocol(asyncio.DatagramProtocol):
                 return True  # Clear the slot
         
         return False  # Stream still active or in hang time
+
+    def _check_outbound_slot_timeout(self, conn_name: str, outbound: OutboundState, slot: int,
+                                   stream: StreamState, current_time: float, stream_timeout: float,
+                                   hang_time: float) -> bool:
+        """
+        Check and handle timeout for a single outbound slot stream.
+        
+        Returns:
+            True if slot should be cleared, False otherwise
+        """
+        if not stream.is_active(stream_timeout):
+            if not stream.ended:
+                # Stream just ended - use unified ending logic (with synthetic repeater_id)
+                dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
+                self._end_stream(stream, dummy_id, slot, current_time, 'timeout')
+                return False  # Don't clear yet - entering hang time
+                
+            elif not stream.is_in_hang_time(stream_timeout, hang_time):
+                # Hang time expired - clear the slot
+                hang_duration = current_time - stream.end_time if stream.end_time else 0
+                stream_type = "TX" if stream.is_assumed else "RX"
+                LOGGER.debug(f'{stream_type} hang time completed on outbound {conn_name} slot {slot}: '
+                           f'src={int.from_bytes(stream.rf_src, "big")}, '
+                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                           f'hang_duration={hang_duration:.2f}s')
+                
+                # Emit hang_time_expired event for outbound (different structure than repeater)
+                self._events.emit('hang_time_expired', {
+                    'connection_type': 'outbound',
+                    'connection_name': conn_name,
+                    'slot': slot
+                })
+                return True  # Clear the slot
+        
+        return False  # Stream still active or in hang time
     
     def _check_stream_timeouts(self):
         """Check for and clean up stale streams on all repeaters"""
@@ -1184,6 +1219,23 @@ class HBProtocol(asyncio.DatagramProtocol):
                                            current_time, stream_timeout, hang_time):
                     repeater.slot2_stream = None
         
+        # Check outbound connections for hang time expiration
+        for conn_name, outbound in self._outbounds.items():
+            if not outbound.authenticated:
+                continue
+                
+            # Check slot 1
+            if outbound.slot1_stream:
+                if self._check_outbound_slot_timeout(conn_name, outbound, 1, outbound.slot1_stream,
+                                                   current_time, stream_timeout, hang_time):
+                    outbound.slot1_stream = None
+            
+            # Check slot 2
+            if outbound.slot2_stream:
+                if self._check_outbound_slot_timeout(conn_name, outbound, 2, outbound.slot2_stream,
+                                                   current_time, stream_timeout, hang_time):
+                    outbound.slot2_stream = None
+
         # Cleanup old denied stream entries (older than 10 seconds)
         denied_cutoff = current_time - 10.0
         self._denied_streams = {k: v for k, v in self._denied_streams.items() if v > denied_cutoff}
@@ -2515,6 +2567,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             outbound.set_slot_stream(slot, new_stream)
             
             # Emit stream_start event for dashboard (using outbound connection name as identifier)
+            # Keep structure minimal and JSON-serializable (match repeater-style fields
+            # where possible). Do NOT include UserEntry objects (callsign) here.
             self._events.emit('stream_start', {
                 'connection_type': 'outbound',
                 'connection_name': outbound.config.name,
@@ -2522,9 +2576,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                 'rf_src': int.from_bytes(rf_src, 'big'),
                 'dst_id': int.from_bytes(dst_id, 'big'),
                 'stream_id': stream_id.hex(),
-                'callsign': self._user_cache.lookup(int.from_bytes(rf_src, 'big')),
-                'is_assumed': True,  # Outbound streams are assumed/TX streams
-                'is_transmitting': True  # Outbound streams are TX (we're sending to remote server)
+                'call_type': 'group',
+                'is_assumed': True
             })
             
             # Increment active calls counter
