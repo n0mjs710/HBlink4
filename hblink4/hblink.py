@@ -935,9 +935,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                 'outbound',
                 outbound_state.config.name,
                 _slot,
-                src_id,
-                packet['dst_id_int'],
-                _stream_id.hex(),
+                _rf_src,
+                _dst_id,
+                _stream_id,
                 new_stream.call_type,
                 False  # Real RX stream
             )
@@ -1186,7 +1186,7 @@ class HBProtocol(asyncio.DatagramProtocol):
     # ================================
     
     def _emit_stream_start(self, connection_type: str, connection_id: str, 
-                          slot: int, src_id: int, dst_id: int, stream_id: str,
+                          slot: int, src_id: bytes, dst_id: bytes, stream_id: bytes,
                           call_type: str, is_assumed: bool = False) -> None:
         """
         Stream_start event emission for all connection types.
@@ -1195,17 +1195,17 @@ class HBProtocol(asyncio.DatagramProtocol):
             connection_type: 'repeater' or 'outbound'
             connection_id: repeater_id (int) or connection_name (str) 
             slot: Slot number
-            src_id: Source DMR ID (int)
-            dst_id: Destination ID (int)  
-            stream_id: Stream ID (hex string)
+            src_id: Source DMR ID (bytes)
+            dst_id: Destination ID (bytes)  
+            stream_id: Stream ID (bytes)
             call_type: Call type string
             is_assumed: Whether this is an assumed (TX) stream
         """
         event_data = {
             'slot': slot,
-            'src_id': src_id,
-            'dst_id': dst_id, 
-            'stream_id': stream_id,
+            'src_id': int.from_bytes(src_id, 'big'),
+            'dst_id': int.from_bytes(dst_id, 'big'), 
+            'stream_id': stream_id.hex(),
             'call_type': call_type,
             'assumed': is_assumed
         }
@@ -1849,9 +1849,9 @@ class HBProtocol(asyncio.DatagramProtocol):
             'repeater', 
             int.from_bytes(repeater.repeater_id, 'big'),
             slot,
-            int.from_bytes(rf_src, 'big'),
-            int.from_bytes(dst_id, 'big'), 
-            stream_id.hex(),
+            rf_src,
+            dst_id, 
+            stream_id,
             new_stream.call_type,
             False  # RX stream, not assumed
         )
@@ -2665,8 +2665,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._events.emit('stream_update', {
                 'repeater_id': self._rid_to_int(repeater_id),
                 'slot': _slot,
-                'src_id': int.from_bytes(_rf_src, 'big'),
-                'dst_id': int.from_bytes(_dst_id, 'big'),
+                'src_id': int.from_bytes(current_stream.rf_src, 'big'),
+                'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
                 'duration': round(time() - current_stream.start_time, 2),
                 'packets': current_stream.packet_count,
                 'call_type': current_stream.call_type
@@ -2727,9 +2727,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                 'repeater',
                 int.from_bytes(repeater.repeater_id, 'big'),
                 slot,
-                int.from_bytes(rf_src, 'big'),
-                int.from_bytes(dst_id, 'big'),
-                stream_id.hex(),
+                rf_src,
+                dst_id,
+                stream_id,
                 'group',
                 True  # TX assumed stream
             )
