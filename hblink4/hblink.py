@@ -2792,9 +2792,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                 'outbound',
                 outbound.config.name,
                 slot,
-                int.from_bytes(rf_src, 'big'),
-                int.from_bytes(dst_id, 'big'),
-                stream_id.hex(),
+                rf_src,
+                dst_id,
+                stream_id,
                 'group',
                 True  # TX assumed stream
             )
