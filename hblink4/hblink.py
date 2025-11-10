@@ -356,6 +356,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Cache for repeater_id bytes to int conversions (for logging efficiency)
         self._rid_cache: Dict[bytes, int] = {}
     
+    # ========== ADDRESS VALIDATION METHODS ==========
+    
     @staticmethod
     def _normalize_addr(addr: PeerAddress) -> Tuple[str, int]:
         """
@@ -376,7 +378,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         """
         return repeater.sockaddr == self._normalize_addr(addr)
         
-    # ========== HELPER METHODS ==========
+    # ========== UTILITY HELPER METHODS ==========
     
     def _rid_to_int(self, repeater_id: bytes) -> int:
         """
@@ -1163,46 +1165,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._active_calls -= 1
 
     # ================================
-    # Stream Helper Functions
+    # Stream Helper Functions  
     # ================================
-    
-    def _parse_dmr_packet(self, data: bytes) -> Optional[Dict[str, Any]]:
-        """
-        Parse DMR packet fields into a dictionary.
-        Hot path function - used for every voice packet.
-        
-        Returns:
-            Dict with parsed fields or None if invalid packet
-        """
-        if len(data) < 55:
-            return None
-            
-        return {
-            'seq': data[4],
-            'rf_src': data[5:8],
-            'dst_id': data[8:11],
-            'repeater_id': data[11:15],
-            'bits': data[15],
-            'stream_id': data[16:20],
-            'slot': 2 if (data[15] & 0x80) else 1,
-            'call_type': (data[15] & 0x40) >> 6,
-            'frame_type': (data[15] & 0x30) >> 4,
-            'src_id_int': int.from_bytes(data[5:8], 'big'),
-            'dst_id_int': int.from_bytes(data[8:11], 'big'),
-            'repeater_id_int': int.from_bytes(data[11:15], 'big')
-        }
-    
-    def _safe_decode_bytes(self, data: bytes) -> str:
-        """
-        Safely decode bytes to UTF-8 string with error handling.
-        Used for repeater metadata fields that may contain invalid UTF-8.
-        
-        Returns:
-            Decoded and stripped string, or empty string if data is empty/None
-        """
-        if not data:
-            return ''
-        return data.decode('utf-8', errors='ignore').strip()
     
     def _emit_stream_start(self, connection_type: str, connection_id: str, 
                           slot: int, src_id: int, dst_id: int, stream_id: str,
@@ -1272,6 +1236,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             event_data['connection_name'] = connection_id
             
         self._events.emit('stream_end', event_data)
+
+    # ========== TIMEOUT & MAINTENANCE METHODS ==========
 
     def _check_timeout(self, connection_type: str, connection_id: str,
                       slot: int, stream: StreamState, current_time: float,
@@ -1942,6 +1908,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         return True
         
+    # ========== INBOUND REPEATER MANAGEMENT ==========
+        
     def _remove_repeater(self, repeater_id: bytes, reason: str) -> None:
         """
         Remove a repeater and clean up all its state.
@@ -2578,6 +2546,48 @@ class HBProtocol(asyncio.DatagramProtocol):
                                            stream_id, is_terminator, 
                                            int.from_bytes(source_repeater_id, 'big'))
     
+    # ================================
+    # DMR Packet Processing
+    # ================================
+    
+    def _parse_dmr_packet(self, data: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Parse DMR packet fields into a dictionary.
+        Hot path function - used for every voice packet.
+        
+        Returns:
+            Dict with parsed fields or None if invalid packet
+        """
+        if len(data) < 55:
+            return None
+            
+        return {
+            'seq': data[4],
+            'rf_src': data[5:8],
+            'dst_id': data[8:11],
+            'repeater_id': data[11:15],
+            'bits': data[15],
+            'stream_id': data[16:20],
+            'slot': 2 if (data[15] & 0x80) else 1,
+            'call_type': (data[15] & 0x40) >> 6,
+            'frame_type': (data[15] & 0x30) >> 4,
+            'src_id_int': int.from_bytes(data[5:8], 'big'),
+            'dst_id_int': int.from_bytes(data[8:11], 'big'),
+            'repeater_id_int': int.from_bytes(data[11:15], 'big')
+        }
+    
+    def _safe_decode_bytes(self, data: bytes) -> str:
+        """
+        Safely decode bytes to UTF-8 string with error handling.
+        Used for repeater metadata fields that may contain invalid UTF-8.
+        
+        Returns:
+            Decoded and stripped string, or empty string if data is empty/None
+        """
+        if not data:
+            return ''
+        return data.decode('utf-8', errors='ignore').strip()
+
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
         # Parse packet using unified parser
