@@ -413,8 +413,10 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return []
         else:
-            # Convert bytes back to integers for dashboard display
-            return sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set)
+            # Return hex strings for TGs so the dashboard (separate process)
+            # can convert to whatever form it prefers (int or display string).
+            # Using hex avoids JSON/binary issues and keeps core hot-path cheap.
+            return sorted(tg_bytes.hex() for tg_bytes in tg_set)
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
@@ -497,7 +499,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                     else:
                         slot1_tgs = set()  # TS1 specified, start with empty
                         if tgs_str:
-                            slot1_tgs.update(int(tg.strip()) for tg in tgs_str.split(',') if tg.strip())
+                            # Convert strings directly to bytes for storage  
+                            slot1_tgs.update(int(tg.strip()).to_bytes(3, 'big') for tg in tgs_str.split(',') if tg.strip())
                 
                 # Check for TS2=
                 elif part.startswith('TS2='):
@@ -507,7 +510,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                     else:
                         slot2_tgs = set()  # TS2 specified, start with empty
                         if tgs_str:
-                            slot2_tgs.update(int(tg.strip()) for tg in tgs_str.split(',') if tg.strip())
+                            # Convert integers to bytes for storage
+                            slot2_tgs.update(int(tg.strip()).to_bytes(3, 'big') for tg in tgs_str.split(',') if tg.strip())
         
         except Exception as e:
             LOGGER.warning(f'Error parsing options "{options}": {e}')
@@ -762,8 +766,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                             'radio_id': state.config.radio_id,
                             'remote_address': state.config.address,  # Use original DNS name from config
                             'remote_port': state.port,
-                            'slot1_talkgroups': list(state.slot1_talkgroups) if state.slot1_talkgroups else None,
-                            'slot2_talkgroups': list(state.slot2_talkgroups) if state.slot2_talkgroups else None
+                            'slot1_talkgroups': self._format_tg_json(state.slot1_talkgroups),
+                            'slot2_talkgroups': self._format_tg_json(state.slot2_talkgroups)
                         })
                 else:
                     # Final ACK after RPTO
@@ -775,8 +779,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                         'radio_id': state.config.radio_id,
                         'remote_address': state.config.address,  # Use original DNS name from config
                         'remote_port': state.port,
-                        'slot1_talkgroups': list(state.slot1_talkgroups) if state.slot1_talkgroups else None,
-                        'slot2_talkgroups': list(state.slot2_talkgroups) if state.slot2_talkgroups else None
+                        'slot1_talkgroups': self._format_tg_json(state.slot1_talkgroups),
+                        'slot2_talkgroups': self._format_tg_json(state.slot2_talkgroups)
                     })
             
             # MSTNAK - Negative Acknowledgment
@@ -987,7 +991,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Log forwarding at DEBUG level
         if forwarded_count > 0:
             LOGGER.debug(f'[{outbound_state.config.name}] Forwarded DMRD '
-                        f'(slot {_slot}, src {src_id}, dst {tgid}) '
+                        f'(slot {_slot}, src {src_id}, dst {packet["dst_id_int"]}) '
                         f'to {forwarded_count} local repeater(s)')
 
     
@@ -1439,8 +1443,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                     'radio_id': outbound.config.radio_id,
                     'remote_address': outbound.config.address,
                     'remote_port': outbound.port,
-                    'slot1_talkgroups': list(outbound.slot1_talkgroups) if outbound.slot1_talkgroups else None,
-                    'slot2_talkgroups': list(outbound.slot2_talkgroups) if outbound.slot2_talkgroups else None
+                    'slot1_talkgroups': self._format_tg_json(outbound.slot1_talkgroups),
+                    'slot2_talkgroups': self._format_tg_json(outbound.slot2_talkgroups)
                 })
             
             LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters, {len(self._outbounds)} outbound connections')
@@ -2186,10 +2190,10 @@ class HBProtocol(asyncio.DatagramProtocol):
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
             
-            # Convert config to sets, handling None (allow all) properly
+            # Convert config to bytes sets, handling None (allow all) properly
             # None = allow all TGs, [] = deny all, [1,2,3] = specific TGs
-            config_ts1 = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
-            config_ts2 = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
+            config_ts1 = {tg.to_bytes(3, 'big') for tg in repeater_config.slot1_talkgroups} if repeater_config.slot1_talkgroups is not None else None
+            config_ts2 = {tg.to_bytes(3, 'big') for tg in repeater_config.slot2_talkgroups} if repeater_config.slot2_talkgroups is not None else None
             
             # Parse RPTO format: "TS1=1,2,3;TS2=4,5,6;..."
             requested_ts1 = set()
@@ -2203,10 +2207,10 @@ class HBProtocol(asyncio.DatagramProtocol):
                 key = key.strip().upper()
                 
                 if key == 'TS1' and value:
-                    requested_ts1 = {int(tg.strip()) for tg in value.split(',') 
+                    requested_ts1 = {int(tg.strip()).to_bytes(3, 'big') for tg in value.split(',') 
                                      if tg.strip().isdigit()}
                 elif key == 'TS2' and value:
-                    requested_ts2 = {int(tg.strip()) for tg in value.split(',') 
+                    requested_ts2 = {int(tg.strip()).to_bytes(3, 'big') for tg in value.split(',') 
                                      if tg.strip().isdigit()}
             
             # Check if this repeater is trusted
@@ -2219,11 +2223,13 @@ class HBProtocol(asyncio.DatagramProtocol):
                 if config_ts1 is not None and requested_ts1:
                     extra_ts1 = requested_ts1 - config_ts1
                     if extra_ts1:
-                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS1 TGs: {sorted(extra_ts1)}')
+                        extra_ts1_ints = sorted(int.from_bytes(tg, 'big') for tg in extra_ts1)
+                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS1 TGs: {extra_ts1_ints}')
                 if config_ts2 is not None and requested_ts2:
                     extra_ts2 = requested_ts2 - config_ts2
                     if extra_ts2:
-                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS2 TGs: {sorted(extra_ts2)}')
+                        extra_ts2_ints = sorted(int.from_bytes(tg, 'big') for tg in extra_ts2)
+                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS2 TGs: {extra_ts2_ints}')
                 
                 rejected_ts1 = set()
                 rejected_ts2 = set()
@@ -2255,9 +2261,11 @@ class HBProtocol(asyncio.DatagramProtocol):
                     rejected_ts2 = set()
             
             if rejected_ts1:
-                LOGGER.warning(f'⚠️  TS1 TG(s) {sorted(rejected_ts1)} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
+                rejected_ts1_ints = sorted(int.from_bytes(tg, 'big') for tg in rejected_ts1)
+                LOGGER.warning(f'⚠️  TS1 TG(s) {rejected_ts1_ints} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
             if rejected_ts2:
-                LOGGER.warning(f'⚠️  TS2 TG(s) {sorted(rejected_ts2)} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
+                rejected_ts2_ints = sorted(int.from_bytes(tg, 'big') for tg in rejected_ts2)
+                LOGGER.warning(f'⚠️  TS2 TG(s) {rejected_ts2_ints} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
             
             # Replace repeater's TG sets (no need to keep old ones)
             repeater.slot1_talkgroups = final_ts1
@@ -2442,7 +2450,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             allowed_tgs = outbound.slot1_talkgroups if slot == 1 else outbound.slot2_talkgroups
             
             # None = allow all, empty set = deny all, non-empty set = specific TGs
-            if allowed_tgs is not None and (not allowed_tgs or tgid not in allowed_tgs):
+            if allowed_tgs is not None and (not allowed_tgs or dst_id not in allowed_tgs):
                 continue
             
             # Check TDMA slot availability - outbound connections are like repeaters
