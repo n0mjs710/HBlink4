@@ -40,6 +40,10 @@ try:
     from .access_control import RepeaterMatcher
     from .events import EventEmitter
     from .user_cache import UserCache
+    from .utils import (
+        safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
+        cleanup_old_logs, setup_logging, PeerAddress
+    )
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
@@ -49,24 +53,12 @@ except ImportError:
     from access_control import RepeaterMatcher
     from events import EventEmitter
     from user_cache import UserCache
-
-# Type definitions
-# Address tuple can be IPv4 (host, port) or IPv6 (host, port, flowinfo, scopeid)
-PeerAddress = Union[Tuple[str, int], Tuple[str, int, int, int]]
+    from utils import (
+        safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
+        cleanup_old_logs, setup_logging, PeerAddress
+    )
 
 from dataclasses import dataclass, field
-
-def safe_decode_bytes(data: bytes) -> str:
-    """
-    Safely decode bytes to UTF-8 string with error handling.
-    Used for repeater metadata fields that may contain invalid UTF-8.
-    
-    Returns:
-        Decoded and stripped string, or empty string if data is empty/None
-    """
-    if not data:
-        return ''
-    return data.decode('utf-8', errors='ignore').strip()
 
 @dataclass
 class OutboundConnectionConfig:
@@ -362,37 +354,16 @@ class HBProtocol(asyncio.DatagramProtocol):
     
     # ========== ADDRESS VALIDATION METHODS ==========
     
-    @staticmethod
-    def _normalize_addr(addr: PeerAddress) -> Tuple[str, int]:
-        """
-        Normalize address tuple to (ip, port) regardless of IPv4/IPv6 format.
-        IPv4: (ip, port)
-        IPv6: (ip, port, flowinfo, scopeid) -> (ip, port)
-        """
-        return (addr[0], addr[1])
-    
     def _addr_matches(self, addr1: PeerAddress, addr2: PeerAddress) -> bool:
         """Compare two addresses, normalizing for IPv4/IPv6 differences"""
-        return self._normalize_addr(addr1) == self._normalize_addr(addr2)
+        return normalize_addr(addr1) == normalize_addr(addr2)
     
     def _addr_matches_repeater(self, repeater: RepeaterState, addr: PeerAddress) -> bool:
         """
         Optimized address comparison for repeater validation.
         RepeaterState.sockaddr is already normalized, so we only normalize the incoming address.
         """
-        return repeater.sockaddr == self._normalize_addr(addr)
-        
-    # ========== UTILITY HELPER METHODS ==========
-    
-    @staticmethod
-    def _rid_to_int(repeater_id: bytes) -> int:
-        """Convert repeater ID bytes to int (no caching - prevents memory leaks)."""
-        return int.from_bytes(repeater_id, 'big')
-    
-    @staticmethod
-    def _bytes_to_int(value: bytes) -> int:
-        """Simple bytes to int conversion for logging (no caching overhead)."""
-        return int.from_bytes(value, 'big')
+        return repeater.sockaddr == normalize_addr(addr)
     
 
     
@@ -422,7 +393,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         Centralizes the logic for converting repeater state to JSON-serializable format.
         """
         return {
-            'repeater_id': self._rid_to_int(repeater_id),
+            'repeater_id': rid_to_int(repeater_id),
             'callsign': repeater.get_callsign_str(),
             'location': repeater.get_location_str(),
             'address': f'{repeater.ip}:{repeater.port}',
@@ -445,7 +416,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         If this fails, it indicates a bug in authentication logic that must be fixed.
         """
         repeater_config = self._matcher.get_repeater_config(
-            self._rid_to_int(repeater_id),
+            rid_to_int(repeater_id),
             repeater.get_callsign_str()
         )
         
@@ -1004,11 +975,11 @@ class HBProtocol(asyncio.DatagramProtocol):
             for repeater_id, repeater in self._repeaters.items():
                 if repeater.connection_state == 'connected':
                     try:
-                        LOGGER.info(f"Sending disconnect to repeater {self._rid_to_int(repeater_id)}")
+                        LOGGER.info(f"Sending disconnect to repeater {rid_to_int(repeater_id)}")
                         # asyncio uses sendto() instead of write(data, addr)
                         self._port.sendto(MSTCL, repeater.sockaddr)
                     except Exception as e:
-                        LOGGER.error(f"Error sending disconnect to repeater {self._rid_to_int(repeater_id)}: {e}")
+                        LOGGER.error(f"Error sending disconnect to repeater {rid_to_int(repeater_id)}: {e}")
         
         # Send RPTCL (disconnect) to all outbound connections
         for conn_name, outbound in list(self._outbounds.items()):
@@ -1110,13 +1081,13 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             if time_since_ping > timeout_duration:
                 repeater.missed_pings += 1
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} missed ping #{repeater.missed_pings}')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} missed ping #{repeater.missed_pings}')
                 
                 # Emit event to update dashboard with missed ping count
                 self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
                 
                 if repeater.missed_pings >= max_missed:
-                    LOGGER.error(f'Repeater {self._rid_to_int(repeater_id)} timed out after {repeater.missed_pings} missed pings')
+                    LOGGER.error(f'Repeater {rid_to_int(repeater_id)} timed out after {repeater.missed_pings} missed pings')
                     # Send NAK to trigger re-registration
                     self._send_nak(repeater_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
                     self._remove_repeater(repeater_id, "timeout")
@@ -1154,7 +1125,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             reason_text = f'entering hang time ({hang_time}s)'
         
         # Log stream end (DEBUG for TX, INFO for RX)
-        rid_int = self._rid_to_int(repeater_id)
+        rid_int = rid_to_int(repeater_id)
         src_int = int.from_bytes(stream.rf_src, "big")
         dst_int = int.from_bytes(stream.dst_id, "big")
         
@@ -1334,7 +1305,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         """
         return self._check_timeout(
             'repeater',
-            self._rid_to_int(repeater_id),
+            rid_to_int(repeater_id),
             slot,
             stream,
             current_time,
@@ -1621,7 +1592,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 return
 
             # Per-packet logging - only enable for heavy troubleshooting
-            #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={self._rid_to_int(repeater_id)}, addr={addr}')
+            #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={rid_to_int(repeater_id)}, addr={addr}')
 
             # Get repeater state once (for both NAK check and ping update)
             repeater = self._repeaters.get(repeater_id)
@@ -1687,16 +1658,16 @@ class HBProtocol(asyncio.DatagramProtocol):
         """Validate repeater state and address"""
         if repeater_id not in self._repeaters:
             # Per-packet logging - only enable for heavy troubleshooting
-            #LOGGER.debug(f'Repeater {self._rid_to_int(repeater_id)} not found in _repeaters dict')
+            #LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} not found in _repeaters dict')
             self._send_nak(repeater_id, addr, reason="Repeater not registered")
             return None
             
         repeater = self._repeaters[repeater_id]
         # Per-packet logging - only enable for heavy troubleshooting
-        #LOGGER.debug(f'Validating repeater {self._rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
+        #LOGGER.debug(f'Validating repeater {rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
         if not self._addr_matches_repeater(repeater, addr):
-            LOGGER.warning(f'Message from wrong IP for repeater {self._rid_to_int(repeater_id)}')
+            LOGGER.warning(f'Message from wrong IP for repeater {rid_to_int(repeater_id)}')
             self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
             return None
             
@@ -1710,8 +1681,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         """
         # Check if this is a unit/private call (call_type_bit == 1)
         if call_type_bit == 1:
-            LOGGER.info(f'UNIT CALL received on repeater {self._rid_to_int(repeater.repeater_id)} slot {slot}: '
-                       f'src={self._bytes_to_int(rf_src)}, dst={self._bytes_to_int(dst_id)}, '
+            LOGGER.info(f'UNIT CALL received on repeater {rid_to_int(repeater.repeater_id)} slot {slot}: '
+                       f'src={bytes_to_int(rf_src)}, dst={bytes_to_int(dst_id)}, '
                        f'stream_id={stream_id.hex()} [NOT ROUTED - unit call handling not yet implemented]')
             return False  # Reject the stream - don't process unit calls yet
         
@@ -1730,7 +1701,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Remove this repeater from any active route-caches to stop wasting bandwidth.
             # Note: Ended assumed streams should go through normal hang time logic instead.
             if current_stream.is_assumed and not current_stream.ended:
-                LOGGER.info(f'Repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
+                LOGGER.info(f'Repeater {rid_to_int(repeater.repeater_id)} slot {slot} '
                            f'starting RX while we have active assumed TX stream - repeater wins, '
                            f'removing from active route-caches')
                 
@@ -1743,9 +1714,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                             other_stream.target_repeaters and
                             repeater.repeater_id in other_stream.target_repeaters):
                             other_stream.target_repeaters.discard(repeater.repeater_id)
-                            LOGGER.debug(f'Removed repeater {self._rid_to_int(repeater.repeater_id)} '
+                            LOGGER.debug(f'Removed repeater {rid_to_int(repeater.repeater_id)} '
                                        f'from route-cache of stream on repeater '
-                                       f'{self._rid_to_int(other_repeater.repeater_id)} slot {other_slot}')
+                                       f'{rid_to_int(other_repeater.repeater_id)} slot {other_slot}')
                 
                 # Clear the assumed stream - real stream takes precedence
                 # Fall through to create new real stream
@@ -1760,13 +1731,13 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # Same user can always continue (any talkgroup)
                 if current_stream.rf_src == rf_src:
                     if current_stream.dst_id == dst_id:
-                        LOGGER.info(f'Same user continuing conversation on repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
-                                   f'during hang time: src={self._bytes_to_int(rf_src)}, dst={self._bytes_to_int(dst_id)}')
+                        LOGGER.info(f'Same user continuing conversation on repeater {rid_to_int(repeater.repeater_id)} slot {slot} '
+                                   f'during hang time: src={bytes_to_int(rf_src)}, dst={bytes_to_int(dst_id)}')
                     else:
-                        LOGGER.info(f'Same user switching talkgroup on repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
-                                   f'during hang time: src={self._bytes_to_int(rf_src)}, '
-                                   f'old_dst={self._bytes_to_int(current_stream.dst_id)}, '
-                                   f'new_dst={self._bytes_to_int(dst_id)}')
+                        LOGGER.info(f'Same user switching talkgroup on repeater {rid_to_int(repeater.repeater_id)} slot {slot} '
+                                   f'during hang time: src={bytes_to_int(rf_src)}, '
+                                   f'old_dst={bytes_to_int(current_stream.dst_id)}, '
+                                   f'new_dst={bytes_to_int(dst_id)}')
                         fast_tg_switch = True  # Mark as fast talkgroup switch
                     # Allow by falling through to create new stream
                 # Different user - check if same talkgroup
@@ -1938,11 +1909,11 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater = self._repeaters[repeater_id]
             
             # Log current state before removal
-            LOGGER.debug(f'Removing repeater {self._rid_to_int(repeater_id)}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.debug(f'Removing repeater {rid_to_int(repeater_id)}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Emit event before removing so dashboard can update
             self._events.emit('repeater_disconnected', {
-                'repeater_id': self._rid_to_int(repeater_id),
+                'repeater_id': rid_to_int(repeater_id),
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'Unknown',
                 'reason': reason
             })
@@ -1959,11 +1930,11 @@ class HBProtocol(asyncio.DatagramProtocol):
         ip = addr[0]
         port = addr[1]
         
-        LOGGER.debug(f'Processing login for repeater ID {self._rid_to_int(repeater_id)} from {ip}:{port}')
+        LOGGER.debug(f'Processing login for repeater ID {rid_to_int(repeater_id)} from {ip}:{port}')
         
         # ID Conflict Protection: Check if this ID is reserved for an outbound connection
         # Outbound connections (admin-configured) have priority over inbound repeaters (untrusted)
-        repeater_id_int = self._rid_to_int(repeater_id)
+        repeater_id_int = rid_to_int(repeater_id)
         if repeater_id_int in self._outbound_ids:
             LOGGER.warning(f'⛔ Rejecting inbound repeater {repeater_id_int} from {ip}:{port} '
                          f'- ID reserved for outbound connection')
@@ -1973,7 +1944,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         repeater = self._repeaters.get(repeater_id)
         if repeater:
             if not self._addr_matches_repeater(repeater, addr):
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
                 # Remove the old registration first
                 old_addr = repeater.sockaddr
                 self._remove_repeater(repeater_id, "reconnect_different_port")
@@ -1983,7 +1954,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             else:
                 # Same repeater reconnecting from same IP:port
                 old_state = repeater.connection_state
-                LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} reconnecting while in state {old_state}')
+                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} reconnecting while in state {old_state}')
                 # Preserve existing salt on login retry
                 if old_state == 'login':
                     existing_salt = repeater.salt
@@ -1995,7 +1966,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Send login ACK with same salt
                     salt_bytes = repeater.salt.to_bytes(4, 'big')
                     self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
-                    LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} login retry from {ip}:{port}, resending same salt: {repeater.salt}')
+                    LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login retry from {ip}:{port}, resending same salt: {repeater.salt}')
                     return
                 
         # Create or update repeater state (fresh login)
@@ -2006,26 +1977,26 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Send login ACK with salt
         salt_bytes = repeater.salt.to_bytes(4, 'big')
         self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
-        LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} login request from {ip}:{port}, sent salt: {repeater.salt}')
+        LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login request from {ip}:{port}, sent salt: {repeater.salt}')
 
     def _handle_auth_response(self, repeater_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'login':
-            LOGGER.warning(f'Auth response from repeater {self._rid_to_int(repeater_id)} in wrong state')
+            LOGGER.warning(f'Auth response from repeater {rid_to_int(repeater_id)} in wrong state')
             self._send_nak(repeater_id, addr)
             return
             
         try:
             # Get config for this repeater including its passphrase
             repeater_config = self._matcher.get_repeater_config(
-                self._rid_to_int(repeater_id),
+                rid_to_int(repeater_id),
                 repeater.get_callsign_str()
             )
             
             # If no matching configuration found, reject the connection
             if repeater_config is None:
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} does not match any configured patterns and no default is set')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} does not match any configured patterns and no default is set')
                 self._send_nak(repeater_id, addr, reason="No matching configuration")
                 self._remove_repeater(repeater_id, "no_config_match")
                 return
@@ -2038,14 +2009,14 @@ class HBProtocol(asyncio.DatagramProtocol):
                 repeater.authenticated = True
                 repeater.connection_state = 'config'
                 self._send_packet(b''.join([RPTACK, repeater_id]), addr)
-                LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} authenticated successfully')
+                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated successfully')
             else:
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} failed authentication')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} failed authentication')
                 self._send_nak(repeater_id, addr, reason="Authentication failed")
                 self._remove_repeater(repeater_id, "auth_failed")
                 
         except Exception as e:
-            LOGGER.error(f'Authentication error for repeater {self._rid_to_int(repeater_id)}: {str(e)}')
+            LOGGER.error(f'Authentication error for repeater {rid_to_int(repeater_id)}: {str(e)}')
             self._send_nak(repeater_id, addr)
             self._remove_repeater(repeater_id, "auth_error")
 
@@ -2055,7 +2026,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater_id = data[4:8]
             repeater = self._validate_repeater(repeater_id, addr)
             if not repeater or not repeater.authenticated or repeater.connection_state != 'config':
-                LOGGER.warning(f'Config from repeater {self._rid_to_int(repeater_id)} in wrong state')
+                LOGGER.warning(f'Config from repeater {rid_to_int(repeater_id)} in wrong state')
                 self._send_nak(repeater_id, addr)
                 return
                 
@@ -2076,7 +2047,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater.package_id = data[262:302]
             
             # Log detailed configuration at debug level
-            LOGGER.debug(f'Repeater {self._rid_to_int(repeater_id)} config:'
+            LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} config:'
                       f'\n    Callsign: {repeater.callsign.decode().strip()}'
                       f'\n    RX Freq: {repeater.rx_freq.decode().strip()}'
                       f'\n    TX Freq: {repeater.tx_freq.decode().strip()}'
@@ -2092,8 +2063,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._load_repeater_tg_config(repeater_id, repeater)
             
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
-            LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) configured successfully')
-            LOGGER.debug(f'Repeater state after config: id={self._rid_to_int(repeater_id)}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.info(f'Repeater {rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) configured successfully')
+            LOGGER.debug(f'Repeater state after config: id={rid_to_int(repeater_id)}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Emit detailed repeater info (sent once on connection)
             self._emit_repeater_details(repeater_id, repeater)
@@ -2111,7 +2082,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         Emit detailed repeater information (sent once on connection).
         This includes metadata and pattern match information that doesn't change during the connection.
         """
-        rid_int = self._rid_to_int(repeater_id)
+        rid_int = rid_to_int(repeater_id)
         callsign = repeater.get_callsign_str()
         
         # Get pattern match info
@@ -2180,11 +2151,11 @@ class HBProtocol(asyncio.DatagramProtocol):
         try:
             # Parse options string
             options_str = data.decode('utf-8', errors='ignore').strip('\x00').strip()
-            LOGGER.info(f'📋 OPTIONS from {self._rid_to_int(repeater_id)} ({repeater.callsign.decode().strip()}): {options_str}')
+            LOGGER.info(f'📋 OPTIONS from {rid_to_int(repeater_id)} ({repeater.callsign.decode().strip()}): {options_str}')
             
             # Get original config TGs (these are the master allow list)
             repeater_config = self._matcher.get_repeater_config(
-                self._rid_to_int(repeater_id),
+                rid_to_int(repeater_id),
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
             
@@ -2222,12 +2193,12 @@ class HBProtocol(asyncio.DatagramProtocol):
                     extra_ts1 = requested_ts1 - config_ts1
                     if extra_ts1:
                         extra_ts1_ints = sorted(int.from_bytes(tg, 'big') for tg in extra_ts1)
-                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS1 TGs: {extra_ts1_ints}')
+                        LOGGER.info(f'🔓 Trusted repeater {rid_to_int(repeater_id)} using additional TS1 TGs: {extra_ts1_ints}')
                 if config_ts2 is not None and requested_ts2:
                     extra_ts2 = requested_ts2 - config_ts2
                     if extra_ts2:
                         extra_ts2_ints = sorted(int.from_bytes(tg, 'big') for tg in extra_ts2)
-                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS2 TGs: {extra_ts2_ints}')
+                        LOGGER.info(f'🔓 Trusted repeater {rid_to_int(repeater_id)} using additional TS2 TGs: {extra_ts2_ints}')
                 
                 rejected_ts1 = set()
                 rejected_ts2 = set()
@@ -2260,10 +2231,10 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             if rejected_ts1:
                 rejected_ts1_ints = sorted(int.from_bytes(tg, 'big') for tg in rejected_ts1)
-                LOGGER.warning(f'⚠️  TS1 TG(s) {rejected_ts1_ints} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
+                LOGGER.warning(f'⚠️  TS1 TG(s) {rejected_ts1_ints} requested by repeater {rid_to_int(repeater_id)} not allowed by config')
             if rejected_ts2:
                 rejected_ts2_ints = sorted(int.from_bytes(tg, 'big') for tg in rejected_ts2)
-                LOGGER.warning(f'⚠️  TS2 TG(s) {rejected_ts2_ints} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
+                LOGGER.warning(f'⚠️  TS2 TG(s) {rejected_ts2_ints} requested by repeater {rid_to_int(repeater_id)} not allowed by config')
             
             # Replace repeater's TG sets (no need to keep old ones)
             repeater.slot1_talkgroups = final_ts1
@@ -2276,7 +2247,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Emit event to update dashboard in real-time
             self._events.emit('repeater_options_updated', {
-                'repeater_id': self._rid_to_int(repeater_id),
+                'repeater_id': rid_to_int(repeater_id),
                 'slot1_talkgroups': self._format_tg_json(final_ts1),
                 'slot2_talkgroups': self._format_tg_json(final_ts2),
                 'rpto_received': True
@@ -2286,7 +2257,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             
         except Exception as e:
-            LOGGER.error(f'Error processing RPTO from {self._rid_to_int(repeater_id)}: {e}')
+            LOGGER.error(f'Error processing RPTO from {rid_to_int(repeater_id)}: {e}')
             # Still send ACK to avoid retries
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
@@ -2307,7 +2278,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # - Header (format, length)
             # - Text blocks (7-bit encoded callsign/name)
             # For now, just acknowledge receipt
-            LOGGER.debug(f'📻 Talker Alias from {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
+            LOGGER.debug(f'📻 Talker Alias from {rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
             
             # TODO: Future enhancement - parse talker alias blocks and emit to dashboard
             # Talker alias format: https://github.com/g4klx/MMDVMHost/wiki/Talker-Alias
@@ -2316,7 +2287,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             
         except Exception as e:
-            LOGGER.error(f'Error processing DMRA from {self._rid_to_int(repeater_id)}: {e}')
+            LOGGER.error(f'Error processing DMRA from {rid_to_int(repeater_id)}: {e}')
             # Still send ACK to avoid retries
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
@@ -2324,7 +2295,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         """Handle ping (RPTPING/RPTP) from the repeater as a keepalive."""
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'Ping from repeater {self._rid_to_int(repeater_id)} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
+            LOGGER.warning(f'Ping from repeater {rid_to_int(repeater_id)} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
             self._send_nak(repeater_id, addr, reason="Wrong connection state")
             return
             
@@ -2332,7 +2303,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         repeater.last_ping = time()
         had_missed_pings = repeater.missed_pings > 0
         if had_missed_pings:
-            LOGGER.info(f'Ping counter reset for repeater {self._rid_to_int(repeater_id)} after {repeater.missed_pings} missed pings')
+            LOGGER.info(f'Ping counter reset for repeater {rid_to_int(repeater_id)} after {repeater.missed_pings} missed pings')
         repeater.missed_pings = 0
         repeater.ping_count += 1
         
@@ -2341,21 +2312,21 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
         
         # Send MSTPONG in response to RPTPING/RPTP from repeater
-        LOGGER.debug(f'Sending MSTPONG to repeater {self._rid_to_int(repeater_id)}')
+        LOGGER.debug(f'Sending MSTPONG to repeater {rid_to_int(repeater_id)}')
         self._send_packet(b''.join([MSTPONG, repeater_id]), addr)
 
     def _handle_disconnect(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
         repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
-            LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) disconnected')
+            LOGGER.info(f'Repeater {rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) disconnected')
             self._remove_repeater(repeater_id, "disconnect")
             
     def _handle_status(self, repeater_id: bytes, data: bytes, addr: PeerAddress) -> None:
         """Handle repeater status report (including RSSI)"""
         repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
-            LOGGER.debug(f'Status report from repeater {self._rid_to_int(repeater_id)}: {data[8:].hex()}')
+            LOGGER.debug(f'Status report from repeater {rid_to_int(repeater_id)}: {data[8:].hex()}')
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
     def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
@@ -2638,7 +2609,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         if not stream_valid:
             # Stream contention or not allowed - drop packet silently
-            LOGGER.debug(f'Dropped packet from repeater {self._rid_to_int(repeater_id)} slot {_slot}: '
+            LOGGER.debug(f'Dropped packet from repeater {rid_to_int(repeater_id)} slot {_slot}: '
                         f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
                         f'reason=stream contention or talkgroup not allowed')
             return
@@ -2663,7 +2634,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Emit stream_update every 60 packets (10 superframes = 1 second)
         if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
             self._events.emit('stream_update', {
-                'repeater_id': self._rid_to_int(repeater_id),
+                'repeater_id': rid_to_int(repeater_id),
                 'slot': _slot,
                 'src_id': int.from_bytes(current_stream.rf_src, 'big'),
                 'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
@@ -2828,7 +2799,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         #if cmd != DMRD:  # Don't log DMR data packets
         #    LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
         # asyncio uses sendto() instead of write(data, addr)
-        self.transport.sendto(data, self._normalize_addr(addr))
+        self.transport.sendto(data, normalize_addr(addr))
 
     def _send_nak(self, repeater_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
         """Send NAK to specified address
@@ -2840,7 +2811,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             is_shutdown: Whether this NAK is part of a graceful shutdown
         """
         log_level = logging.DEBUG if is_shutdown else logging.WARNING
-        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {self._rid_to_int(repeater_id)}'
+        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {rid_to_int(repeater_id)}'
         if reason:
             log_msg += f' - {reason}'
         
@@ -2848,69 +2819,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._send_packet(b''.join([MSTNAK, repeater_id]), addr)
 
 
-def cleanup_old_logs(log_dir: pathlib.Path, max_days: int) -> None:
-    """Clean up log files older than max_days based on their date suffix"""
-    from datetime import datetime, timedelta
-    current_date = datetime.now()
-    cutoff_date = current_date - timedelta(days=max_days)
-    
-    try:
-        for log_file in log_dir.glob('hblink.log.*'):
-            try:
-                # Extract date from filename (expecting format: hblink.log.YYYY-MM-DD)
-                date_str = log_file.name.split('.')[-1]
-                file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                
-                if file_date < cutoff_date:
-                    log_file.unlink()
-                    LOGGER.debug(f'Deleted old log file from {date_str}: {log_file}')
-            except (OSError, ValueError) as e:
-                LOGGER.warning(f'Error processing old log file {log_file}: {e}')
-    except Exception as e:
-        LOGGER.error(f'Error during log cleanup: {e}')
-
-def setup_logging():
-    """Configure logging"""
-    logging_config = CONFIG.get('global', {}).get('logging', {})
-    
-    # Get logging configuration with defaults
-    log_file = logging_config.get('file', 'logs/hblink.log')
-    file_level = getattr(logging, logging_config.get('file_level', 'DEBUG'))
-    console_level = getattr(logging, logging_config.get('console_level', 'INFO'))
-    max_days = logging_config.get('retention_days', 30)
-    
-    log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    
-    # Create log directory if it doesn't exist
-    log_path = pathlib.Path(log_file)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Clean up old log files
-    cleanup_old_logs(log_path.parent, max_days)
-    
-    # Configure rotating file handler with date-based suffix
-    file_handler = logging.handlers.TimedRotatingFileHandler(
-        str(log_path),
-        when='midnight',
-        interval=1,
-        backupCount=max_days
-    )
-    # Set the suffix for rotated files to YYYY-MM-DD
-    file_handler.suffix = '%Y-%m-%d'
-    # Don't include seconds in date suffix
-    file_handler.namer = lambda name: name.replace('.%Y-%m-%d%H%M%S', '.%Y-%m-%d')
-    file_handler.setFormatter(log_format)
-    file_handler.setLevel(file_level)
-    
-    # Configure console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_format)
-    console_handler.setLevel(console_level)
-    
-    # Add handlers and set level to most verbose of the two
-    LOGGER.addHandler(file_handler)
-    LOGGER.addHandler(console_handler)
-    LOGGER.setLevel(min(file_level, console_level))
+# Logging functions moved to utils.py
 
 def load_config(config_file: str):
     """Load JSON configuration file"""
@@ -3099,7 +3008,9 @@ def main():
         sys.exit(1)
 
     load_config(sys.argv[1])
-    setup_logging()
+    # Setup logging using the imported function
+    global LOGGER
+    LOGGER = setup_logging(CONFIG, __name__)
     
     # Startup banner
     LOGGER.info('🚀 ═══════════════════════════════════════════════════════════════')
