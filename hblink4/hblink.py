@@ -891,6 +891,18 @@ class HBProtocol(asyncio.DatagramProtocol):
             )
             outbound_state.set_slot_stream(_slot, new_stream)
             
+            # Emit stream_start event for dashboard (RX stream from remote)
+            self._events.emit('stream_start', {
+                'connection_type': 'outbound',
+                'connection_name': outbound_state.config.name,
+                'slot': _slot,
+                'src_id': src_id,
+                'dst_id': tgid,
+                'call_type': new_stream.call_type,
+                'stream_id': _stream_id.hex(),
+                'assumed': False  # Real RX stream
+            })
+            
             LOGGER.info(f'[{outbound_state.config.name}] RX stream started on TS{_slot}: '
                        f'src={src_id}, dst={tgid}, from remote repeater {remote_repeater_id}')
         else:
@@ -902,6 +914,22 @@ class HBProtocol(asyncio.DatagramProtocol):
         if _is_terminator and current_stream:
             dummy_id = outbound_state.config.radio_id.to_bytes(4, 'big')
             self._end_stream(current_stream, dummy_id, _slot, current_time, 'terminator')
+            
+            # Emit stream_end event for dashboard (outbound RX termination)
+            self._events.emit('stream_end', {
+                'connection_type': 'outbound',
+                'connection_name': outbound_state.config.name,
+                'slot': _slot,
+                'src_id': src_id,
+                'dst_id': tgid,
+                'stream_id': _stream_id.hex(),
+                'duration': current_time - current_stream.start_time,
+                'packet_count': current_stream.packet_count,
+                'end_reason': 'terminator',
+                'hang_time': CONFIG.get('global', {}).get('stream_hang_time', 10.0),
+                'call_type': current_stream.call_type,
+                'assumed': False  # Real RX stream
+            })
         
         # Find local repeaters that should receive this traffic
         forwarded_count = 0
