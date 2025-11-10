@@ -19,6 +19,7 @@ from typing import Dict, Any, Optional, Tuple, Union, List, Set
 from time import time
 from random import randint
 from hashlib import sha256
+import re
 
 import signal
 import asyncio
@@ -388,6 +389,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         if repeater_id not in self._rid_cache:
             self._rid_cache[repeater_id] = int.from_bytes(repeater_id, 'big')
         return self._rid_cache[repeater_id]
+    
+
     
     def _format_tg_display(self, tg_set: Optional[set]) -> str:
         """Format TG set for human-readable display (logging)"""
@@ -2116,7 +2119,6 @@ class HBProtocol(asyncio.DatagramProtocol):
                 elif callsign and pattern.callsigns:
                     for pattern_str in pattern.callsigns:
                         pattern_regex = pattern_str.replace('*', '.*') if '*' in pattern_str else pattern_str
-                        import re
                         if re.match(f"^{pattern_regex}$", callsign, re.IGNORECASE):
                             match_reason = f"callsign: {pattern_str}"
                             break
@@ -2629,9 +2631,9 @@ class HBProtocol(asyncio.DatagramProtocol):
         current_stream = repeater.get_slot_stream(_slot)
         
         # Per-packet logging - only enable for heavy troubleshooting
-        #LOGGER.debug(f'DMR data from {self._rid_to_int(repeater_id)} slot {_slot}: '
-        #            f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
-        #            f'dst={int.from_bytes(_dst_id, "big")}, '
+        #LOGGER.debug(f'DMR data from {packet["repeater_id_int"]} slot {_slot}: '
+        #            f'seq={_seq}, src={packet["src_id_int"]}, '
+        #            f'dst={packet["dst_id_int"]}, '
         #            f'stream_id={_stream_id.hex()}, '
         #            f'frame_type={_frame_type}, '
         #            f'terminator={_is_terminator}, '
