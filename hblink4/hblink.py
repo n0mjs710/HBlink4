@@ -152,8 +152,9 @@ class OutboundState:
     connection_task: Optional[asyncio.Task] = None  # Connection management task
     transport: Optional[asyncio.DatagramTransport] = None  # UDP transport
     
-    # Talkgroup filtering (parsed from config.options)
+    # Talkgroup filtering (stored as bytes sets for hot path performance)
     # None = no restrictions (allow all), empty set = deny all
+    # Format: Set of 3-byte TGIDs (e.g., {b'\x00\x00\x01', b'\x00\x00\x02'})
     slot1_talkgroups: Optional[set] = None
     slot2_talkgroups: Optional[set] = None
     
@@ -223,10 +224,12 @@ class RepeaterState:
     software_id: bytes = b''
     package_id: bytes = b''
     
-    # Talkgroup access control (stored as sets for O(1) lookup)
+    # Talkgroup access control (stored as bytes sets for hot path performance)
     # None = no restrictions (allow all), empty set = deny all, non-empty set = allow only those TGs
-    slot1_talkgroups: Optional[set] = None
-    slot2_talkgroups: Optional[set] = None
+    # Format: Set of 3-byte TGIDs (e.g., {b'\x00\x00\x01', b'\x00\x00\x02'})
+    slot1_talkgroups: Optional[set] = None  # Set of 3-byte TGIDs 
+    slot2_talkgroups: Optional[set] = None  # Set of 3-byte TGIDs
+    
     rpto_received: bool = False  # True if repeater sent RPTO to override config TGs
     
     # Active stream tracking per slot
@@ -399,7 +402,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return 'None'
         else:
-            return str(sorted(tg_set))
+            # Convert bytes back to integers for readable display
+            return str(sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set))
     
     def _format_tg_json(self, tg_set: Optional[set]) -> Optional[list]:
         """Format TG set for JSON serialization (events)"""
@@ -408,7 +412,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return []
         else:
-            return sorted(tg_set)
+            # Convert bytes back to integers for dashboard display
+            return sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set)
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
@@ -444,9 +449,16 @@ class HBProtocol(asyncio.DatagramProtocol):
         )
         
         # Convert config to internal representation:
-        # None stays None (allow all), lists become sets
-        repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
-        repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
+        # None stays None (allow all), int lists become bytes sets for hot path performance
+        if repeater_config.slot1_talkgroups is not None:
+            repeater.slot1_talkgroups = {tg.to_bytes(3, 'big') for tg in repeater_config.slot1_talkgroups}
+        else:
+            repeater.slot1_talkgroups = None
+            
+        if repeater_config.slot2_talkgroups is not None:
+            repeater.slot2_talkgroups = {tg.to_bytes(3, 'big') for tg in repeater_config.slot2_talkgroups}
+        else:
+            repeater.slot2_talkgroups = None
 
     # ========== OUTBOUND CONNECTION METHODS (Phase 3) ==========
     
@@ -875,7 +887,6 @@ class HBProtocol(asyncio.DatagramProtocol):
         _frame_type = packet['frame_type']
         _stream_id = packet['stream_id']
         
-        tgid = packet['dst_id_int']
         src_id = packet['src_id_int']
         remote_repeater_id = packet['repeater_id_int']
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
@@ -884,8 +895,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         allowed_tgs = outbound_state.slot1_talkgroups if _slot == 1 else outbound_state.slot2_talkgroups
         
         # None = allow all, empty set = deny all, non-empty set = specific TGs
-        if allowed_tgs is not None and (not allowed_tgs or tgid not in allowed_tgs):
-            LOGGER.debug(f'[{outbound_state.config.name}] Dropping packet for unauthorized TG {tgid} on slot {_slot}')
+        if allowed_tgs is not None and (not allowed_tgs or _dst_id not in allowed_tgs):
+            LOGGER.debug(f'[{outbound_state.config.name}] Dropping packet for unauthorized TG {packet["dst_id_int"]} on slot {_slot}')
             return
         
         # Track stream state on outbound connection's TDMA slot (RX stream from remote server)
@@ -922,14 +933,14 @@ class HBProtocol(asyncio.DatagramProtocol):
                 outbound_state.config.name,
                 _slot,
                 src_id,
-                tgid,
+                packet['dst_id_int'],
                 _stream_id.hex(),
                 new_stream.call_type,
                 False  # Real RX stream
             )
             
             LOGGER.info(f'[{outbound_state.config.name}] RX stream started on TS{_slot}: '
-                       f'src={src_id}, dst={tgid}, from remote repeater {remote_repeater_id}')
+                       f'src={src_id}, dst={packet["dst_id_int"]}, from remote repeater {remote_repeater_id}')
         else:
             # Update existing stream
             current_stream.last_seen = current_time
@@ -957,7 +968,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 continue
             
             # Check if this local repeater allows this TG on this slot
-            if not self._check_outbound_routing(local_repeater_id, _slot, tgid):
+            if not self._check_outbound_routing(local_repeater_id, _slot, _dst_id):
                 continue
             
             # Check slot availability (don't hijack active streams)
@@ -1435,16 +1446,16 @@ class HBProtocol(asyncio.DatagramProtocol):
         except Exception as e:
             LOGGER.error(f'Error sending initial state: {e}')
     
-    def _check_inbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
+    def _check_inbound_routing(self, repeater_id: bytes, slot: int, dst_id: bytes) -> bool:
         """
         Check if a repeater is allowed to send traffic on this TS/TGID.
         
-        Uses cached TG sets in RepeaterState for O(1) lookup.
+        Uses cached TG bytes sets in RepeaterState for O(1) lookup with no conversion.
         
         Args:
             repeater_id: Repeater ID to check
             slot: Timeslot (1 or 2)
-            tgid: Talkgroup ID
+            dst_id: Destination TGID as 3-byte DMR format
             
         Returns:
             True if traffic is allowed, False otherwise
@@ -1465,20 +1476,20 @@ class HBProtocol(asyncio.DatagramProtocol):
         if not allowed_tgids:
             return False
         
-        # O(1) set membership check
-        return tgid in allowed_tgids
+        # O(1) set membership check with no bytes→int conversion!
+        return dst_id in allowed_tgids
     
-    def _check_outbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
+    def _check_outbound_routing(self, repeater_id: bytes, slot: int, dst_id: bytes) -> bool:
         """
         Check if traffic should be forwarded to this repeater on this TS/TGID.
         
-        Uses cached TG sets in RepeaterState for O(1) lookup.
+        Uses cached TG bytes sets in RepeaterState for O(1) lookup with no conversion.
         Same set and logic as inbound - symmetric routing.
         
         Args:
             repeater_id: Repeater ID to check
             slot: Timeslot (1 or 2)  
-            tgid: Talkgroup ID
+            dst_id: Destination TGID as 3-byte DMR format
             
         Returns:
             True if traffic should be forwarded, False otherwise
@@ -1499,8 +1510,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         if not allowed_tgids:
             return False
         
-        # O(1) set membership check
-        return tgid in allowed_tgids
+        # O(1) set membership check with no bytes→int conversion!
+        return dst_id in allowed_tgids
     
     def _is_slot_busy(self, repeater_id: bytes, slot: int, stream_id: bytes, 
                      rf_src: bytes = None, dst_id: bytes = None) -> bool:
@@ -1779,17 +1790,19 @@ class HBProtocol(asyncio.DatagramProtocol):
                 return False
         
         # Check if this repeater is allowed to send traffic on this TS/TGID (inbound routing)
-        tgid = int.from_bytes(dst_id, 'big')
-        if not self._check_inbound_routing(repeater.repeater_id, slot, tgid):
+        if not self._check_inbound_routing(repeater.repeater_id, slot, dst_id):
             # Track denied streams to avoid logging every packet
             denial_key = (repeater.repeater_id, slot, stream_id)
             current_time = time()
             
             # Only log if this is the first packet of this denied stream
             if denial_key not in self._denied_streams:
+                tgid = int.from_bytes(dst_id, 'big')  # Convert only for logging
                 allowed_tgids = repeater.slot1_talkgroups if slot == 1 else repeater.slot2_talkgroups
+                # Convert bytes set to int list for logging display
+                allowed_display = sorted(int.from_bytes(tg, 'big') for tg in allowed_tgids) if allowed_tgids else []
                 LOGGER.warning(f'Inbound routing denied: repeater={int.from_bytes(repeater.repeater_id, "big")} '
-                              f'TS{slot}/TG{tgid} not in allowed list {sorted(allowed_tgids)}')
+                              f'TS{slot}/TG{tgid} not in allowed list {allowed_display}')
                 
                 # Add to denied cache
                 self._denied_streams[denial_key] = current_time
@@ -2395,7 +2408,6 @@ class HBProtocol(asyncio.DatagramProtocol):
             - repeater_ids (bytes) for local repeaters
             - ('outbound', name) tuples for outbound connections
         """
-        tgid = int.from_bytes(dst_id, 'big')
         target_set = set()
         
         # Calculate local repeater targets
@@ -2409,7 +2421,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 continue
             
             # Check outbound routing (TG allowed on this repeater/slot)
-            if not self._check_outbound_routing(target_repeater_id, slot, tgid):
+            if not self._check_outbound_routing(target_repeater_id, slot, dst_id):
                 continue
             
             # Check slot availability AT STREAM START (not per-packet!)
