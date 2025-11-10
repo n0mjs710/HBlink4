@@ -892,16 +892,16 @@ class HBProtocol(asyncio.DatagramProtocol):
             outbound_state.set_slot_stream(_slot, new_stream)
             
             # Emit stream_start event for dashboard (RX stream from remote)
-            self._events.emit('stream_start', {
-                'connection_type': 'outbound',
-                'connection_name': outbound_state.config.name,
-                'slot': _slot,
-                'src_id': src_id,
-                'dst_id': tgid,
-                'call_type': new_stream.call_type,
-                'stream_id': _stream_id.hex(),
-                'assumed': False  # Real RX stream
-            })
+            self._emit_stream_start(
+                'outbound',
+                outbound_state.config.name,
+                _slot,
+                src_id,
+                tgid,
+                _stream_id.hex(),
+                new_stream.call_type,
+                False  # Real RX stream
+            )
             
             LOGGER.info(f'[{outbound_state.config.name}] RX stream started on TS{_slot}: '
                        f'src={src_id}, dst={tgid}, from remote repeater {remote_repeater_id}')
@@ -916,20 +916,13 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._end_stream(current_stream, dummy_id, _slot, current_time, 'terminator')
             
             # Emit stream_end event for dashboard (outbound RX termination)
-            self._events.emit('stream_end', {
-                'connection_type': 'outbound',
-                'connection_name': outbound_state.config.name,
-                'slot': _slot,
-                'src_id': src_id,
-                'dst_id': tgid,
-                'stream_id': _stream_id.hex(),
-                'duration': current_time - current_stream.start_time,
-                'packet_count': current_stream.packet_count,
-                'end_reason': 'terminator',
-                'hang_time': CONFIG.get('global', {}).get('stream_hang_time', 10.0),
-                'call_type': current_stream.call_type,
-                'assumed': False  # Real RX stream
-            })
+            self._emit_stream_end(
+                'outbound',
+                outbound_state.config.name,
+                _slot,
+                current_stream,
+                'terminator'
+            )
         
         # Find local repeaters that should receive this traffic
         forwarded_count = 0
@@ -1137,22 +1130,157 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Emit stream_end event for repeater card display
         # Dashboard will filter TX streams (is_assumed=True) from Recent Events log
-        self._events.emit('stream_end', {
-            'repeater_id': rid_int,
-            'slot': slot,
-            'src_id': src_int,
-            'dst_id': dst_int,
-            'duration': round(duration, 2),
-            'packets': stream.packet_count,
-            'end_reason': end_reason,
-            'hang_time': hang_time,
-            'call_type': stream.call_type,
-            'is_assumed': stream.is_assumed
-        })
+        self._emit_stream_end(
+            'repeater',
+            rid_int,
+            slot,
+            stream,
+            end_reason
+        )
         
         # Decrement active calls counter if this was an assumed (TX) stream
         if stream.is_assumed:
             self._active_calls -= 1
+
+    # ================================
+    # Stream Helper Functions
+    # ================================
+    
+    def _emit_stream_start(self, connection_type: str, connection_id: str, 
+                          slot: int, src_id: int, dst_id: int, stream_id: str,
+                          call_type: str, is_assumed: bool = False) -> None:
+        """
+        Stream_start event emission for all connection types.
+        
+        Args:
+            connection_type: 'repeater' or 'outbound'
+            connection_id: repeater_id (int) or connection_name (str) 
+            slot: Slot number
+            src_id: Source DMR ID (int)
+            dst_id: Destination ID (int)  
+            stream_id: Stream ID (hex string)
+            call_type: Call type string
+            is_assumed: Whether this is an assumed (TX) stream
+        """
+        event_data = {
+            'slot': slot,
+            'src_id': src_id,
+            'dst_id': dst_id, 
+            'stream_id': stream_id,
+            'call_type': call_type,
+            'assumed': is_assumed
+        }
+        
+        if connection_type == 'repeater':
+            event_data['repeater_id'] = int(connection_id) if isinstance(connection_id, str) else connection_id
+        else:  # outbound 
+            event_data['connection_type'] = connection_type
+            event_data['connection_name'] = connection_id
+            
+        self._events.emit('stream_start', event_data)
+    
+    def _emit_stream_end(self, connection_type: str, connection_id: str,
+                        slot: int, stream: StreamState, end_reason: str) -> None:
+        """
+        Stream_end event emission for all connection types.
+        
+        Args:
+            connection_type: 'repeater' or 'outbound'
+            connection_id: repeater_id (int) or connection_name (str)
+            slot: Slot number
+            stream: StreamState object
+            end_reason: Reason for ending
+        """
+        duration = time() - stream.start_time
+        hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+        
+        event_data = {
+            'slot': slot,
+            'src_id': int.from_bytes(stream.rf_src, 'big'),
+            'dst_id': int.from_bytes(stream.dst_id, 'big'),
+            'stream_id': stream.stream_id.hex(),
+            'duration': round(duration, 2),
+            'packet_count': stream.packet_count,
+            'end_reason': end_reason,
+            'hang_time': hang_time,
+            'call_type': stream.call_type,
+            'assumed': stream.is_assumed
+        }
+        
+        if connection_type == 'repeater':
+            event_data['repeater_id'] = int(connection_id) if isinstance(connection_id, str) else connection_id
+        else:  # outbound
+            event_data['connection_type'] = connection_type
+            event_data['connection_name'] = connection_id
+            
+        self._events.emit('stream_end', event_data)
+
+    def _check_timeout(self, connection_type: str, connection_id: str,
+                      slot: int, stream: StreamState, current_time: float,
+                      stream_timeout: float, hang_time: float,
+                      synthetic_repeater_id: bytes = None) -> bool:
+        """
+        Timeout checking for all connection types.
+        
+        Args:
+            connection_type: 'repeater' or 'outbound'
+            connection_id: repeater_id (int) or connection_name (str)
+            slot: Slot number
+            stream: StreamState object
+            current_time: Current timestamp
+            stream_timeout: Stream timeout in seconds
+            hang_time: Hang time in seconds
+            synthetic_repeater_id: For outbound connections, synthetic ID for _end_stream
+            
+        Returns:
+            True if slot should be cleared, False otherwise
+        """
+        if not stream.is_active(stream_timeout):
+            if not stream.ended:
+                # Stream just ended - use unified ending logic
+                if connection_type == 'repeater':
+                    # For repeaters, connection_id is the repeater_id as bytes
+                    rid_bytes = connection_id if isinstance(connection_id, bytes) else int(connection_id).to_bytes(4, 'big')
+                else:
+                    # For outbound, use synthetic repeater_id 
+                    rid_bytes = synthetic_repeater_id
+                    
+                self._end_stream(stream, rid_bytes, slot, current_time, 'timeout')
+                return False  # Don't clear yet - entering hang time
+                
+            elif not stream.is_in_hang_time(stream_timeout, hang_time):
+                # Hang time expired - clear the slot
+                hang_duration = current_time - stream.end_time if stream.end_time else 0
+                stream_type = "TX" if stream.is_assumed else "RX"
+                
+                # Log with appropriate connection identifier
+                if connection_type == 'repeater':
+                    conn_display = f"repeater {connection_id}"
+                else:
+                    conn_display = f"outbound {connection_id}"
+                    
+                LOGGER.debug(f'{stream_type} hang time completed on {conn_display} slot {slot}: '
+                           f'src={int.from_bytes(stream.rf_src, "big")}, '
+                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                           f'hang_duration={hang_duration:.2f}s')
+                
+                # Emit hang_time_expired event with appropriate format
+                if connection_type == 'repeater':
+                    event_data = {
+                        'repeater_id': int(connection_id) if isinstance(connection_id, str) else connection_id,
+                        'slot': slot
+                    }
+                else:  # outbound
+                    event_data = {
+                        'connection_type': connection_type,
+                        'connection_name': connection_id,
+                        'slot': slot
+                    }
+                    
+                self._events.emit('hang_time_expired', event_data)
+                return True  # Clear the slot
+        
+        return False  # Stream still active or in hang time
     
     def _check_slot_timeout(self, repeater_id: bytes, repeater: RepeaterState, slot: int, 
                            stream: StreamState, current_time: float, stream_timeout: float, 
@@ -1163,28 +1291,16 @@ class HBProtocol(asyncio.DatagramProtocol):
         Returns:
             True if slot should be cleared, False otherwise
         """
-        if not stream.is_active(stream_timeout):
-            if not stream.ended:
-                # Stream just ended - use unified ending logic
-                self._end_stream(stream, repeater_id, slot, current_time, 'timeout')
-                return False  # Don't clear yet - entering hang time
-                
-            elif not stream.is_in_hang_time(stream_timeout, hang_time):
-                # Hang time expired - clear the slot
-                hang_duration = current_time - stream.end_time if stream.end_time else 0
-                stream_type = "TX" if stream.is_assumed else "RX"
-                LOGGER.debug(f'{stream_type} hang time completed on repeater {self._rid_to_int(repeater_id)} slot {slot}: '
-                           f'src={int.from_bytes(stream.rf_src, "big")}, '
-                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                           f'hang_duration={hang_duration:.2f}s')
-                # Emit hang_time_expired event so dashboard clears the slot
-                self._events.emit('hang_time_expired', {
-                    'repeater_id': self._rid_to_int(repeater_id),
-                    'slot': slot
-                })
-                return True  # Clear the slot
-        
-        return False  # Stream still active or in hang time
+        return self._check_timeout(
+            'repeater',
+            self._rid_to_int(repeater_id),
+            slot,
+            stream,
+            current_time,
+            stream_timeout,
+            hang_time,
+            repeater_id  # Pass as synthetic_repeater_id for consistency
+        )
 
     def _check_outbound_slot_timeout(self, conn_name: str, outbound: OutboundState, slot: int,
                                    stream: StreamState, current_time: float, stream_timeout: float,
@@ -1195,31 +1311,16 @@ class HBProtocol(asyncio.DatagramProtocol):
         Returns:
             True if slot should be cleared, False otherwise
         """
-        if not stream.is_active(stream_timeout):
-            if not stream.ended:
-                # Stream just ended - use unified ending logic (with synthetic repeater_id)
-                dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
-                self._end_stream(stream, dummy_id, slot, current_time, 'timeout')
-                return False  # Don't clear yet - entering hang time
-                
-            elif not stream.is_in_hang_time(stream_timeout, hang_time):
-                # Hang time expired - clear the slot
-                hang_duration = current_time - stream.end_time if stream.end_time else 0
-                stream_type = "TX" if stream.is_assumed else "RX"
-                LOGGER.debug(f'{stream_type} hang time completed on outbound {conn_name} slot {slot}: '
-                           f'src={int.from_bytes(stream.rf_src, "big")}, '
-                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                           f'hang_duration={hang_duration:.2f}s')
-                
-                # Emit hang_time_expired event for outbound (different structure than repeater)
-                self._events.emit('hang_time_expired', {
-                    'connection_type': 'outbound',
-                    'connection_name': conn_name,
-                    'slot': slot
-                })
-                return True  # Clear the slot
-        
-        return False  # Stream still active or in hang time
+        return self._check_timeout(
+            'outbound',
+            conn_name,
+            slot,
+            stream,
+            current_time,
+            stream_timeout,
+            hang_time,
+            outbound.config.radio_id.to_bytes(4, 'big')  # synthetic_repeater_id
+        )
     
     def _check_stream_timeouts(self):
         """Check for and clean up stale streams on all repeaters"""
@@ -1702,14 +1803,16 @@ class HBProtocol(asyncio.DatagramProtocol):
                        f'stream_id={stream_id.hex()}, targets={len(target_repeaters)}')
         
         # Emit stream_start event
-        self._events.emit('stream_start', {
-            'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-            'slot': slot,
-            'src_id': int.from_bytes(rf_src, 'big'),
-            'dst_id': int.from_bytes(dst_id, 'big'),
-            'stream_id': stream_id.hex(),
-            'call_type': new_stream.call_type
-        })
+        self._emit_stream_start(
+            'repeater', 
+            int.from_bytes(repeater.repeater_id, 'big'),
+            slot,
+            int.from_bytes(rf_src, 'big'),
+            int.from_bytes(dst_id, 'big'), 
+            stream_id.hex(),
+            new_stream.call_type,
+            False  # RX stream, not assumed
+        )
         
         # Update user cache (for "last heard" and private call routing)
         if self._user_cache:
@@ -2534,14 +2637,16 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Emit stream_start event for repeater card display (but marked as assumed)
             # Dashboard will filter these from Recent Events log
-            self._events.emit('stream_start', {
-                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-                'slot': slot,
-                'src_id': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
-                'call_type': 'group',
-                'is_assumed': True
-            })
+            self._emit_stream_start(
+                'repeater',
+                int.from_bytes(repeater.repeater_id, 'big'),
+                slot,
+                int.from_bytes(rf_src, 'big'),
+                int.from_bytes(dst_id, 'big'),
+                stream_id.hex(),
+                'group',
+                True  # TX assumed stream
+            )
             
             # Update active calls counter
             self._active_calls += 1
@@ -2597,16 +2702,16 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Emit stream_start event for dashboard (using outbound connection name as identifier)
             # Keep structure minimal and JSON-serializable (match repeater-style fields
             # where possible). Do NOT include UserEntry objects (callsign) here.
-            self._events.emit('stream_start', {
-                'connection_type': 'outbound',
-                'connection_name': outbound.config.name,
-                'slot': slot,
-                'rf_src': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
-                'stream_id': stream_id.hex(),
-                'call_type': 'group',
-                'is_assumed': True
-            })
+            self._emit_stream_start(
+                'outbound',
+                outbound.config.name,
+                slot,
+                int.from_bytes(rf_src, 'big'),
+                int.from_bytes(dst_id, 'big'),
+                stream_id.hex(),
+                'group',
+                True  # TX assumed stream
+            )
             
             # Increment active calls counter
             self._active_calls += 1
@@ -2622,16 +2727,13 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._end_stream(current_stream, dummy_id, slot, current_time, 'terminator')
             
             # Emit stream_end event for dashboard
-            self._events.emit('stream_end', {
-                'connection_type': 'outbound',
-                'connection_name': outbound.config.name,
-                'slot': slot,
-                'rf_src': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
-                'stream_id': stream_id.hex(),
-                'duration': current_time - current_stream.start_time,
-                'packet_count': current_stream.packet_count
-            })
+            self._emit_stream_end(
+                'outbound',
+                outbound.config.name,
+                slot,
+                current_stream,
+                'terminator'
+            )
 
 
     def _send_packet(self, data: bytes, addr: tuple):
