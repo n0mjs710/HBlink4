@@ -357,8 +357,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._user_cache = UserCache(timeout_seconds=cache_timeout)
         LOGGER.info(f'User cache initialized with {cache_timeout}s timeout')
         
-        # Cache for repeater_id bytes to int conversions (for logging efficiency)
-        self._rid_cache: Dict[bytes, int] = {}
+        # No conversion caching - simple int.from_bytes() is fast enough
+        # and avoids unbounded cache growth (memory leak prevention)
     
     # ========== ADDRESS VALIDATION METHODS ==========
     
@@ -384,14 +384,15 @@ class HBProtocol(asyncio.DatagramProtocol):
         
     # ========== UTILITY HELPER METHODS ==========
     
-    def _rid_to_int(self, repeater_id: bytes) -> int:
-        """
-        Convert repeater_id bytes to int with caching.
-        Used for logging and event emission efficiency.
-        """
-        if repeater_id not in self._rid_cache:
-            self._rid_cache[repeater_id] = int.from_bytes(repeater_id, 'big')
-        return self._rid_cache[repeater_id]
+    @staticmethod
+    def _rid_to_int(repeater_id: bytes) -> int:
+        """Convert repeater ID bytes to int (no caching - prevents memory leaks)."""
+        return int.from_bytes(repeater_id, 'big')
+    
+    @staticmethod
+    def _bytes_to_int(value: bytes) -> int:
+        """Simple bytes to int conversion for logging (no caching overhead)."""
+        return int.from_bytes(value, 'big')
     
 
     
@@ -1707,8 +1708,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         """
         # Check if this is a unit/private call (call_type_bit == 1)
         if call_type_bit == 1:
-            LOGGER.info(f'UNIT CALL received on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                       f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
+            LOGGER.info(f'UNIT CALL received on repeater {self._rid_to_int(repeater.repeater_id)} slot {slot}: '
+                       f'src={self._bytes_to_int(rf_src)}, dst={self._bytes_to_int(dst_id)}, '
                        f'stream_id={stream_id.hex()} [NOT ROUTED - unit call handling not yet implemented]')
             return False  # Reject the stream - don't process unit calls yet
         
@@ -1757,13 +1758,13 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # Same user can always continue (any talkgroup)
                 if current_stream.rf_src == rf_src:
                     if current_stream.dst_id == dst_id:
-                        LOGGER.info(f'Same user continuing conversation on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
-                                   f'during hang time: src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}')
+                        LOGGER.info(f'Same user continuing conversation on repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
+                                   f'during hang time: src={self._bytes_to_int(rf_src)}, dst={self._bytes_to_int(dst_id)}')
                     else:
-                        LOGGER.info(f'Same user switching talkgroup on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
-                                   f'during hang time: src={int.from_bytes(rf_src, "big")}, '
-                                   f'old_dst={int.from_bytes(current_stream.dst_id, "big")}, '
-                                   f'new_dst={int.from_bytes(dst_id, "big")}')
+                        LOGGER.info(f'Same user switching talkgroup on repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
+                                   f'during hang time: src={self._bytes_to_int(rf_src)}, '
+                                   f'old_dst={self._bytes_to_int(current_stream.dst_id)}, '
+                                   f'new_dst={self._bytes_to_int(dst_id)}')
                         fast_tg_switch = True  # Mark as fast talkgroup switch
                     # Allow by falling through to create new stream
                 # Different user - check if same talkgroup
@@ -1947,10 +1948,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Remove from active repeaters
             del self._repeaters[repeater_id]
             
-            # Clean up the cached repeater_id conversion to prevent memory leak
-            # (repeater_ids are bytes objects that won't be GC'd otherwise)
-            if repeater_id in self._rid_cache:
-                del self._rid_cache[repeater_id]
+            # No cache cleanup needed - using direct conversions to prevent memory leaks
             
 
     def _handle_repeater_login(self, repeater_id: bytes, addr: PeerAddress) -> None:
