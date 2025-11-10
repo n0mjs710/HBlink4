@@ -44,6 +44,7 @@ try:
         safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
         cleanup_old_logs, setup_logging, PeerAddress
     )
+    from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
@@ -57,6 +58,7 @@ except ImportError:
         safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
         cleanup_old_logs, setup_logging, PeerAddress
     )
+    from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
 
 from dataclasses import dataclass, field
 
@@ -2821,59 +2823,16 @@ class HBProtocol(asyncio.DatagramProtocol):
 
 # Logging functions moved to utils.py
 
+# Configuration functions moved to config.py
+
 def load_config(config_file: str):
-    """Load JSON configuration file"""
-    try:
-        with open(config_file, 'r') as f:
-            global CONFIG
-            CONFIG = json.load(f)
-    except Exception as e:
-        LOGGER.error(f'Error loading configuration: {e}')
-        sys.exit(1)
+    """Wrapper for config module load_config - maintains global CONFIG"""
+    global CONFIG
+    CONFIG = load_config_func(config_file, LOGGER)
 
 def parse_outbound_connections() -> List[OutboundConnectionConfig]:
-    """Parse outbound connections from config"""
-    outbound_configs = []
-    
-    raw_outbounds = CONFIG.get('outbound_connections', [])
-    if not raw_outbounds:
-        LOGGER.info('No outbound connections configured')
-        return outbound_configs
-    
-    for idx, conn_dict in enumerate(raw_outbounds):
-        try:
-            config = OutboundConnectionConfig(
-                enabled=conn_dict.get('enabled', True),
-                name=conn_dict['name'],
-                address=conn_dict['address'],
-                port=conn_dict['port'],
-                radio_id=conn_dict['radio_id'],
-                passphrase=conn_dict.get('passphrase', conn_dict.get('password', '')),  # Support both keys for backward compatibility
-                options=conn_dict.get('options', ''),
-                callsign=conn_dict.get('callsign', ''),
-                rx_frequency=conn_dict.get('rx_frequency', 0),
-                tx_frequency=conn_dict.get('tx_frequency', 0),
-                power=conn_dict.get('power', 0),
-                colorcode=conn_dict.get('colorcode', 1),
-                latitude=conn_dict.get('latitude', 0.0),
-                longitude=conn_dict.get('longitude', 0.0),
-                height=conn_dict.get('height', 0),
-                location=conn_dict.get('location', ''),
-                description=conn_dict.get('description', ''),
-                url=conn_dict.get('url', ''),
-                software_id=conn_dict.get('software_id', 'HBlink4'),
-                package_id=conn_dict.get('package_id', 'HBlink4 v2.0')
-            )
-            outbound_configs.append(config)
-            LOGGER.info(f'✓ Loaded outbound connection: {config.name} → {config.address}:{config.port}')
-        except KeyError as e:
-            LOGGER.error(f'✗ Outbound connection #{idx} missing required field: {e}')
-            sys.exit(1)
-        except ValueError as e:
-            LOGGER.error(f'✗ Outbound connection #{idx} validation error: {e}')
-            sys.exit(1)
-    
-    return outbound_configs
+    """Wrapper for config module parse_outbound_connections"""
+    return parse_outbound_func(CONFIG, LOGGER)
 
 async def async_main():
     """Main async entry point"""
