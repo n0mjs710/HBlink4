@@ -413,10 +413,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return []
         else:
-            # Return hex strings for TGs so the dashboard (separate process)
-            # can convert to whatever form it prefers (int or display string).
-            # Using hex avoids JSON/binary issues and keeps core hot-path cheap.
-            return sorted(tg_bytes.hex() for tg_bytes in tg_set)
+            # Convert bytes back to integers for JSON (most efficient approach)
+            return sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set)
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
