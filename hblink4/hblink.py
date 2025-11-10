@@ -1207,7 +1207,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             'dst_id': int.from_bytes(dst_id, 'big'), 
             'stream_id': stream_id.hex(),
             'call_type': call_type,
-            'assumed': is_assumed
+            'is_assumed': is_assumed
         }
         
         if connection_type == 'repeater':
@@ -1243,7 +1243,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             'end_reason': end_reason,
             'hang_time': hang_time,
             'call_type': stream.call_type,
-            'assumed': stream.is_assumed
+            'is_assumed': stream.is_assumed
         }
         
         if connection_type == 'repeater':
