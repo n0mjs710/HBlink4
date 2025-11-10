@@ -55,6 +55,18 @@ PeerAddress = Union[Tuple[str, int], Tuple[str, int, int, int]]
 
 from dataclasses import dataclass, field
 
+def safe_decode_bytes(data: bytes) -> str:
+    """
+    Safely decode bytes to UTF-8 string with error handling.
+    Used for repeater metadata fields that may contain invalid UTF-8.
+    
+    Returns:
+        Decoded and stripped string, or empty string if data is empty/None
+    """
+    if not data:
+        return ''
+    return data.decode('utf-8', errors='ignore').strip()
+
 @dataclass
 class OutboundConnectionConfig:
     """Configuration for an outbound connection to another server"""
@@ -235,31 +247,31 @@ class RepeaterState:
     def get_callsign_str(self) -> str:
         """Get decoded callsign string (cached)"""
         if not self._callsign_str and self.callsign:
-            self._callsign_str = self.callsign.decode('utf-8', errors='ignore').strip()
+            self._callsign_str = safe_decode_bytes(self.callsign)
         return self._callsign_str or 'UNKNOWN'
     
     def get_location_str(self) -> str:
         """Get decoded location string (cached)"""
         if not self._location_str and self.location:
-            self._location_str = self.location.decode('utf-8', errors='ignore').strip()
+            self._location_str = safe_decode_bytes(self.location)
         return self._location_str or 'Unknown'
     
     def get_rx_freq_str(self) -> str:
         """Get decoded RX frequency string (cached)"""
         if not self._rx_freq_str and self.rx_freq:
-            self._rx_freq_str = self.rx_freq.decode('utf-8', errors='ignore').strip()
+            self._rx_freq_str = safe_decode_bytes(self.rx_freq)
         return self._rx_freq_str
     
     def get_tx_freq_str(self) -> str:
         """Get decoded TX frequency string (cached)"""
         if not self._tx_freq_str and self.tx_freq:
-            self._tx_freq_str = self.tx_freq.decode('utf-8', errors='ignore').strip()
+            self._tx_freq_str = safe_decode_bytes(self.tx_freq)
         return self._tx_freq_str
     
     def get_colorcode_str(self) -> str:
         """Get decoded color code string (cached)"""
         if not self._colorcode_str and self.colorcode:
-            self._colorcode_str = self.colorcode.decode('utf-8', errors='ignore').strip()
+            self._colorcode_str = safe_decode_bytes(self.colorcode)
         return self._colorcode_str
     
     def get_slot_stream(self, slot: int) -> Optional[StreamState]:
@@ -356,6 +368,13 @@ class HBProtocol(asyncio.DatagramProtocol):
     def _addr_matches(self, addr1: PeerAddress, addr2: PeerAddress) -> bool:
         """Compare two addresses, normalizing for IPv4/IPv6 differences"""
         return self._normalize_addr(addr1) == self._normalize_addr(addr2)
+    
+    def _addr_matches_repeater(self, repeater: RepeaterState, addr: PeerAddress) -> bool:
+        """
+        Optimized address comparison for repeater validation.
+        RepeaterState.sockaddr is already normalized, so we only normalize the incoming address.
+        """
+        return repeater.sockaddr == self._normalize_addr(addr)
         
     # ========== HELPER METHODS ==========
     
@@ -384,7 +403,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return []
         else:
-            return sorted(list(tg_set))
+            return sorted(tg_set)
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
@@ -835,24 +854,25 @@ class HBProtocol(asyncio.DatagramProtocol):
             data: Complete DMRD packet from outbound server
             outbound_state: State of the outbound connection
         """
-        if len(data) < 55:
+        # Parse packet using unified parser
+        packet = self._parse_dmr_packet(data)
+        if not packet:
             LOGGER.warning(f'[{outbound_state.config.name}] Invalid DMRD packet length: {len(data)}')
             return
         
-        # Extract packet information (same format as local repeater packets)
-        _seq = data[4]
-        _rf_src = data[5:8]
-        _dst_id = data[8:11]
-        _repeater_id = data[11:15]  # Source repeater ID from remote server
-        _bits = data[15]
-        _slot = 2 if (_bits & 0x80) else 1
-        _call_type = (_bits & 0x40) >> 6
-        _frame_type = (_bits & 0x30) >> 4
-        _stream_id = data[16:20]
+        # Extract fields from parsed packet
+        _seq = packet['seq']
+        _rf_src = packet['rf_src']
+        _dst_id = packet['dst_id']
+        _repeater_id = packet['repeater_id']  # Source repeater ID from remote server
+        _slot = packet['slot']
+        _call_type = packet['call_type']
+        _frame_type = packet['frame_type']
+        _stream_id = packet['stream_id']
         
-        tgid = int.from_bytes(_dst_id, 'big')
-        src_id = int.from_bytes(_rf_src, 'big')
-        remote_repeater_id = int.from_bytes(_repeater_id, 'big')
+        tgid = packet['dst_id_int']
+        src_id = packet['src_id_int']
+        remote_repeater_id = packet['repeater_id_int']
         _is_terminator = self._is_dmr_terminator(data, _frame_type)
         
         # Check if this talkgroup is allowed on this outbound connection
@@ -1145,6 +1165,44 @@ class HBProtocol(asyncio.DatagramProtocol):
     # ================================
     # Stream Helper Functions
     # ================================
+    
+    def _parse_dmr_packet(self, data: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Parse DMR packet fields into a dictionary.
+        Hot path function - used for every voice packet.
+        
+        Returns:
+            Dict with parsed fields or None if invalid packet
+        """
+        if len(data) < 55:
+            return None
+            
+        return {
+            'seq': data[4],
+            'rf_src': data[5:8],
+            'dst_id': data[8:11],
+            'repeater_id': data[11:15],
+            'bits': data[15],
+            'stream_id': data[16:20],
+            'slot': 2 if (data[15] & 0x80) else 1,
+            'call_type': (data[15] & 0x40) >> 6,
+            'frame_type': (data[15] & 0x30) >> 4,
+            'src_id_int': int.from_bytes(data[5:8], 'big'),
+            'dst_id_int': int.from_bytes(data[8:11], 'big'),
+            'repeater_id_int': int.from_bytes(data[11:15], 'big')
+        }
+    
+    def _safe_decode_bytes(self, data: bytes) -> str:
+        """
+        Safely decode bytes to UTF-8 string with error handling.
+        Used for repeater metadata fields that may contain invalid UTF-8.
+        
+        Returns:
+            Decoded and stripped string, or empty string if data is empty/None
+        """
+        if not data:
+            return ''
+        return data.decode('utf-8', errors='ignore').strip()
     
     def _emit_stream_start(self, connection_type: str, connection_id: str, 
                           slot: int, src_id: int, dst_id: int, stream_id: str,
@@ -1567,11 +1625,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 else:
                     repeater_id = data[4:8]
                 
-            if repeater_id:
-                # Per-packet logging - only enable for heavy troubleshooting
-                #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={self._rid_to_int(repeater_id)}, addr={addr}')
-                pass  # Keep pass for valid if statement syntax
-            else:
+            if not repeater_id:
                 # Unknown packet type - log full details for investigation
                 try:
                     cmd_str = _command.decode('utf-8', errors='replace')
@@ -1583,23 +1637,26 @@ class HBProtocol(asyncio.DatagramProtocol):
                 LOGGER.warning(f'    Packet length: {len(data)} bytes')
                 return
 
+            # Per-packet logging - only enable for heavy troubleshooting
+            #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={self._rid_to_int(repeater_id)}, addr={addr}')
+
+            # Get repeater state once (for both NAK check and ping update)
+            repeater = self._repeaters.get(repeater_id)
+            
             # If repeater is not registered and this is not a login or auth packet, send NAK and return
-            if repeater_id and repeater_id not in self._repeaters:
-                if _command not in [RPTL, RPTK]:
-                    self._send_nak(repeater_id, addr, reason="Repeater not registered")
-                    return
+            if not repeater and _command not in [RPTL, RPTK]:
+                self._send_nak(repeater_id, addr, reason="Repeater not registered")
+                return
 
             # Update ping time for connected repeaters
-            if repeater_id and repeater_id in self._repeaters:
-                repeater = self._repeaters[repeater_id]
-                if repeater.connection_state == 'connected':
-                    repeater.last_ping = time()
-                    # If missed_pings is being cleared, notify dashboard
-                    if repeater.missed_pings > 0:
-                        repeater.missed_pings = 0
-                        self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
-                    else:
-                        repeater.missed_pings = 0
+            if repeater and repeater.connection_state == 'connected':
+                repeater.last_ping = time()
+                # If missed_pings is being cleared, notify dashboard
+                if repeater.missed_pings > 0:
+                    repeater.missed_pings = 0
+                    self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
+                else:
+                    repeater.missed_pings = 0
 
             # Process the packet
             if _command == DMRD:
@@ -1655,7 +1712,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'Validating repeater {self._rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
-        if not self._addr_matches(repeater.sockaddr, addr):
+        if not self._addr_matches_repeater(repeater, addr):
             LOGGER.warning(f'Message from wrong IP for repeater {self._rid_to_int(repeater_id)}')
             self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
             return None
@@ -1929,9 +1986,9 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_nak(repeater_id, addr, reason="ID reserved for outbound connection")
             return
         
-        if repeater_id in self._repeaters:
-            repeater = self._repeaters[repeater_id]
-            if not self._addr_matches(repeater.sockaddr, addr):
+        repeater = self._repeaters.get(repeater_id)
+        if repeater:
+            if not self._addr_matches_repeater(repeater, addr):
                 LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
                 # Remove the old registration first
                 old_addr = repeater.sockaddr
@@ -2112,15 +2169,15 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Emit detailed info event
         self._events.emit('repeater_details', {
             'repeater_id': rid_int,
-            'latitude': repeater.latitude.decode('utf-8', errors='ignore').strip() if repeater.latitude else '',
-            'longitude': repeater.longitude.decode('utf-8', errors='ignore').strip() if repeater.longitude else '',
-            'height': repeater.height.decode('utf-8', errors='ignore').strip() if repeater.height else '',
-            'tx_power': repeater.tx_power.decode('utf-8', errors='ignore').strip() if repeater.tx_power else '',
-            'description': repeater.description.decode('utf-8', errors='ignore').strip() if repeater.description else '',
-            'url': repeater.url.decode('utf-8', errors='ignore').strip() if repeater.url else '',
-            'software_id': repeater.software_id.decode('utf-8', errors='ignore').strip() if repeater.software_id else '',
-            'package_id': repeater.package_id.decode('utf-8', errors='ignore').strip() if repeater.package_id else '',
-            'slots': repeater.slots.decode('utf-8', errors='ignore').strip() if repeater.slots else '',
+            'latitude': self._safe_decode_bytes(repeater.latitude),
+            'longitude': self._safe_decode_bytes(repeater.longitude),
+            'height': self._safe_decode_bytes(repeater.height),
+            'tx_power': self._safe_decode_bytes(repeater.tx_power),
+            'description': self._safe_decode_bytes(repeater.description),
+            'url': self._safe_decode_bytes(repeater.url),
+            'software_id': self._safe_decode_bytes(repeater.software_id),
+            'package_id': self._safe_decode_bytes(repeater.package_id),
+            'slots': self._safe_decode_bytes(repeater.slots),
             'matched_pattern': pattern_name,
             'pattern_description': pattern_desc,
             'match_reason': match_reason
@@ -2523,25 +2580,26 @@ class HBProtocol(asyncio.DatagramProtocol):
     
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
-        if len(data) < 55:
+        # Parse packet using unified parser
+        packet = self._parse_dmr_packet(data)
+        if not packet:
             LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]} - length {len(data)} < 55')
             return
             
-        repeater_id = data[11:15]
+        repeater_id = packet['repeater_id']
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'DMR data from repeater {self._rid_to_int(repeater_id)} in wrong state')
+            LOGGER.warning(f'DMR data from repeater {packet["repeater_id_int"]} in wrong state')
             return
             
-        # Extract packet information
-        _seq = data[4]
-        _rf_src = data[5:8]
-        _dst_id = data[8:11]
-        _bits = data[15]
-        _slot = 2 if (_bits & 0x80) else 1
-        _call_type = (_bits & 0x40) >> 6  # Bit 6: 1 = private/unit, 0 = group
-        _frame_type = (_bits & 0x30) >> 4  # 0 = voice, 1 = voice sync, 2 = data sync, 3 = unused
-        _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
+        # Extract fields from parsed packet
+        _seq = packet['seq']
+        _rf_src = packet['rf_src']
+        _dst_id = packet['dst_id']
+        _slot = packet['slot']
+        _call_type = packet['call_type']
+        _frame_type = packet['frame_type']
+        _stream_id = packet['stream_id']
         
         # Check if this is a stream terminator (immediate end detection)
         # Note: _is_dmr_terminator() checks packet header flags for immediate detection
