@@ -45,6 +45,10 @@ try:
         cleanup_old_logs, setup_logging, PeerAddress
     )
     from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
+    from .protocol import (
+        parse_dmr_packet, is_dmr_terminator, validate_packet_length,
+        extract_packet_command, get_call_type_name, format_id_display
+    )
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
@@ -59,6 +63,10 @@ except ImportError:
         cleanup_old_logs, setup_logging, PeerAddress
     )
     from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
+    from protocol import (
+        parse_dmr_packet, is_dmr_terminator, validate_packet_length,
+        extract_packet_command, get_call_type_name, format_id_display
+    )
 
 from dataclasses import dataclass, field
 
@@ -2125,15 +2133,15 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Emit detailed info event
         self._events.emit('repeater_details', {
             'repeater_id': rid_int,
-            'latitude': self._safe_decode_bytes(repeater.latitude),
-            'longitude': self._safe_decode_bytes(repeater.longitude),
-            'height': self._safe_decode_bytes(repeater.height),
-            'tx_power': self._safe_decode_bytes(repeater.tx_power),
-            'description': self._safe_decode_bytes(repeater.description),
-            'url': self._safe_decode_bytes(repeater.url),
-            'software_id': self._safe_decode_bytes(repeater.software_id),
-            'package_id': self._safe_decode_bytes(repeater.package_id),
-            'slots': self._safe_decode_bytes(repeater.slots),
+            'latitude': safe_decode_bytes(repeater.latitude),
+            'longitude': safe_decode_bytes(repeater.longitude),
+            'height': safe_decode_bytes(repeater.height),
+            'tx_power': safe_decode_bytes(repeater.tx_power),
+            'description': safe_decode_bytes(repeater.description),
+            'url': safe_decode_bytes(repeater.url),
+            'software_id': safe_decode_bytes(repeater.software_id),
+            'package_id': safe_decode_bytes(repeater.package_id),
+            'slots': safe_decode_bytes(repeater.slots),
             'matched_pattern': pattern_name,
             'pattern_description': pattern_desc,
             'match_reason': match_reason
@@ -2332,39 +2340,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
     def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
-        """
-        Determine if a DMR packet is a stream terminator by checking the frame type.
-        
-        In the Homebrew protocol, terminators are indicated in byte 15 of the packet:
-        - Bits 4-5 (_frame_type): Must be 0x2 (HBPF_DATA_SYNC - data sync frame)
-        - Bits 0-3 (_dtype_vseq): Must be 0x2 (HBPF_SLT_VTERM - voice terminator)
-        
-        This is much simpler than ETSI sync pattern extraction, as the Homebrew
-        protocol explicitly flags terminator frames in the packet header.
-        
-        Args:
-            data: The full DMRD packet (including 20-byte Homebrew header + 33-byte DMR data)
-            frame_type: The frame type extracted from byte 15, bits 4-5
-                       (0 = voice, 1 = voice sync, 2 = data sync)
-        
-        Returns:
-            bool: True if this is a terminator frame, False otherwise
-        
-        Note:
-            This enables immediate terminator detection (~60ms latency) instead of
-            timeout-based detection (~200ms). HBlink3 uses this same method.
-        """
-        # Check packet length
-        if len(data) < 16:
-            return False
-            
-        # Extract the data type / voice sequence from bits 0-3 of byte 15
-        _bits = data[15]
-        _dtype_vseq = _bits & 0xF
-        
-        # Terminator: frame_type == 2 (DATA_SYNC) and dtype_vseq == 2 (SLT_VTERM)
-        # Constants: HBPF_DATA_SYNC = 0x2, HBPF_SLT_VTERM = 0x2
-        return frame_type == 0x2 and _dtype_vseq == 0x2
+        """DMR terminator detection - delegated to protocol module"""
+        return is_dmr_terminator(data, frame_type)
     
     def _calculate_stream_targets(self, source_repeater_id: bytes, slot: int, 
                                   dst_id: bytes, stream_id: bytes, rf_src: bytes) -> set:
@@ -2542,42 +2519,10 @@ class HBProtocol(asyncio.DatagramProtocol):
     # ================================
     
     def _parse_dmr_packet(self, data: bytes) -> Optional[Dict[str, Any]]:
-        """
-        Parse DMR packet fields into a dictionary.
-        Hot path function - used for every voice packet.
-        
-        Returns:
-            Dict with parsed fields or None if invalid packet
-        """
-        if len(data) < 55:
-            return None
-            
-        return {
-            'seq': data[4],
-            'rf_src': data[5:8],
-            'dst_id': data[8:11],
-            'repeater_id': data[11:15],
-            'bits': data[15],
-            'stream_id': data[16:20],
-            'slot': 2 if (data[15] & 0x80) else 1,
-            'call_type': (data[15] & 0x40) >> 6,
-            'frame_type': (data[15] & 0x30) >> 4,
-            'src_id_int': int.from_bytes(data[5:8], 'big'),
-            'dst_id_int': int.from_bytes(data[8:11], 'big'),
-            'repeater_id_int': int.from_bytes(data[11:15], 'big')
-        }
+        """Parse DMR packet - delegated to protocol module"""
+        return parse_dmr_packet(data)
     
-    def _safe_decode_bytes(self, data: bytes) -> str:
-        """
-        Safely decode bytes to UTF-8 string with error handling.
-        Used for repeater metadata fields that may contain invalid UTF-8.
-        
-        Returns:
-            Decoded and stripped string, or empty string if data is empty/None
-        """
-        if not data:
-            return ''
-        return data.decode('utf-8', errors='ignore').strip()
+# _safe_decode_bytes moved to utils.py
 
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
