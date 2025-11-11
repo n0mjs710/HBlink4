@@ -127,7 +127,7 @@ def validate_config(config: Dict[str, Any], logger: logging.Logger = None) -> bo
         True if configuration is valid, False otherwise
     """
     required_sections = ['global']
-    required_global_fields = ['bind_ipv4', 'bind_port']
+    required_global_fields = ['bind_ipv4', 'port_ipv4']
     
     # Check required sections
     for section in required_sections:
