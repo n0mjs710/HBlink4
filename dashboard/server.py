@@ -698,9 +698,12 @@ class EventReceiver:
             }
             
             # Count different stream types
-            if not data.get('is_assumed', False) and connection_type != 'outbound':
-                # RX streams: actual traffic being received from repeaters (not outbound TX)
+            logger.debug(f"Stream conditions: is_assumed={data.get('is_assumed', False)}, connection_type={connection_type}, src_id={src_id}")
+            if not data.get('is_assumed', False):
+                # RX streams: actual traffic being received (from repeaters OR outbound connections)
+                # Only exclude TX streams (is_assumed=True)
                 state.stats['total_calls_today'] += 1
+                logger.debug(f"Adding to last_heard: src_id={src_id}, callsign={callsign}")
                 
                 # Add/update user in last_heard immediately with "active" status
                 # Only for actual received calls, not retransmitted calls
