@@ -9,7 +9,15 @@ import logging
 import sys
 from typing import List, Dict, Any
 
-# We'll import OutboundConnectionConfig when needed to avoid circular imports
+# Import OutboundConnectionConfig from models module
+try:
+    from .models import OutboundConnectionConfig
+except ImportError:
+    # Fallback for when called from outside package
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from models import OutboundConnectionConfig
 
 
 def load_config(config_file: str, logger: logging.Logger = None) -> Dict[str, Any]:
@@ -54,15 +62,7 @@ def parse_outbound_connections(config: Dict[str, Any], logger: logging.Logger = 
     Raises:
         SystemExit: If required configuration fields are missing or invalid
     """
-    # Import here to avoid circular imports
-    try:
-        from .hblink import OutboundConnectionConfig
-    except ImportError:
-        # Fallback for when called from outside package
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from hblink import OutboundConnectionConfig
+    # OutboundConnectionConfig is now imported at module level
     
     outbound_configs = []
     
