@@ -716,6 +716,33 @@
                 font-size: 14px;
             }
         }
+        
+        /* Outbound connection status styles */
+        .status-connected { color: #34d399; font-weight: 600; }
+        .status-warning { color: #fbbf24; font-weight: 600; }
+        .status-error { color: #f87171; font-weight: 600; }
+        .status-disconnected { color: #94a3b8; font-weight: 600; }
+        
+        .outbound-header-connected {
+            font-size: 16px;
+            font-weight: 600;
+            color: #38bdf8;
+            margin-bottom: 4px;
+        }
+        
+        .outbound-header-warning {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #fbbf24;
+        }
+        
+        .outbound-header-disconnected {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #475569;  /* Dark blue/gray for disconnected/connecting */
+        }
     </style>
 </head>
 <body>
@@ -732,7 +759,7 @@
                 <a class="network-info-btn" id="networkInfoBtn" style="display: none;" target="_blank">🌐 Network Info</a>
                 <div class="connection-status clickable warning" id="wsStatus" title="Connecting to dashboard server...">Connecting...</div>
                 <div class="connection-status warning" id="hblinkStatus" title="Waiting for connection status...">Unknown</div>
-                <div class="audio-toggle disabled" id="audioToggle" title="Click to enable audio notifications">🔇 Audio Off</div>
+                <div class="audio-toggle disabled" id="audioToggle" title="Click to enable audio notifications">🔇 Notifications</div>
             </div>
         </header>
         
@@ -774,7 +801,7 @@
                         <tr style="background-color: #374151; color: white;">
                             <th style="padding: 8px; text-align: left;">Radio ID</th>
                             <th style="padding: 8px; text-align: left;">Callsign/Alias</th>
-                            <th style="padding: 8px; text-align: left;">Repeater</th>
+                            <th style="padding: 8px; text-align: left;">Source</th>
                             <th style="padding: 8px; text-align: center;">Slot</th>
                             <th style="padding: 8px; text-align: left;">Talkgroup</th>
                             <th style="padding: 8px; text-align: left;">Last Heard</th>
@@ -797,6 +824,14 @@
             <div id="repeatersContainer"></div>
         </div>
         
+        <!-- Outbound Connections -->
+        <div id="outboundSection" style="display: none;">
+            <h2 class="section-header" style="margin-top: 20px;">Outbound Connections <span id="outboundCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <div class="card">
+                <div id="outboundsContainer"></div>
+            </div>
+        </div>
+        
         <div class="card" style="margin-top: 15px;">
             <h2>Recent Events</h2>
             <div id="eventsLog"></div>
@@ -809,6 +844,7 @@
         let state = {
             repeaters: [],
             repeater_details: {},  // Detailed info for each repeater
+            outbounds: [],  // Outbound connections
             streams: [],
             events: [],
             last_heard: [],
@@ -829,11 +865,11 @@
             const toggle = document.getElementById('audioToggle');
             if (audioEnabled) {
                 toggle.className = 'audio-toggle enabled';
-                toggle.textContent = '🔊 Audio On';
+                toggle.textContent = '🔊 Notifications';
                 toggle.title = 'Click to disable audio notifications';
             } else {
                 toggle.className = 'audio-toggle disabled';
-                toggle.textContent = '🔇 Audio Off';
+                toggle.textContent = '🔇 Notifications';
                 toggle.title = 'Click to enable audio notifications';
             }
         }
@@ -927,12 +963,10 @@
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
             
             ws.onopen = () => {
-                console.log('WebSocket connected');
                 updateWebSocketStatus(true);
             };
             
             ws.onclose = () => {
-                console.log('WebSocket disconnected');
                 updateWebSocketStatus(false);
                 // When we lose WebSocket, we also can't know HBlink status
                 updateHBlinkStatus(false);
@@ -961,6 +995,7 @@
                 
                 if (data.type === 'initial_state') {
                     state.repeaters = data.data.repeaters;
+                    state.outbounds = data.data.outbounds || [];
                     state.streams = data.data.streams;
                     state.events = data.data.events;
                     state.stats = data.data.stats;
@@ -970,19 +1005,18 @@
                     updateHBlinkStatus(data.data.hblink_connected || false);
                     
                     updateRepeaters(state.repeaters);
+                    updateOutbounds(state.outbounds);
                     updateStreams(state.streams);
                     updateEvents(state.events);
                     updateStats(state.stats, state.repeaters, state.streams);
                     updateLastHeard(state.last_heard);
                 } else if (data.type === 'hblink_status') {
                     // HBlink4 connection status changed
-                    console.log('HBlink4 connection status:', data.data.connected ? 'connected' : 'disconnected');
                     updateHBlinkStatus(data.data.connected);
                 } else if (data.type === 'stats_reset') {
                     // Midnight reset - update stats immediately
                     state.stats = data.data;
                     updateStats(state.stats, state.repeaters, state.streams);
-                    console.log('📊 Daily stats reset at midnight');
                 } else {
                     // Process event immediately for real-time updates
                     processEventUpdate(data);
@@ -1254,7 +1288,6 @@
                 el.title = 'DMR Server: Dashboard is not connected to the DMR server';
                 
                 // Clear stale data from display
-                console.log('🧹 Clearing stale data - HBlink4 disconnected');
                 state.repeaters = {};
                 state.streams = [];
                 
@@ -1543,11 +1576,158 @@
             `;
         }
         
+        function updateOutbounds(outbounds) {
+            const container = document.getElementById('outboundsContainer');
+            const countElement = document.getElementById('outboundCount');
+            const outboundSection = document.getElementById('outboundSection');
+            
+            // outbounds is always an array in state
+            const outboundList = outbounds || [];
+            
+            // Hide entire section if no outbound connections configured
+            if (outboundList.length === 0) {
+                if (outboundSection) {
+                    outboundSection.style.display = 'none';
+                }
+                return;
+            }
+            
+            // Show section if there are outbound connections
+            if (outboundSection) {
+                outboundSection.style.display = 'block';
+            }
+            
+            // Update the count in the header
+            const connectedCount = outboundList.filter(o => o.status === 'connected').length;
+            if (countElement) {
+                countElement.textContent = connectedCount > 0 ? `(${connectedCount})` : '';
+            }
+            
+            // Get streams data to show on slots
+            const streams = state.streams || [];
+
+            container.innerHTML = outboundList.map(o => {
+                // Color coding per design doc - same as repeater headers (colored text, no background)
+                // - Cyan text: Connected and healthy
+                // - Yellow text: Connected but missed ACKs
+                // - Dark gray text: Disconnected or connecting
+                
+                let headerClass = 'outbound-header-connected';
+                
+                if (o.status === 'connected') {
+                    if (o.missed_acks > 0) {
+                        headerClass = 'outbound-header-warning';  // Yellow text for missed ACKs
+                    } else {
+                        headerClass = 'outbound-header-connected';  // Cyan text
+                    }
+                } else if (o.status === 'connecting' || o.status === 'disconnected') {
+                    headerClass = 'outbound-header-disconnected';  // Dark gray text
+                }
+                
+                const connectedDuration = (o.status === 'connected' && o.connected_at) ? 
+                    formatDuration(Date.now() / 1000 - o.connected_at) : '—';
+                
+                // Status text for the first row
+                let statusText = '';
+                if (o.status === 'connecting') {
+                    statusText = 'Connecting...';
+                } else if (o.status === 'disconnected' && o.disconnect_reason) {
+                    statusText = o.disconnect_reason;
+                } else if (o.status === 'error' && o.error_message) {
+                    statusText = o.error_message;
+                } else if (o.status === 'connected') {
+                    statusText = `${o.remote_address}:${o.remote_port}`;
+                } else {
+                    statusText = `${o.remote_address}:${o.remote_port}`;
+                }
+                
+                // Find active streams for this outbound connection (by connection_name.slot key)
+                const slot1Stream = streams.find(s => 
+                    (s.connection_type === 'outbound' || (s.connection_name && s.connection_name === o.connection_name)) &&
+                    s.connection_name === o.connection_name && 
+                    Number(s.slot) === 1 && 
+                    (s.status === 'active' || s.status === 'hang_time')
+                ) || null;
+                const slot2Stream = streams.find(s => 
+                    (s.connection_type === 'outbound' || (s.connection_name && s.connection_name === o.connection_name)) &&
+                    s.connection_name === o.connection_name && 
+                    Number(s.slot) === 2 && 
+                    (s.status === 'active' || s.status === 'hang_time')
+                ) || null;
+                
+                return `
+                    <div class="repeater-card" data-outbound-name="${o.connection_name}">
+                        <div class="repeater-info">
+                            <div class="${headerClass}">
+                                🔗 ${o.connection_name} (${o.radio_id})
+                            </div>
+                            <div class="repeater-meta">
+                                <!-- Row 1: Status/Server / (empty) / TS1 -->
+                                <div class="repeater-meta-item" ${o.status === 'error' ? 'style="color: #f87171;"' : ''}>
+                                    ${statusText}
+                                </div>
+                                <div></div>
+                                ${o.slot1_talkgroups === null ? `
+                                <div class="repeater-meta-item" title="All talkgroups allowed">
+                                    <span class="repeater-meta-label">TS1 TGs:</span>
+                                    <span>All</span>
+                                </div>
+                                ` : Array.isArray(o.slot1_talkgroups) && o.slot1_talkgroups.length === 0 ? `
+                                <div class="repeater-meta-item" title="All talkgroups denied">
+                                    <span class="repeater-meta-label">TS1 TGs:</span>
+                                    <span>None</span>
+                                </div>
+                                ` : Array.isArray(o.slot1_talkgroups) && o.slot1_talkgroups.length > 0 ? `
+                                <div class="repeater-meta-item">
+                                    <span class="repeater-meta-label">TS1 TGs:</span>
+                                    <span>${o.slot1_talkgroups.join(', ')}</span>
+                                </div>
+                                ` : '<div></div>'}
+                                
+                                <!-- Row 2: Connected / (empty) / TS2 -->
+                                <div class="repeater-meta-item">
+                                    <span class="repeater-meta-label">Connected:</span>
+                                    <span data-connected-duration data-connected-at="${o.connected_at || ''}">${connectedDuration}</span>
+                                </div>
+                                <div></div>
+                                ${o.slot2_talkgroups === null ? `
+                                <div class="repeater-meta-item" title="All talkgroups allowed">
+                                    <span class="repeater-meta-label">TS2 TGs:</span>
+                                    <span>All</span>
+                                </div>
+                                ` : Array.isArray(o.slot2_talkgroups) && o.slot2_talkgroups.length === 0 ? `
+                                <div class="repeater-meta-item" title="All talkgroups denied">
+                                    <span class="repeater-meta-label">TS2 TGs:</span>
+                                    <span>None</span>
+                                </div>
+                                ` : Array.isArray(o.slot2_talkgroups) && o.slot2_talkgroups.length > 0 ? `
+                                <div class="repeater-meta-item">
+                                    <span class="repeater-meta-label">TS2 TGs:</span>
+                                    <span>${o.slot2_talkgroups.join(', ')}</span>
+                                </div>
+                                ` : '<div></div>'}
+                            </div>
+                        </div>
+                        
+                        <div class="slots-container">
+                            ${renderSlot(1, slot1Stream)}
+                            ${renderSlot(2, slot2Stream)}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
         function updateStreams(streams) {
             // Streams are now displayed inline with repeaters
             // Just trigger a repeater update to refresh the display
+            state.streams = Array.isArray(streams) ? streams : [];
             if (state.repeaters) {
                 updateRepeaters(state.repeaters);
+            }
+            if (state.outbounds) {
+                const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
+                updateOutbounds(outboundList);
             }
         }
         
@@ -1622,12 +1802,14 @@
                 }
                 
                 const callsign = user.callsign || '-';
+                // Use source_name if available, fall back to repeater_id for backward compatibility
+                const source = user.source_name || user.repeater_id || '-';
                 
                 return `
                     <tr style="border-bottom: 1px solid #374151;">
                         <td style="padding: 8px;">${user.radio_id}</td>
                         <td style="padding: 8px; font-weight: 500; color: ${user.callsign ? 'white' : '#6b7280'};">${callsign}</td>
-                        <td style="padding: 8px;">${user.repeater_id}</td>
+                        <td style="padding: 8px;">${source}</td>
                         <td style="padding: 8px; text-align: center;">${user.slot}</td>
                         <td style="padding: 8px;">${user.talkgroup}</td>
                         <td style="padding: 8px; color: ${user.active ? '' : '#9ca3af'};">${timeDisplay}</td>
@@ -1650,9 +1832,22 @@
             switch(eventType) {
                 case 'stream_start':
                     // Add or replace stream in state immediately with fresh start_time
-                    const startStreamIndex = state.streams.findIndex(s => 
-                        s.repeater_id == data.repeater_id && s.slot == data.slot
-                    );
+                    // Handle both repeater and outbound streams
+                    const connection_type = data.connection_type || 'repeater';
+                    let startStreamIndex;
+                    
+                    if (connection_type === 'outbound') {
+                        startStreamIndex = state.streams.findIndex(s => 
+                            s.connection_type === 'outbound' &&
+                            s.connection_name === data.connection_name && 
+                            s.slot === data.slot
+                        );
+                    } else {
+                        startStreamIndex = state.streams.findIndex(s => 
+                            s.repeater_id == data.repeater_id && s.slot == data.slot
+                        );
+                    }
+                    
                     const newStream = {
                         ...data,
                         status: 'active',
@@ -1664,7 +1859,9 @@
                         state.streams.push(newStream);
                     }
                     // Immediately update the display
-                    if (state.repeaters) {
+                    if (connection_type === 'outbound') {
+                        updateOutbounds(state.outbounds);
+                    } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
                     }
                     // Update last heard display
@@ -1673,35 +1870,56 @@
                     
                 case 'stream_end':
                     // Update stream status to hang_time
-                    const streamKey = `${data.repeater_id}.${data.slot}`;
-                    const existingStream = state.streams.find(s => 
-                        s.repeater_id == data.repeater_id && s.slot == data.slot
-                    );
-                    if (existingStream) {
+                    const endConnectionType = data.connection_type || 'repeater';
+                    const endStreamIndex = state.streams.findIndex(s => {
+                        if (endConnectionType === 'outbound') {
+                            return s.connection_type === 'outbound' &&
+                                   s.connection_name === data.connection_name &&
+                                   Number(s.slot) === Number(data.slot);
+                        }
+                        return s.repeater_id == data.repeater_id && Number(s.slot) === Number(data.slot);
+                    });
+                    if (endStreamIndex >= 0) {
+                        const existingStream = state.streams[endStreamIndex];
                         existingStream.status = 'hang_time';
-                        existingStream.hang_time = data.hang_time;
-                        existingStream.packets = data.packets;
+                        existingStream.hang_time = data.hang_time !== undefined ? data.hang_time : 0;
+                        const packetCount = (data.packet_count !== undefined) ? data.packet_count :
+                            (data.packets !== undefined ? data.packets : (existingStream.packets !== undefined ? existingStream.packets : 0));
+                        existingStream.packets = packetCount;
                         existingStream.duration = data.duration;
+                        existingStream.end_reason = data.end_reason || data.reason || existingStream.end_reason || 'unknown';
                     }
                     // Immediately update the display
-                    if (state.repeaters) {
+                    if (endConnectionType === 'outbound') {
+                        const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
+                        updateOutbounds(outboundList);
+                    } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
+                        // Update last heard display for repeater RX streams
+                        updateLastHeard(state.last_heard);
                     }
-                    // Update last heard display
-                    updateLastHeard(state.last_heard);
                     break;
                     
                 case 'hang_time_expired':
                     // Remove the stream from state
-                    state.streams = state.streams.filter(s => 
-                        !(s.repeater_id == data.repeater_id && s.slot == data.slot)
-                    );
+                    const hangConnectionType = data.connection_type || 'repeater';
+                    state.streams = state.streams.filter(s => {
+                        if (hangConnectionType === 'outbound') {
+                            return !(s.connection_type === 'outbound' &&
+                                     s.connection_name === data.connection_name &&
+                                     Number(s.slot) === Number(data.slot));
+                        }
+                        return !(s.repeater_id == data.repeater_id && Number(s.slot) === Number(data.slot));
+                    });
                     // Immediately update the display
-                    if (state.repeaters) {
+                    if (hangConnectionType === 'outbound') {
+                        const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
+                        updateOutbounds(outboundList);
+                    } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
+                        // Also update last heard display for repeater RX streams
+                        updateLastHeard(state.last_heard);
                     }
-                    // Also update last heard display
-                    updateLastHeard(state.last_heard);
                     break;
                     
 
@@ -1744,7 +1962,6 @@
                     // Store detailed repeater information (sent once on connection)
                     if (data.repeater_id) {
                         state.repeater_details[data.repeater_id] = data;
-                        console.log(`📋 Received details for repeater ${data.repeater_id} - Pattern: ${data.matched_pattern}`);
                     }
                     break;
                     
@@ -1763,6 +1980,51 @@
                         // Update stats
                         updateStats(state.stats, state.repeaters, state.streams);
                     }
+                    break;
+                
+                case 'outbound_connected':
+                    // Add/update outbound connection
+                    const outboundIdx = state.outbounds.findIndex(o => o.connection_name === data.connection_name);
+                    if (outboundIdx >= 0) {
+                        state.outbounds[outboundIdx] = { ...data, status: 'connected' };
+                    } else {
+                        state.outbounds.push({ ...data, status: 'connected' });
+                    }
+                    updateOutbounds(state.outbounds);
+                    playConnectTone();
+                    break;
+                
+                case 'outbound_connecting':
+                    // Outbound connection is attempting to connect
+                    const connectingIdx = state.outbounds.findIndex(o => o.connection_name === data.connection_name);
+                    if (connectingIdx >= 0) {
+                        state.outbounds[connectingIdx] = { ...data, status: 'connecting' };
+                    } else {
+                        state.outbounds.push({ ...data, status: 'connecting' });
+                    }
+                    updateOutbounds(state.outbounds);
+                    break;
+                
+                case 'outbound_disconnected':
+                    // Update outbound connection to disconnected (don't remove)
+                    const disconnectIdx = state.outbounds.findIndex(o => o.connection_name === data.connection_name);
+                    if (disconnectIdx >= 0) {
+                        state.outbounds[disconnectIdx] = { ...state.outbounds[disconnectIdx], ...data, status: 'disconnected' };
+                        updateOutbounds(state.outbounds);
+                        playDisconnectTone();
+                    }
+                    break;
+                
+                case 'outbound_error':
+                    // Update outbound connection error status
+                    const errorIdx = state.outbounds.findIndex(o => o.connection_name === data.connection_name);
+                    if (errorIdx >= 0) {
+                        state.outbounds[errorIdx] = { ...state.outbounds[errorIdx], ...data, status: 'error' };
+                    } else {
+                        state.outbounds.push({ ...data, status: 'error' });
+                    }
+                    updateOutbounds(state.outbounds);
+                    playAlertTone();
                     break;
             }
         }
@@ -1857,7 +2119,6 @@
             const el = document.getElementById('wsStatus');
             if (el.classList.contains('disconnected')) {
                 // Try to reconnect WebSocket immediately
-                console.log('🔄 Manual WebSocket reconnect requested');
                 if (reconnectTimeout) {
                     clearTimeout(reconnectTimeout);
                     reconnectTimeout = null;

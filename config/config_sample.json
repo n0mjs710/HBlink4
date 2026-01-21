@@ -113,5 +113,40 @@
             "slot1_talkgroups": [8],
             "slot2_talkgroups": [8]
         }
-    }
+    },
+    "outbound_connections": [
+        {
+            "enabled": true,
+            "name": "Regional-Master-Server",
+            "address": "master.example.com",
+            "port": 62031,
+            "passphrase": "remote-server-password",
+            "radio_id": 312999,
+            "callsign": "K0USY-L",
+            "rx_frequency": 449000000,
+            "tx_frequency": 444000000,
+            "power": 50,
+            "colorcode": 1,
+            "latitude": 38.0,
+            "longitude": -97.0,
+            "height": 100,
+            "location": "Network Link",
+            "description": "Link to regional master",
+            "url": "https://hblink.example.com",
+            "software_id": "HBlink4",
+            "package_id": "HBlink4 v2.0",
+            "options": "TS1=1,2,3,8,9;TS2=3100,3120,3121,9998"
+        },
+        {
+            "enabled": false,
+            "name": "Backup-Server",
+            "address": "backup.example.com",
+            "port": 62031,
+            "passphrase": "backup-password",
+            "radio_id": 312998,
+            "callsign": "K0USY-B",
+            "options": "TS1=*;TS2=*",
+            "description": "Backup connection (disabled)"
+        }
+    ]
 }

@@ -25,7 +25,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="HBlink4 Dashboard", version="1.0.0")
+app = FastAPI(title="HBlink4 Dashboard", version="1.1.0")
 
 # Load user database from CSV
 def load_user_database() -> Dict[int, str]:
@@ -107,6 +107,7 @@ class DashboardState:
     def __init__(self):
         self.repeaters: Dict[int, dict] = {}
         self.repeater_details: Dict[int, dict] = {}  # Detailed info (sent once per connection)
+        self.outbounds: Dict[str, dict] = {}  # Outbound connections (key: connection_name)
         self.streams: Dict[str, dict] = {}  # key: f"{repeater_id}.{slot}"
         self.events: deque = deque(maxlen=500)  # Ring buffer of recent events
         self.last_heard: List[dict] = []  # Last heard users
@@ -363,6 +364,7 @@ async def broadcast_hblink_status(connected: bool):
                     'data': {
                         'repeaters': list(state.repeaters.values()),
                         'repeater_details': state.repeater_details,
+                        'outbounds': list(state.outbounds.values()),
                         'streams': list(state.streams.values()),
                         'events': list(state.events)[-50:],
                         'stats': state.stats,
@@ -396,6 +398,7 @@ class TCPProtocol(asyncio.Protocol):
         # HBlink4 will re-send all current repeaters via repeater_connected events
         logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
+        state.outbounds.clear()
         state.streams.clear()
         
         # Set connection status synchronously (async broadcast may be delayed)
@@ -465,6 +468,7 @@ class UnixProtocol(asyncio.Protocol):
         # HBlink4 will re-send all current repeaters via repeater_connected events
         logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
+        state.outbounds.clear()
         state.streams.clear()
         
         # Set connection status synchronously (async broadcast may be delayed)
@@ -660,10 +664,28 @@ class EventReceiver:
                 logger.info(f"Repeater options updated via RPTO: {data['repeater_id']}")
         
         elif event_type == 'stream_start':
-            key = f"{data['repeater_id']}.{data['slot']}"
+            # Handle both repeater streams and outbound connection streams
+            connection_type = data.get('connection_type', 'repeater')
+            
+            if connection_type == 'outbound':
+                # Outbound stream - key by connection_name.slot
+                key = f"{data['connection_name']}.{data['slot']}"
+            else:
+                if 'connection_type' in data:
+                    logger.debug("Stream start with connection_type=%s: %s", connection_type, event)
+                elif 'connection_name' in data:
+                    # Outbound streams should include connection_type; log if it is missing
+                    logger.warning("Stream start missing connection_type but has connection_name: %s", event)
+
+                repeater_id = data.get('repeater_id')
+                if repeater_id is None:
+                    logger.error("Stream start missing repeater_id: %s", event)
+                    return
+                # Repeater stream - key by repeater_id.slot (legacy behavior)
+                key = f"{repeater_id}.{data['slot']}"
             
             # Look up callsign from user database
-            src_id = data.get('src_id')
+            src_id = data.get('rf_src') or data.get('src_id')  # Handle both field names
             callsign = user_database.get(src_id, '') if src_id else ''
             
             state.streams[key] = {
@@ -676,19 +698,39 @@ class EventReceiver:
             }
             
             # Count different stream types
+            logger.debug(f"Stream conditions: is_assumed={data.get('is_assumed', False)}, connection_type={connection_type}, src_id={src_id}")
             if not data.get('is_assumed', False):
-                # RX streams: actual traffic being received from repeaters
+                # RX streams: actual traffic being received (from repeaters OR outbound connections)
+                # Only exclude TX streams (is_assumed=True)
                 state.stats['total_calls_today'] += 1
+                logger.debug(f"Adding to last_heard: src_id={src_id}, callsign={callsign}")
                 
                 # Add/update user in last_heard immediately with "active" status
                 # Only for actual received calls, not retransmitted calls
                 if src_id:
+                    # Build source display: "Name (originating_repeater_id)"
+                    # For repeaters: callsign (repeater_id)
+                    # For outbound: connection_name (remote_repeater_id)
+                    if connection_type == 'outbound':
+                        conn_name = data.get('connection_name', 'Unknown')
+                        remote_rid = data.get('remote_repeater_id', 0)
+                        source_name = f"{conn_name} ({remote_rid})"
+                    else:
+                        repeater_id = data.get('repeater_id', 0)
+                        # Look up repeater callsign from state
+                        repeater_info = state.repeaters.get(repeater_id, {})
+                        repeater_callsign = repeater_info.get('callsign', '')
+                        if repeater_callsign:
+                            source_name = f"{repeater_callsign} ({repeater_id})"
+                        else:
+                            source_name = str(repeater_id)
+                    
                     # Find existing entry or create new one
                     existing_idx = next((i for i, u in enumerate(state.last_heard) if u['radio_id'] == src_id), None)
                     user_entry = {
                         'radio_id': src_id,
                         'callsign': callsign,
-                        'repeater_id': data['repeater_id'],
+                        'source_name': source_name,
                         'slot': data['slot'],
                         'talkgroup': data.get('dst_id', 0),
                         'last_heard': event['timestamp'],
@@ -703,49 +745,117 @@ class EventReceiver:
                     # Keep only most recent 10 entries
                     state.last_heard = state.last_heard[:10]
             else:
-                # TX streams: traffic being retransmitted to repeaters
+                # TX streams: traffic being retransmitted to repeaters or outbound connections
                 # Don't add to last_heard - these represent the same call being forwarded
                 state.stats['retransmitted_calls'] += 1
             
-            # Update repeater last activity
-            if data['repeater_id'] in state.repeaters:
+            # Update repeater/outbound last activity
+            if connection_type == 'outbound' and data['connection_name'] in state.outbounds:
+                state.outbounds[data['connection_name']]['last_activity'] = event['timestamp']
+            elif data.get('repeater_id') in state.repeaters:
                 state.repeaters[data['repeater_id']]['last_activity'] = event['timestamp']
         
         elif event_type == 'stream_update':
-            key = f"{data['repeater_id']}.{data['slot']}"
+            # Handle both repeater and outbound streams
+            connection_type = data.get('connection_type', 'repeater')
+            if connection_type == 'outbound':
+                key = f"{data['connection_name']}.{data['slot']}"
+            else:
+                key = f"{data['repeater_id']}.{data['slot']}"
+                
             if key in state.streams:
                 state.streams[key]['packets'] = data['packets']
                 state.streams[key]['duration'] = data['duration']
         
         elif event_type == 'stream_end':
-            key = f"{data['repeater_id']}.{data['slot']}"
+            # Handle both repeater and outbound streams
+            connection_type = data.get('connection_type', 'repeater')
+            if connection_type == 'outbound':
+                key = f"{data['connection_name']}.{data['slot']}"
+            else:
+                key = f"{data['repeater_id']}.{data['slot']}"
+                
             if key in state.streams:
                 # Stream ended and entering hang time (combined event)
                 stream = state.streams[key]
                 stream['status'] = 'hang_time'
-                stream['packets'] = data['packets']
+                stream['packets'] = data.get('packet_count', data.get('packets', 0))
                 stream['duration'] = data['duration']
                 stream['end_reason'] = data.get('end_reason', 'unknown')
                 stream['hang_time'] = data.get('hang_time', 0)
                 
-                # Only accumulate duration for RX streams (not assumed/TX streams)
-                if not data.get('is_assumed', False):
+                # Only accumulate duration for RX streams (not assumed/TX streams or outbound)
+                if not data.get('is_assumed', False) and connection_type != 'outbound':
                     state.stats['total_duration_today'] += data['duration']
                 
-                # Update last_heard entry to mark as no longer active
-                src_id = stream.get('src_id')
-                if src_id:
-                    user_entry = next((u for u in state.last_heard if u['radio_id'] == src_id), None)
-                    if user_entry:
-                        user_entry['active'] = False
-                        user_entry['last_heard'] = event['timestamp']
+                # Update last_heard entry to mark as no longer active (only for repeater RX streams)
+                if connection_type != 'outbound':
+                    src_id = stream.get('rf_src') or stream.get('src_id')
+                    if src_id:
+                        user_entry = next((u for u in state.last_heard if u['radio_id'] == src_id), None)
+                        if user_entry:
+                            user_entry['active'] = False
+                            user_entry['last_heard'] = event['timestamp']
         
         elif event_type == 'hang_time_expired':
-            # Hang time has expired, clear the slot
-            key = f"{data['repeater_id']}.{data['slot']}"
+            # Hang time has expired, clear the slot (handle both repeater and outbound)
+            connection_type = data.get('connection_type', 'repeater')
+            if connection_type == 'outbound':
+                key = f"{data['connection_name']}.{data['slot']}"
+            else:
+                key = f"{data['repeater_id']}.{data['slot']}"
+                
             if key in state.streams:
                 del state.streams[key]
                 logger.debug(f"Hang time expired for {key}")
+        
+        elif event_type == 'outbound_connecting':
+            # Outbound connection is attempting to connect
+            conn_name = data['connection_name']
+            state.outbounds[conn_name] = {
+                **data,
+                'connecting_at': event['timestamp'],
+                'last_activity': event['timestamp'],
+                'status': 'connecting'
+            }
+            logger.info(f"Outbound connection attempting: {conn_name} (radio_id={data.get('radio_id')})")
+        
+        elif event_type == 'outbound_connected':
+            # Outbound connection established
+            conn_name = data['connection_name']
+            state.outbounds[conn_name] = {
+                **data,
+                'connected_at': event['timestamp'],
+                'last_activity': event['timestamp'],
+                'status': 'connected'
+            }
+            logger.info(f"Outbound connection established: {conn_name} (radio_id={data.get('radio_id')}) at {data.get('remote_address')}:{data.get('remote_port')}")
+        
+        elif event_type == 'outbound_disconnected':
+            # Outbound connection lost - change to disconnected status but don't remove
+            conn_name = data['connection_name']
+            if conn_name in state.outbounds:
+                state.outbounds[conn_name]['status'] = 'disconnected'
+                state.outbounds[conn_name]['disconnected_at'] = event['timestamp']
+                state.outbounds[conn_name]['disconnect_reason'] = data.get('reason', 'unknown')
+                logger.info(f"Outbound connection disconnected: {conn_name} - reason: {data.get('reason', 'unknown')}")
+        
+        elif event_type == 'outbound_error':
+            # Outbound connection error
+            conn_name = data['connection_name']
+            if conn_name in state.outbounds:
+                state.outbounds[conn_name]['status'] = 'error'
+                state.outbounds[conn_name]['error_message'] = data.get('error_message', 'Unknown error')
+                state.outbounds[conn_name]['last_error'] = event['timestamp']
+            else:
+                # Connection failed before it was established
+                state.outbounds[conn_name] = {
+                    **data,
+                    'status': 'error',
+                    'error_message': data.get('error_message', 'Unknown error'),
+                    'last_error': event['timestamp']
+                }
+            logger.warning(f"Outbound connection error: {conn_name} - {data.get('error_message', 'Unknown error')}")
         
 
         
@@ -793,6 +903,12 @@ async def get_config():
 async def get_repeaters():
     """Get all connected repeaters"""
     return {"repeaters": list(state.repeaters.values())}
+
+
+@app.get("/api/outbounds")
+async def get_outbounds():
+    """Get all outbound connections"""
+    return {"outbounds": list(state.outbounds.values())}
 
 
 @app.get("/api/streams")
@@ -939,6 +1055,7 @@ async def websocket_endpoint(websocket: WebSocket):
         'data': {
             'repeaters': list(state.repeaters.values()),
             'repeater_details': state.repeater_details,
+            'outbounds': list(state.outbounds.values()),
             'streams': list(state.streams.values()),
             'events': list(state.events)[-50:],
             'stats': state.stats,
@@ -954,8 +1071,15 @@ async def websocket_endpoint(websocket: WebSocket):
             if data == 'ping':
                 await websocket.send_text('pong')
     except WebSocketDisconnect:
+        logger.debug(f"WebSocket client disconnected (remaining: {len(state.websocket_clients) - 1})")
+    except asyncio.CancelledError:
+        # Expected during shutdown - don't log as error
+        logger.debug(f"WebSocket task cancelled during shutdown")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        # Always clean up, regardless of how we exited
         state.websocket_clients.discard(websocket)
-        logger.debug(f"WebSocket client disconnected (remaining: {len(state.websocket_clients)})")
 
 
 # Serve frontend
@@ -992,6 +1116,14 @@ async def startup_event():
     logger.info("🚀 HBlink4 Dashboard started!")
     logger.info(f"📡 Event transport: {receiver_config.get('transport', 'unix').upper()}")
     logger.info("📊 Access dashboard at http://localhost:8080")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean shutdown - save data"""
+    logger.info("💾 Dashboard shutting down, saving data...")
+    save_persistent_data()
+    logger.info("✅ Dashboard shutdown complete")
 
 
 async def midnight_reset_task():
@@ -1047,14 +1179,21 @@ def save_persistent_data():
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
-    logger.info(f"📡 Received signal {signum}, saving data...")
+    logger.info(f"📡 Received signal {signum}, shutting down...")
+    # Just save and exit - let systemd/uvicorn handle the rest
     save_persistent_data()
-    exit(0)
+    import sys
+    sys.exit(0)
 
-# Register shutdown handlers
-atexit.register(save_persistent_data)
-signal.signal(signal.SIGTERM, signal_handler)  # Systemd stop
-signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+# Register shutdown handler
+# Note: When running under systemd, don't override signal handlers
+# Let uvicorn handle SIGTERM gracefully, which will trigger shutdown_event
+if __name__ == "__main__":
+    # Only register signal handlers when running directly (not via systemd/uvicorn service)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+atexit.register(save_persistent_data)  # Fallback for emergency exit
 
 
 if __name__ == "__main__":

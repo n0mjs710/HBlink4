@@ -315,7 +315,7 @@ class EventEmitter:
                 self._init_unix()
         except BlockingIOError:
             # Send buffer full, drop event (prevents blocking)
-            logger.debug("Send buffer full, dropping event")
+            pass
         except Exception as e:
             logger.debug(f"Send failed: {e}")
     

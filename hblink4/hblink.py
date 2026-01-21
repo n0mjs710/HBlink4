@@ -14,10 +14,12 @@ import logging
 import logging.handlers
 import pathlib
 import ipaddress
-from typing import Dict, Any, Optional, Tuple, Union, List
+import socket
+from typing import Dict, Any, Optional, Tuple, Union, List, Set
 from time import time
 from random import randint
 from hashlib import sha256
+import re
 
 import signal
 import asyncio
@@ -38,6 +40,18 @@ try:
     from .access_control import RepeaterMatcher
     from .events import EventEmitter
     from .user_cache import UserCache
+    from .utils import (
+        safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
+        cleanup_old_logs, setup_logging, PeerAddress
+    )
+    from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
+    from .protocol import (
+        parse_dmr_packet, is_dmr_terminator, validate_packet_length,
+        extract_packet_command, get_call_type_name, format_id_display
+    )
+    from .models import (
+        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState
+    )
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from constants import (
@@ -47,147 +61,43 @@ except ImportError:
     from access_control import RepeaterMatcher
     from events import EventEmitter
     from user_cache import UserCache
+    from utils import (
+        safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
+        cleanup_old_logs, setup_logging, PeerAddress
+    )
+    from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
+    from protocol import (
+        parse_dmr_packet, is_dmr_terminator, validate_packet_length,
+        extract_packet_command, get_call_type_name, format_id_display
+    )
+    from models import (
+        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState
+    )
 
-# Type definitions
-# Address tuple can be IPv4 (host, port) or IPv6 (host, port, flowinfo, scopeid)
-PeerAddress = Union[Tuple[str, int], Tuple[str, int, int, int]]
+# Data classes moved to models.py
 
-from dataclasses import dataclass, field
-
-@dataclass
-class StreamState:
-    """Tracks an active DMR transmission stream"""
-    repeater_id: bytes          # Repeater this stream is on
-    rf_src: bytes            # RF source (3 bytes)
-    dst_id: bytes            # Destination talkgroup/ID (3 bytes)
-    slot: int                # Timeslot (1 or 2)
-    start_time: float        # When transmission started
-    last_seen: float         # Last packet received
-    stream_id: bytes         # Unique stream identifier
-    packet_count: int = 0    # Number of packets in this stream
-    ended: bool = False      # True when stream has timed out but in hang time
-    end_time: Optional[float] = None  # When stream ended (for hang time calculation)
-    call_type: str = "unknown"  # Call type: "group", "private", "data", or "unknown"
-    is_assumed: bool = False  # True if this is an assumed stream (forwarded to target, not received from it)
-    target_repeaters: Optional[set] = None  # Cached set of repeater_ids approved for forwarding
-    routing_cached: bool = False  # True once routing has been calculated
+class OutboundProtocol(asyncio.DatagramProtocol):
+    """Protocol instance for a single outbound connection"""
+    def __init__(self, hbprotocol: 'HBProtocol', connection_name: str):
+        super().__init__()
+        self.hbprotocol = hbprotocol
+        self.connection_name = connection_name
     
-    def is_active(self, timeout: float = 2.0) -> bool:
-        """Check if stream is still active (within timeout period)"""
-        return (time() - self.last_seen) < timeout
-    
-    def is_in_hang_time(self, timeout: float, hang_time: float) -> bool:
-        """Check if stream is in hang time (ended but slot reserved for same source)"""
-        if not self.ended or not self.end_time:
-            return False
-        time_since_end = time() - self.end_time
-        return time_since_end < hang_time
-
-
-@dataclass
-class RepeaterState:
-    """Data class for storing repeater state"""
-    repeater_id: bytes
-    ip: str
-    port: int
-    connected: bool = False
-    authenticated: bool = False
-    last_ping: float = field(default_factory=time)
-    ping_count: int = 0
-    missed_pings: int = 0
-    salt: int = field(default_factory=lambda: randint(0, 0xFFFFFFFF))
-    connection_state: str = 'login'  # States: login, config, connected
-    last_rssi: int = 0
-    rssi_count: int = 0
-    
-    # Metadata fields with defaults - stored as bytes to match protocol
-    callsign: bytes = b''
-    rx_freq: bytes = b''
-    tx_freq: bytes = b''
-    tx_power: bytes = b''
-    colorcode: bytes = b''
-    latitude: bytes = b''
-    longitude: bytes = b''
-    height: bytes = b''
-    location: bytes = b''
-    description: bytes = b''
-    slots: bytes = b''
-    url: bytes = b''
-    software_id: bytes = b''
-    package_id: bytes = b''
-    
-    # Talkgroup access control (stored as sets for O(1) lookup)
-    # None = no restrictions (allow all), empty set = deny all, non-empty set = allow only those TGs
-    slot1_talkgroups: Optional[set] = None
-    slot2_talkgroups: Optional[set] = None
-    rpto_received: bool = False  # True if repeater sent RPTO to override config TGs
-    
-    # Active stream tracking per slot
-    slot1_stream: Optional[StreamState] = None
-    slot2_stream: Optional[StreamState] = None
-    
-    # Cached decoded strings (for efficiency - decode once, use many times)
-    _callsign_str: str = field(default='', init=False, repr=False)
-    _location_str: str = field(default='', init=False, repr=False)
-    _rx_freq_str: str = field(default='', init=False, repr=False)
-    _tx_freq_str: str = field(default='', init=False, repr=False)
-    _colorcode_str: str = field(default='', init=False, repr=False)
-    
-    @property
-    def sockaddr(self) -> PeerAddress:
-        """Get socket address tuple"""
-        return (self.ip, self.port)
-    
-    def get_callsign_str(self) -> str:
-        """Get decoded callsign string (cached)"""
-        if not self._callsign_str and self.callsign:
-            self._callsign_str = self.callsign.decode('utf-8', errors='ignore').strip()
-        return self._callsign_str or 'UNKNOWN'
-    
-    def get_location_str(self) -> str:
-        """Get decoded location string (cached)"""
-        if not self._location_str and self.location:
-            self._location_str = self.location.decode('utf-8', errors='ignore').strip()
-        return self._location_str or 'Unknown'
-    
-    def get_rx_freq_str(self) -> str:
-        """Get decoded RX frequency string (cached)"""
-        if not self._rx_freq_str and self.rx_freq:
-            self._rx_freq_str = self.rx_freq.decode('utf-8', errors='ignore').strip()
-        return self._rx_freq_str
-    
-    def get_tx_freq_str(self) -> str:
-        """Get decoded TX frequency string (cached)"""
-        if not self._tx_freq_str and self.tx_freq:
-            self._tx_freq_str = self.tx_freq.decode('utf-8', errors='ignore').strip()
-        return self._tx_freq_str
-    
-    def get_colorcode_str(self) -> str:
-        """Get decoded color code string (cached)"""
-        if not self._colorcode_str and self.colorcode:
-            self._colorcode_str = self.colorcode.decode('utf-8', errors='ignore').strip()
-        return self._colorcode_str
-    
-    def get_slot_stream(self, slot: int) -> Optional[StreamState]:
-        """Get the active stream for a given slot"""
-        if slot == 1:
-            return self.slot1_stream
-        elif slot == 2:
-            return self.slot2_stream
-        return None
-    
-    def set_slot_stream(self, slot: int, stream: Optional[StreamState]) -> None:
-        """Set the active stream for a given slot"""
-        if slot == 1:
-            self.slot1_stream = stream
-        elif slot == 2:
-            self.slot2_stream = stream
+    def datagram_received(self, data: bytes, addr: tuple):
+        """Receive packet for this specific outbound connection"""
+        self.hbprotocol._handle_outbound_packet(self.connection_name, data, addr)
 
 class HBProtocol(asyncio.DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Server Protocol"""
     def __init__(self, *args, **kwargs):
         super().__init__()
         self._repeaters: Dict[bytes, RepeaterState] = {}
+        
+        # Outbound connection state management (Phase 2)
+        self._outbounds: Dict[str, 'OutboundState'] = {}  # keyed by connection name
+        self._outbound_by_id: Dict[bytes, str] = {}  # radio_id (4 bytes) -> name for packet routing by ID
+        self._outbound_ids: Set[int] = set()  # reserved IDs to prevent DoS
+        
         self._config = CONFIG
         self._matcher = RepeaterMatcher(CONFIG)
         self._timeout_task = None
@@ -230,32 +140,23 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._user_cache = UserCache(timeout_seconds=cache_timeout)
         LOGGER.info(f'User cache initialized with {cache_timeout}s timeout')
         
-        # Cache for repeater_id bytes to int conversions (for logging efficiency)
-        self._rid_cache: Dict[bytes, int] = {}
+        # No conversion caching - simple int.from_bytes() is fast enough
+        # and avoids unbounded cache growth (memory leak prevention)
     
-    @staticmethod
-    def _normalize_addr(addr: PeerAddress) -> Tuple[str, int]:
-        """
-        Normalize address tuple to (ip, port) regardless of IPv4/IPv6 format.
-        IPv4: (ip, port)
-        IPv6: (ip, port, flowinfo, scopeid) -> (ip, port)
-        """
-        return (addr[0], addr[1])
+    # ========== ADDRESS VALIDATION METHODS ==========
     
     def _addr_matches(self, addr1: PeerAddress, addr2: PeerAddress) -> bool:
         """Compare two addresses, normalizing for IPv4/IPv6 differences"""
-        return self._normalize_addr(addr1) == self._normalize_addr(addr2)
-        
-    # ========== HELPER METHODS ==========
+        return normalize_addr(addr1) == normalize_addr(addr2)
     
-    def _rid_to_int(self, repeater_id: bytes) -> int:
+    def _addr_matches_repeater(self, repeater: RepeaterState, addr: PeerAddress) -> bool:
         """
-        Convert repeater_id bytes to int with caching.
-        Used for logging and event emission efficiency.
+        Optimized address comparison for repeater validation.
+        RepeaterState.sockaddr is already normalized, so we only normalize the incoming address.
         """
-        if repeater_id not in self._rid_cache:
-            self._rid_cache[repeater_id] = int.from_bytes(repeater_id, 'big')
-        return self._rid_cache[repeater_id]
+        return repeater.sockaddr == normalize_addr(addr)
+    
+
     
     def _format_tg_display(self, tg_set: Optional[set]) -> str:
         """Format TG set for human-readable display (logging)"""
@@ -264,7 +165,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return 'None'
         else:
-            return str(sorted(tg_set))
+            # Convert bytes back to integers for readable display
+            return str(sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set))
     
     def _format_tg_json(self, tg_set: Optional[set]) -> Optional[list]:
         """Format TG set for JSON serialization (events)"""
@@ -273,7 +175,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         elif not tg_set:
             return []
         else:
-            return sorted(list(tg_set))
+            # Convert bytes back to integers for JSON (most efficient approach)
+            return sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set)
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
@@ -281,7 +184,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         Centralizes the logic for converting repeater state to JSON-serializable format.
         """
         return {
-            'repeater_id': self._rid_to_int(repeater_id),
+            'repeater_id': rid_to_int(repeater_id),
             'callsign': repeater.get_callsign_str(),
             'location': repeater.get_location_str(),
             'address': f'{repeater.ip}:{repeater.port}',
@@ -304,14 +207,553 @@ class HBProtocol(asyncio.DatagramProtocol):
         If this fails, it indicates a bug in authentication logic that must be fixed.
         """
         repeater_config = self._matcher.get_repeater_config(
-            self._rid_to_int(repeater_id),
+            rid_to_int(repeater_id),
             repeater.get_callsign_str()
         )
         
         # Convert config to internal representation:
-        # None stays None (allow all), lists become sets
-        repeater.slot1_talkgroups = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
-        repeater.slot2_talkgroups = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
+        # None stays None (allow all), int lists become bytes sets for hot path performance
+        if repeater_config.slot1_talkgroups is not None:
+            repeater.slot1_talkgroups = {tg.to_bytes(3, 'big') for tg in repeater_config.slot1_talkgroups}
+        else:
+            repeater.slot1_talkgroups = None
+            
+        if repeater_config.slot2_talkgroups is not None:
+            repeater.slot2_talkgroups = {tg.to_bytes(3, 'big') for tg in repeater_config.slot2_talkgroups}
+        else:
+            repeater.slot2_talkgroups = None
+
+    # ========== OUTBOUND CONNECTION METHODS (Phase 3) ==========
+    
+    def _parse_options(self, options: str) -> Tuple[Optional[set], Optional[set]]:
+        """
+        Parse Options= string into slot TG sets.
+        Returns: (slot1_tgs, slot2_tgs)
+        - None = allow all (*)
+        - empty set = deny all (missing TS or empty)
+        - non-empty set = allow only those TGs
+        
+        Format: "TS1=1,2,3;TS2=10,20" or "TS1=*;TS2=*" or "*"
+        """
+        if not options:
+            return (None, None)  # Empty string = allow all (for backward compatibility)
+        
+        options = options.strip()
+        if options == '*':
+            return (None, None)  # Wildcard = allow all
+        
+        slot1_tgs = None  # Default: not specified (will become empty set if TS1 found but empty)
+        slot2_tgs = None  # Default: not specified (will become empty set if TS2 found but empty)
+        
+        try:
+            for part in options.split(';'):
+                part = part.strip()
+                if not part:
+                    continue
+                
+                # Check for TS1=
+                if part.startswith('TS1='):
+                    tgs_str = part[4:].strip()  # Everything after 'TS1='
+                    if tgs_str == '*':
+                        slot1_tgs = None  # Wildcard on TS1
+                    else:
+                        slot1_tgs = set()  # TS1 specified, start with empty
+                        if tgs_str:
+                            # Convert strings directly to bytes for storage  
+                            slot1_tgs.update(int(tg.strip()).to_bytes(3, 'big') for tg in tgs_str.split(',') if tg.strip())
+                
+                # Check for TS2=
+                elif part.startswith('TS2='):
+                    tgs_str = part[4:].strip()  # Everything after 'TS2='
+                    if tgs_str == '*':
+                        slot2_tgs = None  # Wildcard on TS2
+                    else:
+                        slot2_tgs = set()  # TS2 specified, start with empty
+                        if tgs_str:
+                            # Convert integers to bytes for storage
+                            slot2_tgs.update(int(tg.strip()).to_bytes(3, 'big') for tg in tgs_str.split(',') if tg.strip())
+        
+        except Exception as e:
+            LOGGER.warning(f'Error parsing options "{options}": {e}')
+            return (set(), set())  # Deny all on parse error
+        
+        # Convert None (not specified) to empty set (deny all) for any slot that wasn't mentioned
+        if slot1_tgs is None and 'TS1=' not in options:
+            slot1_tgs = set()  # TS1 not mentioned = deny all
+        if slot2_tgs is None and 'TS2=' not in options:
+            slot2_tgs = set()  # TS2 not mentioned = deny all
+        
+        return (slot1_tgs, slot2_tgs)
+    
+    async def _connect_outbound(self, config: OutboundConnectionConfig, loop=None):
+        """
+        Manage outbound connection lifecycle.
+        Runs indefinitely, reconnecting on failure.
+        """
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        
+        keepalive_interval = CONFIG.get('global', {}).get('ping_time', 5)
+        
+        while True:
+            try:
+                # Phase 1: DNS Resolution
+                LOGGER.info(f'[{config.name}] Resolving {config.address}...')
+                try:
+                    # Use getaddrinfo for DNS resolution
+                    addr_info = await loop.getaddrinfo(
+                        config.address, config.port,
+                        family=0,  # AF_UNSPEC - allow IPv4 or IPv6
+                        type=socket.SOCK_DGRAM
+                    )
+                    if not addr_info:
+                        raise Exception(f'DNS resolution failed for {config.address}')
+                    
+                    # Use first result
+                    family, socktype, proto, canonname, sockaddr = addr_info[0]
+                    ip = sockaddr[0]
+                    port = sockaddr[1]
+                    LOGGER.info(f'[{config.name}] Resolved {config.address} → {ip}:{port}')
+                except Exception as e:
+                    LOGGER.error(f'[{config.name}] DNS resolution failed: {e}')
+                    
+                    # Emit error event
+                    self._events.emit('outbound_error', {
+                        'connection_name': config.name,
+                        'radio_id': config.radio_id,
+                        'remote_address': config.address,
+                        'remote_port': config.port,
+                        'error_message': f'DNS resolution failed: {e}'
+                    })
+                    
+                    await asyncio.sleep(keepalive_interval)
+                    continue
+                
+                # Phase 2: Create UDP endpoint
+                try:
+                    # Create a connected UDP socket with our custom protocol that knows its connection name
+                    transport, protocol = await loop.create_datagram_endpoint(
+                        lambda: OutboundProtocol(self, config.name),
+                        remote_addr=(ip, port)
+                    )
+                    LOGGER.info(f'[{config.name}] UDP endpoint created to {ip}:{port}')
+                except Exception as e:
+                    LOGGER.error(f'[{config.name}] Failed to create UDP endpoint: {e}')
+                    
+                    # Emit error event
+                    self._events.emit('outbound_error', {
+                        'connection_name': config.name,
+                        'radio_id': config.radio_id,
+                        'remote_address': config.address,
+                        'remote_port': port,
+                        'error_message': f'Failed to create UDP endpoint: {e}'
+                    })
+                    
+                    await asyncio.sleep(keepalive_interval)
+                    continue
+                
+                # Create outbound state
+                slot1_tgs, slot2_tgs = self._parse_options(config.options)
+                state = OutboundState(
+                    config=config,
+                    ip=ip,
+                    port=port,
+                    transport=transport,
+                    slot1_talkgroups=slot1_tgs,
+                    slot2_talkgroups=slot2_tgs
+                )
+                
+                # Store in dictionaries
+                self._outbounds[config.name] = state
+                self._outbound_by_id[config.radio_id.to_bytes(4, 'big')] = config.name
+                
+                # Phase 3: Login (RPTL)
+                our_id_bytes = config.radio_id.to_bytes(4, 'big')
+                rptl_packet = RPTL + our_id_bytes
+                transport.sendto(rptl_packet)
+                LOGGER.info(f'[{config.name}] Sent RPTL (login) with ID {config.radio_id}')
+                
+                # Wait for MSTCL (challenge) with salt
+                # State machine is driven by _handle_outbound_packet() receiving packets
+                state.connected = True
+                
+                LOGGER.info(f'[{config.name}] Connection initiated, waiting for MSTCL...')
+                
+                # Phase 4: Keepalive loop
+                while state.connected:
+                    await asyncio.sleep(keepalive_interval)
+                    
+                    # If not authenticated yet, retry RPTL
+                    if not state.authenticated:
+                        rptl_packet = RPTL + our_id_bytes
+                        state.transport.sendto(rptl_packet)
+                        LOGGER.debug(f'[{config.name}] Retrying RPTL (login) - no response yet')
+                    else:
+                        # Send RPTPING if authenticated
+                        ping_packet = RPTPING + our_id_bytes
+                        state.transport.sendto(ping_packet)
+                        state.last_ping = time()
+                        LOGGER.debug(f'[{config.name}] Sent RPTPING')
+                        
+                        # Check for missed pongs
+                        if state.last_pong > 0:
+                            time_since_pong = time() - state.last_pong
+                            if time_since_pong > (keepalive_interval * 3):
+                                state.missed_pongs += 1
+                                LOGGER.warning(f'[{config.name}] Missed pong #{state.missed_pongs} '
+                                             f'({time_since_pong:.1f}s since last pong)')
+                                if state.missed_pongs >= 3:
+                                    LOGGER.error(f'[{config.name}] Connection lost (3 missed pongs)')
+                                    state.connected = False
+                                    
+                                    # Emit disconnection event
+                                    self._events.emit('outbound_disconnected', {
+                                        'connection_name': config.name,
+                                        'radio_id': config.radio_id,
+                                        'remote_address': config.address,
+                                        'remote_port': state.port,
+                                        'reason': 'Connection timeout (3 missed pongs)'
+                                    })
+                                    
+                                    break
+                
+            except asyncio.CancelledError:
+                LOGGER.info(f'[{config.name}] Connection task cancelled')
+                break
+            except Exception as e:
+                LOGGER.error(f'[{config.name}] Connection error: {e}')
+            finally:
+                # Cleanup
+                if config.name in self._outbounds:
+                    state = self._outbounds[config.name]
+                    if state.transport and state.authenticated:
+                        # Send RPTCL (disconnect) to cleanly close connection
+                        try:
+                            our_id_bytes = config.radio_id.to_bytes(4, 'big')
+                            rptcl_packet = RPTCL + our_id_bytes
+                            state.transport.sendto(rptcl_packet)
+                            LOGGER.info(f'[{config.name}] Sent RPTCL (disconnect)')
+                            await asyncio.sleep(0.1)  # Brief delay to let packet send
+                        except Exception as e:
+                            LOGGER.debug(f'[{config.name}] Error sending RPTCL: {e}')
+                    if state.transport:
+                        state.transport.close()
+                    del self._outbounds[config.name]
+                    LOGGER.info(f'[{config.name}] Cleaned up connection state')
+            
+            # Wait before reconnecting
+            LOGGER.info(f'[{config.name}] Waiting {keepalive_interval}s before reconnect...')
+            await asyncio.sleep(keepalive_interval)
+    
+    def _handle_outbound_packet(self, connection_name: str, data: bytes, addr: tuple):
+        """
+        Handle packets received from outbound server connections.
+        Implements client-side HomeBrew protocol state machine.
+        """
+        ip = addr[0]
+        port = addr[1]
+        
+        # Get outbound state by connection name (passed from OutboundProtocol)
+        if connection_name not in self._outbounds:
+            LOGGER.warning(f'Received packet for unknown outbound connection: {connection_name}')
+            return
+        
+        state = self._outbounds[connection_name]
+        
+        # Check for commands - handle longer commands first
+        _command = data[:4]
+        if len(data) >= 7 and data[:7] == RPTPING:
+            _command = RPTPING
+        elif len(data) >= 7 and data[:7] == MSTPONG:
+            _command = MSTPONG
+        elif len(data) >= 6 and data[:6] == RPTACK:
+            _command = RPTACK
+        elif len(data) >= 6 and data[:6] == MSTNAK:
+            _command = MSTNAK
+        elif len(data) >= 5 and data[:5] == MSTCL:
+            _command = MSTCL
+        elif len(data) >= 5 and data[:5] == RPTCL:
+            _command = RPTCL
+        
+        try:
+            # RPTACK with salt - Challenge (response to RPTL)
+            # HBlink4 server sends RPTACK + salt (not MSTCL) after receiving RPTL
+            if _command == RPTACK and not state.auth_sent:
+                if len(data) < 10:  # 6 bytes RPTACK + 4 bytes salt
+                    LOGGER.error(f'[{connection_name}] Invalid RPTACK+salt packet length: {len(data)}')
+                    return
+                
+                # Extract salt from challenge
+                state.salt = int.from_bytes(data[6:10], 'big')
+                LOGGER.info(f'[{connection_name}] Received RPTACK with salt: {state.salt}')
+                
+                # Send RPTK (auth response)
+                our_id_bytes = state.config.radio_id.to_bytes(4, 'big')
+                salt_bytes = state.salt.to_bytes(4, 'big')
+                calc_hash = bytes.fromhex(
+                    sha256(salt_bytes + state.config.passphrase.encode()).hexdigest()
+                )
+                rptk_packet = RPTK + our_id_bytes + calc_hash
+                state.transport.sendto(rptk_packet)
+                state.auth_sent = True  # Mark that we sent RPTK
+                LOGGER.info(f'[{connection_name}] Sent RPTK (auth response)')
+            
+            # RPTACK - Acknowledgment (after sending RPTK/RPTC/RPTO)
+            elif _command == RPTACK and state.auth_sent:
+                if not state.config_sent:
+                    # Config ACK (after RPTK)
+                    state.config_sent = True
+                    state.authenticated = True
+                    LOGGER.info(f'[{connection_name}] Received RPTACK - Authentication successful')
+                    
+                    # Send RPTC (config)
+                    self._send_outbound_config(state, (ip, port))
+                elif not state.options_sent:
+                    # Options/Config ACK
+                    LOGGER.info(f'[{connection_name}] Received RPTACK - Config accepted')
+                    
+                    # Send RPTO (options) if configured
+                    if state.config.options:
+                        self._send_outbound_options(state, (ip, port))
+                        state.options_sent = True
+                    else:
+                        state.options_sent = True
+                        LOGGER.info(f'[{connection_name}] No options configured, connection complete')
+                        
+                        # Emit connection established event
+                        self._events.emit('outbound_connected', {
+                            'connection_name': connection_name,
+                            'radio_id': state.config.radio_id,
+                            'remote_address': state.config.address,  # Use original DNS name from config
+                            'remote_port': state.port,
+                            'slot1_talkgroups': self._format_tg_json(state.slot1_talkgroups),
+                            'slot2_talkgroups': self._format_tg_json(state.slot2_talkgroups)
+                        })
+                else:
+                    # Final ACK after RPTO
+                    LOGGER.info(f'[{connection_name}] Received RPTACK - Options accepted, connection complete')
+                    
+                    # Emit connection established event
+                    self._events.emit('outbound_connected', {
+                        'connection_name': connection_name,
+                        'radio_id': state.config.radio_id,
+                        'remote_address': state.config.address,  # Use original DNS name from config
+                        'remote_port': state.port,
+                        'slot1_talkgroups': self._format_tg_json(state.slot1_talkgroups),
+                        'slot2_talkgroups': self._format_tg_json(state.slot2_talkgroups)
+                    })
+            
+            # MSTNAK - Negative Acknowledgment
+            elif _command == MSTNAK:
+                LOGGER.error(f'[{connection_name}] Received MSTNAK - Connection rejected by server')
+                state.connected = False
+                
+                # Emit error event
+                self._events.emit('outbound_error', {
+                    'connection_name': connection_name,
+                    'radio_id': state.config.radio_id,
+                    'remote_address': state.config.address,
+                    'remote_port': state.port,
+                    'error_message': 'Connection rejected by server (MSTNAK)'
+                })
+            
+            # MSTPONG - Keepalive response
+            elif _command == MSTPONG:
+                state.last_pong = time()
+                state.missed_pongs = 0
+                LOGGER.debug(f'[{connection_name}] Received MSTPONG')
+            
+            # MSTCL - Server disconnect
+            elif _command[:5] == MSTCL:
+                LOGGER.info(f'[{connection_name}] Received MSTCL - Server initiated disconnect')
+                state.connected = False
+                
+                # Emit disconnection event
+                self._events.emit('outbound_disconnected', {
+                    'connection_name': connection_name,
+                    'radio_id': state.config.radio_id,
+                    'remote_address': state.config.address,
+                    'remote_port': state.port,
+                    'reason': 'Server initiated disconnect'
+                })
+            
+            # DMRD - DMR Data (voice/data from remote server)
+            elif _command == DMRD:
+                # Forward to local repeaters based on routing rules
+                self._handle_outbound_dmr_data(data, state)
+            
+            else:
+                try:
+                    cmd_str = _command.decode('utf-8', errors='replace')
+                except:
+                    cmd_str = _command.hex()
+                LOGGER.warning(f'[{connection_name}] Unknown command from outbound server: {cmd_str}')
+                
+        except Exception as e:
+            LOGGER.error(f'[{connection_name}] Error processing outbound packet: {e}')
+    
+    def _send_outbound_config(self, state: OutboundState, addr: tuple):
+        """Send RPTC (configuration) to outbound server"""
+        config = state.config
+        our_id_bytes = config.radio_id.to_bytes(4, 'big')
+        
+        # Build config packet (same format as repeater sends to us)
+        # Pad/truncate strings to exact field lengths
+        packet = RPTC + our_id_bytes
+        packet += config.callsign.encode().ljust(8, b'\x00')[:8]
+        packet += str(config.rx_frequency).encode().ljust(9, b'\x00')[:9]
+        packet += str(config.tx_frequency).encode().ljust(9, b'\x00')[:9]
+        packet += str(config.power).encode().ljust(2, b'\x00')[:2]
+        packet += str(config.colorcode).encode().ljust(2, b'\x00')[:2]
+        packet += str(config.latitude).encode().ljust(8, b'\x00')[:8]
+        packet += str(config.longitude).encode().ljust(9, b'\x00')[:9]
+        packet += str(config.height).encode().ljust(3, b'\x00')[:3]
+        packet += config.location.encode().ljust(20, b'\x00')[:20]
+        packet += config.description.encode().ljust(19, b'\x00')[:19]
+        packet += b'3'  # Slots (placeholder)
+        packet += config.url.encode().ljust(124, b'\x00')[:124]
+        packet += config.software_id.encode().ljust(40, b'\x00')[:40]
+        packet += config.package_id.encode().ljust(40, b'\x00')[:40]
+        
+        state.transport.sendto(packet)
+        LOGGER.info(f'[{config.name}] Sent RPTC (config)')
+    
+    def _send_outbound_options(self, state: OutboundState, addr: tuple):
+        """Send RPTO (options) to outbound server"""
+        our_id_bytes = state.config.radio_id.to_bytes(4, 'big')
+        options_bytes = state.config.options.encode().ljust(300, b'\x00')[:300]
+        
+        packet = RPTO + our_id_bytes + options_bytes
+        state.transport.sendto(packet)
+        LOGGER.info(f'[{state.config.name}] Sent RPTO (options): {state.config.options}')
+    
+    def _handle_outbound_dmr_data(self, data: bytes, outbound_state: OutboundState):
+        """
+        Handle DMR data received from an outbound server.
+        Track stream state on outbound TDMA slots and forward to local repeaters.
+        
+        Args:
+            data: Complete DMRD packet from outbound server
+            outbound_state: State of the outbound connection
+        """
+        # Parse packet using unified parser
+        packet = self._parse_dmr_packet(data)
+        if not packet:
+            LOGGER.warning(f'[{outbound_state.config.name}] Invalid DMRD packet length: {len(data)}')
+            return
+        
+        # Extract fields from parsed packet
+        _seq = packet['seq']
+        _rf_src = packet['rf_src']
+        _dst_id = packet['dst_id']
+        _repeater_id = packet['repeater_id']  # Source repeater ID from remote server
+        _slot = packet['slot']
+        _call_type = packet['call_type']
+        _frame_type = packet['frame_type']
+        _stream_id = packet['stream_id']
+        
+        src_id = packet['src_id_int']
+        remote_repeater_id = packet['repeater_id_int']
+        _is_terminator = self._is_dmr_terminator(data, _frame_type)
+        
+        # Check if this talkgroup is allowed on this outbound connection
+        allowed_tgs = outbound_state.slot1_talkgroups if _slot == 1 else outbound_state.slot2_talkgroups
+        
+        # None = allow all, empty set = deny all, non-empty set = specific TGs
+        if allowed_tgs is not None and (not allowed_tgs or _dst_id not in allowed_tgs):
+            LOGGER.debug(f'[{outbound_state.config.name}] Dropping packet for unauthorized TG {packet["dst_id_int"]} on slot {_slot}')
+            return
+        
+        # Track stream state on outbound connection's TDMA slot (RX stream from remote server)
+        current_stream = outbound_state.get_slot_stream(_slot)
+        current_time = time()
+        
+        if not current_stream or current_stream.stream_id != _stream_id:
+            # New RX stream from remote server - check if slot is busy with assumed (TX) stream
+            if current_stream and current_stream.is_assumed and not current_stream.ended:
+                # Slot busy with active TX stream - remote server wins, clear TX stream
+                LOGGER.info(f'[{outbound_state.config.name}] TS{_slot} TX stream cleared by incoming RX stream')
+                outbound_state.set_slot_stream(_slot, None)
+                self._active_calls -= 1
+            
+            # Start new RX stream tracking
+            dummy_id = outbound_state.config.radio_id.to_bytes(4, 'big')
+            new_stream = StreamState(
+                repeater_id=dummy_id,
+                rf_src=_rf_src,
+                dst_id=_dst_id,
+                slot=_slot,
+                start_time=current_time,
+                last_seen=current_time,
+                stream_id=_stream_id,
+                packet_count=1,
+                call_type="private" if _call_type else "group",
+                is_assumed=False  # Real RX stream
+            )
+            outbound_state.set_slot_stream(_slot, new_stream)
+            
+            # Emit stream_start event for dashboard (RX stream from remote)
+            self._emit_stream_start(
+                'outbound',
+                outbound_state.config.name,
+                _slot,
+                _rf_src,
+                _dst_id,
+                _stream_id,
+                new_stream.call_type,
+                False,  # Real RX stream
+                remote_repeater_id  # Originating repeater ID from remote server
+            )
+            
+            LOGGER.info(f'[{outbound_state.config.name}] RX stream started on TS{_slot}: '
+                       f'src={src_id}, dst={packet["dst_id_int"]}, from remote repeater {remote_repeater_id}')
+        else:
+            # Update existing stream
+            current_stream.last_seen = current_time
+            current_stream.packet_count += 1
+        
+        # Handle terminator
+        if _is_terminator and current_stream:
+            dummy_id = outbound_state.config.radio_id.to_bytes(4, 'big')
+            self._end_stream(current_stream, dummy_id, _slot, current_time, 'terminator')
+            
+            # Emit stream_end event for dashboard (outbound RX termination)
+            self._emit_stream_end(
+                'outbound',
+                outbound_state.config.name,
+                _slot,
+                current_stream,
+                'terminator'
+            )
+        
+        # Find local repeaters that should receive this traffic
+        forwarded_count = 0
+        for local_repeater_id, local_repeater in self._repeaters.items():
+            # Only forward to connected repeaters
+            if local_repeater.connection_state != 'connected':
+                continue
+            
+            # Check if this local repeater allows this TG on this slot
+            if not self._check_outbound_routing(local_repeater_id, _slot, _dst_id):
+                continue
+            
+            # Check slot availability (don't hijack active streams)
+            if self._is_slot_busy(local_repeater_id, _slot, _stream_id, _rf_src, _dst_id):
+                continue
+            
+            # Forward the packet unchanged (repeater_id stays as remote source)
+            self._send_packet(data, local_repeater.sockaddr)
+            forwarded_count += 1
+            
+            # Track assumed stream state on local repeater
+            self._update_assumed_stream(local_repeater, _slot, _rf_src, _dst_id,
+                                       _stream_id, _is_terminator, remote_repeater_id)
+        
+        # Log forwarding at DEBUG level
+        if forwarded_count > 0:
+            LOGGER.debug(f'[{outbound_state.config.name}] Forwarded DMRD '
+                        f'(slot {_slot}, src {src_id}, dst {packet["dst_id_int"]}) '
+                        f'to {forwarded_count} local repeater(s)')
 
     
     # ========== END HELPER METHODS ==========
@@ -323,13 +765,38 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Send MSTCL to all connected repeaters
         if self._port:  # Only attempt to send if we have a port
             for repeater_id, repeater in self._repeaters.items():
-                if repeater.connection_state == 'yes':
+                if repeater.connection_state == 'connected':
                     try:
-                        LOGGER.info(f"Sending disconnect to repeater {self._rid_to_int(repeater_id)}")
+                        LOGGER.info(f"Sending disconnect to repeater {rid_to_int(repeater_id)}")
                         # asyncio uses sendto() instead of write(data, addr)
                         self._port.sendto(MSTCL, repeater.sockaddr)
                     except Exception as e:
-                        LOGGER.error(f"Error sending disconnect to repeater {self._rid_to_int(repeater_id)}: {e}")
+                        LOGGER.error(f"Error sending disconnect to repeater {rid_to_int(repeater_id)}: {e}")
+        
+        # Send RPTCL (disconnect) to all outbound connections
+        for conn_name, outbound in list(self._outbounds.items()):
+            if outbound.authenticated and outbound.transport:
+                try:
+                    LOGGER.info(f"Sending disconnect to outbound connection '{conn_name}'")
+                    our_id_bytes = outbound.config.radio_id.to_bytes(4, 'big')
+                    outbound.transport.sendto(RPTCL + our_id_bytes)
+                    
+                    # Emit disconnection event
+                    self._events.emit('outbound_disconnected', {
+                        'connection_name': conn_name,
+                        'radio_id': outbound.config.radio_id,
+                        'remote_address': outbound.config.address,
+                        'remote_port': outbound.port,
+                        'reason': 'Server shutdown'
+                    })
+                except Exception as e:
+                    LOGGER.error(f"Error sending disconnect to outbound '{conn_name}': {e}")
+        
+        # Cancel all outbound connection tasks
+        for conn_name, outbound in self._outbounds.items():
+            if outbound.connection_task and not outbound.connection_task.done():
+                LOGGER.info(f"Cancelling connection task for '{conn_name}'")
+                outbound.connection_task.cancel()
 
         # Give time for disconnects to be sent
         import time
@@ -406,13 +873,13 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             if time_since_ping > timeout_duration:
                 repeater.missed_pings += 1
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} missed ping #{repeater.missed_pings}')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} missed ping #{repeater.missed_pings}')
                 
                 # Emit event to update dashboard with missed ping count
                 self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
                 
                 if repeater.missed_pings >= max_missed:
-                    LOGGER.error(f'Repeater {self._rid_to_int(repeater_id)} timed out after {repeater.missed_pings} missed pings')
+                    LOGGER.error(f'Repeater {rid_to_int(repeater_id)} timed out after {repeater.missed_pings} missed pings')
                     # Send NAK to trigger re-registration
                     self._send_nak(repeater_id, (repeater.ip, repeater.port), reason=f"Timeout after {repeater.missed_pings} missed pings")
                     self._remove_repeater(repeater_id, "timeout")
@@ -450,7 +917,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             reason_text = f'entering hang time ({hang_time}s)'
         
         # Log stream end (DEBUG for TX, INFO for RX)
-        rid_int = self._rid_to_int(repeater_id)
+        rid_int = rid_to_int(repeater_id)
         src_int = int.from_bytes(stream.rf_src, "big")
         dst_int = int.from_bytes(stream.dst_id, "big")
         
@@ -465,22 +932,163 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Emit stream_end event for repeater card display
         # Dashboard will filter TX streams (is_assumed=True) from Recent Events log
-        self._events.emit('stream_end', {
-            'repeater_id': rid_int,
-            'slot': slot,
-            'src_id': src_int,
-            'dst_id': dst_int,
-            'duration': round(duration, 2),
-            'packets': stream.packet_count,
-            'end_reason': end_reason,
-            'hang_time': hang_time,
-            'call_type': stream.call_type,
-            'is_assumed': stream.is_assumed
-        })
+        self._emit_stream_end(
+            'repeater',
+            rid_int,
+            slot,
+            stream,
+            end_reason
+        )
         
         # Decrement active calls counter if this was an assumed (TX) stream
         if stream.is_assumed:
             self._active_calls -= 1
+
+    # ================================
+    # Stream Helper Functions  
+    # ================================
+    
+    def _emit_stream_start(self, connection_type: str, connection_id: str, 
+                          slot: int, src_id: bytes, dst_id: bytes, stream_id: bytes,
+                          call_type: str, is_assumed: bool = False,
+                          remote_repeater_id: int = None) -> None:
+        """
+        Stream_start event emission for all connection types.
+        
+        Args:
+            connection_type: 'repeater' or 'outbound'
+            connection_id: repeater_id (int) or connection_name (str) 
+            slot: Slot number
+            src_id: Source DMR ID (bytes)
+            dst_id: Destination ID (bytes)  
+            stream_id: Stream ID (bytes)
+            call_type: Call type string
+            is_assumed: Whether this is an assumed (TX) stream
+            remote_repeater_id: For outbound connections, the originating repeater ID
+        """
+        event_data = {
+            'slot': slot,
+            'src_id': int.from_bytes(src_id, 'big'),
+            'dst_id': int.from_bytes(dst_id, 'big'), 
+            'stream_id': stream_id.hex(),
+            'call_type': call_type,
+            'is_assumed': is_assumed
+        }
+        
+        if connection_type == 'repeater':
+            event_data['repeater_id'] = int(connection_id) if isinstance(connection_id, str) else connection_id
+        else:  # outbound 
+            event_data['connection_type'] = connection_type
+            event_data['connection_name'] = connection_id
+            if remote_repeater_id is not None:
+                event_data['remote_repeater_id'] = remote_repeater_id
+            
+        self._events.emit('stream_start', event_data)
+    
+    def _emit_stream_end(self, connection_type: str, connection_id: str,
+                        slot: int, stream: StreamState, end_reason: str) -> None:
+        """
+        Stream_end event emission for all connection types.
+        
+        Args:
+            connection_type: 'repeater' or 'outbound'
+            connection_id: repeater_id (int) or connection_name (str)
+            slot: Slot number
+            stream: StreamState object
+            end_reason: Reason for ending
+        """
+        duration = time() - stream.start_time
+        hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+        
+        event_data = {
+            'slot': slot,
+            'src_id': int.from_bytes(stream.rf_src, 'big'),
+            'dst_id': int.from_bytes(stream.dst_id, 'big'),
+            'stream_id': stream.stream_id.hex(),
+            'duration': round(duration, 2),
+            'packet_count': stream.packet_count,
+            'end_reason': end_reason,
+            'hang_time': hang_time,
+            'call_type': stream.call_type,
+            'is_assumed': stream.is_assumed
+        }
+        
+        if connection_type == 'repeater':
+            event_data['repeater_id'] = int(connection_id) if isinstance(connection_id, str) else connection_id
+        else:  # outbound
+            event_data['connection_type'] = connection_type
+            event_data['connection_name'] = connection_id
+            
+        self._events.emit('stream_end', event_data)
+
+    # ========== TIMEOUT & MAINTENANCE METHODS ==========
+
+    def _check_timeout(self, connection_type: str, connection_id: str,
+                      slot: int, stream: StreamState, current_time: float,
+                      stream_timeout: float, hang_time: float,
+                      synthetic_repeater_id: bytes = None) -> bool:
+        """
+        Timeout checking for all connection types.
+        
+        Args:
+            connection_type: 'repeater' or 'outbound'
+            connection_id: repeater_id (int) or connection_name (str)
+            slot: Slot number
+            stream: StreamState object
+            current_time: Current timestamp
+            stream_timeout: Stream timeout in seconds
+            hang_time: Hang time in seconds
+            synthetic_repeater_id: For outbound connections, synthetic ID for _end_stream
+            
+        Returns:
+            True if slot should be cleared, False otherwise
+        """
+        if not stream.is_active(stream_timeout):
+            if not stream.ended:
+                # Stream just ended - use unified ending logic
+                if connection_type == 'repeater':
+                    # For repeaters, connection_id is the repeater_id as bytes
+                    rid_bytes = connection_id if isinstance(connection_id, bytes) else int(connection_id).to_bytes(4, 'big')
+                else:
+                    # For outbound, use synthetic repeater_id 
+                    rid_bytes = synthetic_repeater_id
+                    
+                self._end_stream(stream, rid_bytes, slot, current_time, 'timeout')
+                return False  # Don't clear yet - entering hang time
+                
+            elif not stream.is_in_hang_time(stream_timeout, hang_time):
+                # Hang time expired - clear the slot
+                hang_duration = current_time - stream.end_time if stream.end_time else 0
+                stream_type = "TX" if stream.is_assumed else "RX"
+                
+                # Log with appropriate connection identifier
+                if connection_type == 'repeater':
+                    conn_display = f"repeater {connection_id}"
+                else:
+                    conn_display = f"outbound {connection_id}"
+                    
+                LOGGER.debug(f'{stream_type} hang time completed on {conn_display} slot {slot}: '
+                           f'src={int.from_bytes(stream.rf_src, "big")}, '
+                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
+                           f'hang_duration={hang_duration:.2f}s')
+                
+                # Emit hang_time_expired event with appropriate format
+                if connection_type == 'repeater':
+                    event_data = {
+                        'repeater_id': int(connection_id) if isinstance(connection_id, str) else connection_id,
+                        'slot': slot
+                    }
+                else:  # outbound
+                    event_data = {
+                        'connection_type': connection_type,
+                        'connection_name': connection_id,
+                        'slot': slot
+                    }
+                    
+                self._events.emit('hang_time_expired', event_data)
+                return True  # Clear the slot
+        
+        return False  # Stream still active or in hang time
     
     def _check_slot_timeout(self, repeater_id: bytes, repeater: RepeaterState, slot: int, 
                            stream: StreamState, current_time: float, stream_timeout: float, 
@@ -491,28 +1099,36 @@ class HBProtocol(asyncio.DatagramProtocol):
         Returns:
             True if slot should be cleared, False otherwise
         """
-        if not stream.is_active(stream_timeout):
-            if not stream.ended:
-                # Stream just ended - use unified ending logic
-                self._end_stream(stream, repeater_id, slot, current_time, 'timeout')
-                return False  # Don't clear yet - entering hang time
-                
-            elif not stream.is_in_hang_time(stream_timeout, hang_time):
-                # Hang time expired - clear the slot
-                hang_duration = current_time - stream.end_time if stream.end_time else 0
-                stream_type = "TX" if stream.is_assumed else "RX"
-                LOGGER.debug(f'{stream_type} hang time completed on repeater {self._rid_to_int(repeater_id)} slot {slot}: '
-                           f'src={int.from_bytes(stream.rf_src, "big")}, '
-                           f'dst={int.from_bytes(stream.dst_id, "big")}, '
-                           f'hang_duration={hang_duration:.2f}s')
-                # Emit hang_time_expired event so dashboard clears the slot
-                self._events.emit('hang_time_expired', {
-                    'repeater_id': self._rid_to_int(repeater_id),
-                    'slot': slot
-                })
-                return True  # Clear the slot
+        return self._check_timeout(
+            'repeater',
+            rid_to_int(repeater_id),
+            slot,
+            stream,
+            current_time,
+            stream_timeout,
+            hang_time,
+            repeater_id  # Pass as synthetic_repeater_id for consistency
+        )
+
+    def _check_outbound_slot_timeout(self, conn_name: str, outbound: OutboundState, slot: int,
+                                   stream: StreamState, current_time: float, stream_timeout: float,
+                                   hang_time: float) -> bool:
+        """
+        Check and handle timeout for a single outbound slot stream.
         
-        return False  # Stream still active or in hang time
+        Returns:
+            True if slot should be cleared, False otherwise
+        """
+        return self._check_timeout(
+            'outbound',
+            conn_name,
+            slot,
+            stream,
+            current_time,
+            stream_timeout,
+            hang_time,
+            outbound.config.radio_id.to_bytes(4, 'big')  # synthetic_repeater_id
+        )
     
     def _check_stream_timeouts(self):
         """Check for and clean up stale streams on all repeaters"""
@@ -540,6 +1156,23 @@ class HBProtocol(asyncio.DatagramProtocol):
                                            current_time, stream_timeout, hang_time):
                     repeater.slot2_stream = None
         
+        # Check outbound connections for hang time expiration
+        for conn_name, outbound in self._outbounds.items():
+            if not outbound.authenticated:
+                continue
+                
+            # Check slot 1
+            if outbound.slot1_stream:
+                if self._check_outbound_slot_timeout(conn_name, outbound, 1, outbound.slot1_stream,
+                                                   current_time, stream_timeout, hang_time):
+                    outbound.slot1_stream = None
+            
+            # Check slot 2
+            if outbound.slot2_stream:
+                if self._check_outbound_slot_timeout(conn_name, outbound, 2, outbound.slot2_stream,
+                                                   current_time, stream_timeout, hang_time):
+                    outbound.slot2_stream = None
+
         # Cleanup old denied stream entries (older than 10 seconds)
         denied_cutoff = current_time - 10.0
         self._denied_streams = {k: v for k, v in self._denied_streams.items() if v > denied_cutoff}
@@ -553,27 +1186,46 @@ class HBProtocol(asyncio.DatagramProtocol):
     
 
     def _send_initial_state(self):
-        """Send current state of all connected repeaters to dashboard (called on reconnect)"""
+        """Send current state of all connected repeaters and outbound connections to dashboard (called on reconnect)"""
         try:
+            # Send all connected repeaters
             for repeater_id, repeater in self._repeaters.items():
                 if repeater.connected and repeater.connection_state == 'connected':
                     # Emit repeater_connected for each already-connected repeater
                     self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
             
-            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters')
+            # Send all outbound connections (with their current status)
+            for conn_name, outbound in self._outbounds.items():
+                status = 'connecting'  # Default status
+                if outbound.authenticated and outbound.config_sent:
+                    status = 'connected'
+                elif not outbound.connected:
+                    status = 'disconnected'
+                
+                event_type = f'outbound_{status}'
+                self._events.emit(event_type, {
+                    'connection_name': conn_name,
+                    'radio_id': outbound.config.radio_id,
+                    'remote_address': outbound.config.address,
+                    'remote_port': outbound.port,
+                    'slot1_talkgroups': self._format_tg_json(outbound.slot1_talkgroups),
+                    'slot2_talkgroups': self._format_tg_json(outbound.slot2_talkgroups)
+                })
+            
+            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters, {len(self._outbounds)} outbound connections')
         except Exception as e:
             LOGGER.error(f'Error sending initial state: {e}')
     
-    def _check_inbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
+    def _check_inbound_routing(self, repeater_id: bytes, slot: int, dst_id: bytes) -> bool:
         """
         Check if a repeater is allowed to send traffic on this TS/TGID.
         
-        Uses cached TG sets in RepeaterState for O(1) lookup.
+        Uses cached TG bytes sets in RepeaterState for O(1) lookup with no conversion.
         
         Args:
             repeater_id: Repeater ID to check
             slot: Timeslot (1 or 2)
-            tgid: Talkgroup ID
+            dst_id: Destination TGID as 3-byte DMR format
             
         Returns:
             True if traffic is allowed, False otherwise
@@ -594,20 +1246,20 @@ class HBProtocol(asyncio.DatagramProtocol):
         if not allowed_tgids:
             return False
         
-        # O(1) set membership check
-        return tgid in allowed_tgids
+        # O(1) set membership check with no bytes→int conversion!
+        return dst_id in allowed_tgids
     
-    def _check_outbound_routing(self, repeater_id: bytes, slot: int, tgid: int) -> bool:
+    def _check_outbound_routing(self, repeater_id: bytes, slot: int, dst_id: bytes) -> bool:
         """
         Check if traffic should be forwarded to this repeater on this TS/TGID.
         
-        Uses cached TG sets in RepeaterState for O(1) lookup.
+        Uses cached TG bytes sets in RepeaterState for O(1) lookup with no conversion.
         Same set and logic as inbound - symmetric routing.
         
         Args:
             repeater_id: Repeater ID to check
             slot: Timeslot (1 or 2)  
-            tgid: Talkgroup ID
+            dst_id: Destination TGID as 3-byte DMR format
             
         Returns:
             True if traffic should be forwarded, False otherwise
@@ -628,8 +1280,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         if not allowed_tgids:
             return False
         
-        # O(1) set membership check
-        return tgid in allowed_tgids
+        # O(1) set membership check with no bytes→int conversion!
+        return dst_id in allowed_tgids
     
     def _is_slot_busy(self, repeater_id: bytes, slot: int, stream_id: bytes, 
                      rf_src: bytes = None, dst_id: bytes = None) -> bool:
@@ -687,10 +1339,13 @@ class HBProtocol(asyncio.DatagramProtocol):
         return True
 
     def datagram_received(self, data: bytes, addr: tuple):
-        """Handle received UDP datagram"""
+        """Handle received UDP datagram (for inbound repeater connections only)"""
         # Handle both IPv4 (ip, port) and IPv6 (ip, port, flowinfo, scopeid) address formats
         ip = addr[0]
         port = addr[1]
+        
+        # Note: Outbound connections have their own protocol instances (OutboundProtocol)
+        # so they never hit this method - this is ONLY for inbound repeater connections
         
         # Debug log the raw packet
         #LOGGER.debug(f'Raw packet from {ip}:{port}: {data.hex()}')
@@ -720,11 +1375,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 else:
                     repeater_id = data[4:8]
                 
-            if repeater_id:
-                # Per-packet logging - only enable for heavy troubleshooting
-                #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={self._rid_to_int(repeater_id)}, addr={addr}')
-                pass  # Keep pass for valid if statement syntax
-            else:
+            if not repeater_id:
                 # Unknown packet type - log full details for investigation
                 try:
                     cmd_str = _command.decode('utf-8', errors='replace')
@@ -736,23 +1387,26 @@ class HBProtocol(asyncio.DatagramProtocol):
                 LOGGER.warning(f'    Packet length: {len(data)} bytes')
                 return
 
+            # Per-packet logging - only enable for heavy troubleshooting
+            #LOGGER.debug(f'Packet received: cmd={_command}, repeater_id={rid_to_int(repeater_id)}, addr={addr}')
+
+            # Get repeater state once (for both NAK check and ping update)
+            repeater = self._repeaters.get(repeater_id)
+            
             # If repeater is not registered and this is not a login or auth packet, send NAK and return
-            if repeater_id and repeater_id not in self._repeaters:
-                if _command not in [RPTL, RPTK]:
-                    self._send_nak(repeater_id, addr, reason="Repeater not registered")
-                    return
+            if not repeater and _command not in [RPTL, RPTK]:
+                self._send_nak(repeater_id, addr, reason="Repeater not registered")
+                return
 
             # Update ping time for connected repeaters
-            if repeater_id and repeater_id in self._repeaters:
-                repeater = self._repeaters[repeater_id]
-                if repeater.connection_state == 'connected':
-                    repeater.last_ping = time()
-                    # If missed_pings is being cleared, notify dashboard
-                    if repeater.missed_pings > 0:
-                        repeater.missed_pings = 0
-                        self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
-                    else:
-                        repeater.missed_pings = 0
+            if repeater and repeater.connection_state == 'connected':
+                repeater.last_ping = time()
+                # If missed_pings is being cleared, notify dashboard
+                if repeater.missed_pings > 0:
+                    repeater.missed_pings = 0
+                    self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
+                else:
+                    repeater.missed_pings = 0
 
             # Process the packet
             if _command == DMRD:
@@ -800,16 +1454,16 @@ class HBProtocol(asyncio.DatagramProtocol):
         """Validate repeater state and address"""
         if repeater_id not in self._repeaters:
             # Per-packet logging - only enable for heavy troubleshooting
-            #LOGGER.debug(f'Repeater {self._rid_to_int(repeater_id)} not found in _repeaters dict')
+            #LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} not found in _repeaters dict')
             self._send_nak(repeater_id, addr, reason="Repeater not registered")
             return None
             
         repeater = self._repeaters[repeater_id]
         # Per-packet logging - only enable for heavy troubleshooting
-        #LOGGER.debug(f'Validating repeater {self._rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
+        #LOGGER.debug(f'Validating repeater {rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
         
-        if not self._addr_matches(repeater.sockaddr, addr):
-            LOGGER.warning(f'Message from wrong IP for repeater {self._rid_to_int(repeater_id)}')
+        if not self._addr_matches_repeater(repeater, addr):
+            LOGGER.warning(f'Message from wrong IP for repeater {rid_to_int(repeater_id)}')
             self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
             return None
             
@@ -823,8 +1477,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         """
         # Check if this is a unit/private call (call_type_bit == 1)
         if call_type_bit == 1:
-            LOGGER.info(f'UNIT CALL received on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot}: '
-                       f'src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}, '
+            LOGGER.info(f'UNIT CALL received on repeater {rid_to_int(repeater.repeater_id)} slot {slot}: '
+                       f'src={bytes_to_int(rf_src)}, dst={bytes_to_int(dst_id)}, '
                        f'stream_id={stream_id.hex()} [NOT ROUTED - unit call handling not yet implemented]')
             return False  # Reject the stream - don't process unit calls yet
         
@@ -843,7 +1497,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Remove this repeater from any active route-caches to stop wasting bandwidth.
             # Note: Ended assumed streams should go through normal hang time logic instead.
             if current_stream.is_assumed and not current_stream.ended:
-                LOGGER.info(f'Repeater {self._rid_to_int(repeater.repeater_id)} slot {slot} '
+                LOGGER.info(f'Repeater {rid_to_int(repeater.repeater_id)} slot {slot} '
                            f'starting RX while we have active assumed TX stream - repeater wins, '
                            f'removing from active route-caches')
                 
@@ -856,9 +1510,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                             other_stream.target_repeaters and
                             repeater.repeater_id in other_stream.target_repeaters):
                             other_stream.target_repeaters.discard(repeater.repeater_id)
-                            LOGGER.debug(f'Removed repeater {self._rid_to_int(repeater.repeater_id)} '
+                            LOGGER.debug(f'Removed repeater {rid_to_int(repeater.repeater_id)} '
                                        f'from route-cache of stream on repeater '
-                                       f'{self._rid_to_int(other_repeater.repeater_id)} slot {other_slot}')
+                                       f'{rid_to_int(other_repeater.repeater_id)} slot {other_slot}')
                 
                 # Clear the assumed stream - real stream takes precedence
                 # Fall through to create new real stream
@@ -873,13 +1527,13 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # Same user can always continue (any talkgroup)
                 if current_stream.rf_src == rf_src:
                     if current_stream.dst_id == dst_id:
-                        LOGGER.info(f'Same user continuing conversation on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
-                                   f'during hang time: src={int.from_bytes(rf_src, "big")}, dst={int.from_bytes(dst_id, "big")}')
+                        LOGGER.info(f'Same user continuing conversation on repeater {rid_to_int(repeater.repeater_id)} slot {slot} '
+                                   f'during hang time: src={bytes_to_int(rf_src)}, dst={bytes_to_int(dst_id)}')
                     else:
-                        LOGGER.info(f'Same user switching talkgroup on repeater {int.from_bytes(repeater.repeater_id, "big")} slot {slot} '
-                                   f'during hang time: src={int.from_bytes(rf_src, "big")}, '
-                                   f'old_dst={int.from_bytes(current_stream.dst_id, "big")}, '
-                                   f'new_dst={int.from_bytes(dst_id, "big")}')
+                        LOGGER.info(f'Same user switching talkgroup on repeater {rid_to_int(repeater.repeater_id)} slot {slot} '
+                                   f'during hang time: src={bytes_to_int(rf_src)}, '
+                                   f'old_dst={bytes_to_int(current_stream.dst_id)}, '
+                                   f'new_dst={bytes_to_int(dst_id)}')
                         fast_tg_switch = True  # Mark as fast talkgroup switch
                     # Allow by falling through to create new stream
                 # Different user - check if same talkgroup
@@ -906,17 +1560,19 @@ class HBProtocol(asyncio.DatagramProtocol):
                 return False
         
         # Check if this repeater is allowed to send traffic on this TS/TGID (inbound routing)
-        tgid = int.from_bytes(dst_id, 'big')
-        if not self._check_inbound_routing(repeater.repeater_id, slot, tgid):
+        if not self._check_inbound_routing(repeater.repeater_id, slot, dst_id):
             # Track denied streams to avoid logging every packet
             denial_key = (repeater.repeater_id, slot, stream_id)
             current_time = time()
             
             # Only log if this is the first packet of this denied stream
             if denial_key not in self._denied_streams:
+                tgid = int.from_bytes(dst_id, 'big')  # Convert only for logging
                 allowed_tgids = repeater.slot1_talkgroups if slot == 1 else repeater.slot2_talkgroups
+                # Convert bytes set to int list for logging display
+                allowed_display = sorted(int.from_bytes(tg, 'big') for tg in allowed_tgids) if allowed_tgids else []
                 LOGGER.warning(f'Inbound routing denied: repeater={int.from_bytes(repeater.repeater_id, "big")} '
-                              f'TS{slot}/TG{tgid} not in allowed list {sorted(allowed_tgids)}')
+                              f'TS{slot}/TG{tgid} not in allowed list {allowed_display}')
                 
                 # Add to denied cache
                 self._denied_streams[denial_key] = current_time
@@ -956,14 +1612,16 @@ class HBProtocol(asyncio.DatagramProtocol):
                        f'stream_id={stream_id.hex()}, targets={len(target_repeaters)}')
         
         # Emit stream_start event
-        self._events.emit('stream_start', {
-            'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-            'slot': slot,
-            'src_id': int.from_bytes(rf_src, 'big'),
-            'dst_id': int.from_bytes(dst_id, 'big'),
-            'stream_id': stream_id.hex(),
-            'call_type': new_stream.call_type
-        })
+        self._emit_stream_start(
+            'repeater', 
+            int.from_bytes(repeater.repeater_id, 'big'),
+            slot,
+            rf_src,
+            dst_id, 
+            stream_id,
+            new_stream.call_type,
+            False  # RX stream, not assumed
+        )
         
         # Update user cache (for "last heard" and private call routing)
         if self._user_cache:
@@ -1036,6 +1694,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         return True
         
+    # ========== INBOUND REPEATER MANAGEMENT ==========
+        
     def _remove_repeater(self, repeater_id: bytes, reason: str) -> None:
         """
         Remove a repeater and clean up all its state.
@@ -1045,11 +1705,11 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater = self._repeaters[repeater_id]
             
             # Log current state before removal
-            LOGGER.debug(f'Removing repeater {self._rid_to_int(repeater_id)}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.debug(f'Removing repeater {rid_to_int(repeater_id)}: reason={reason}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Emit event before removing so dashboard can update
             self._events.emit('repeater_disconnected', {
-                'repeater_id': self._rid_to_int(repeater_id),
+                'repeater_id': rid_to_int(repeater_id),
                 'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'Unknown',
                 'reason': reason
             })
@@ -1057,10 +1717,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Remove from active repeaters
             del self._repeaters[repeater_id]
             
-            # Clean up the cached repeater_id conversion to prevent memory leak
-            # (repeater_ids are bytes objects that won't be GC'd otherwise)
-            if repeater_id in self._rid_cache:
-                del self._rid_cache[repeater_id]
+            # No cache cleanup needed - using direct conversions to prevent memory leaks
             
 
     def _handle_repeater_login(self, repeater_id: bytes, addr: PeerAddress) -> None:
@@ -1069,12 +1726,21 @@ class HBProtocol(asyncio.DatagramProtocol):
         ip = addr[0]
         port = addr[1]
         
-        LOGGER.debug(f'Processing login for repeater ID {self._rid_to_int(repeater_id)} from {ip}:{port}')
+        LOGGER.debug(f'Processing login for repeater ID {rid_to_int(repeater_id)} from {ip}:{port}')
         
-        if repeater_id in self._repeaters:
-            repeater = self._repeaters[repeater_id]
-            if not self._addr_matches(repeater.sockaddr, addr):
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
+        # ID Conflict Protection: Check if this ID is reserved for an outbound connection
+        # Outbound connections (admin-configured) have priority over inbound repeaters (untrusted)
+        repeater_id_int = rid_to_int(repeater_id)
+        if repeater_id_int in self._outbound_ids:
+            LOGGER.warning(f'⛔ Rejecting inbound repeater {repeater_id_int} from {ip}:{port} '
+                         f'- ID reserved for outbound connection')
+            self._send_nak(repeater_id, addr, reason="ID reserved for outbound connection")
+            return
+        
+        repeater = self._repeaters.get(repeater_id)
+        if repeater:
+            if not self._addr_matches_repeater(repeater, addr):
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
                 # Remove the old registration first
                 old_addr = repeater.sockaddr
                 self._remove_repeater(repeater_id, "reconnect_different_port")
@@ -1084,7 +1750,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             else:
                 # Same repeater reconnecting from same IP:port
                 old_state = repeater.connection_state
-                LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} reconnecting while in state {old_state}')
+                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} reconnecting while in state {old_state}')
                 # Preserve existing salt on login retry
                 if old_state == 'login':
                     existing_salt = repeater.salt
@@ -1096,7 +1762,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Send login ACK with same salt
                     salt_bytes = repeater.salt.to_bytes(4, 'big')
                     self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
-                    LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} login retry from {ip}:{port}, resending same salt: {repeater.salt}')
+                    LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login retry from {ip}:{port}, resending same salt: {repeater.salt}')
                     return
                 
         # Create or update repeater state (fresh login)
@@ -1107,26 +1773,26 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Send login ACK with salt
         salt_bytes = repeater.salt.to_bytes(4, 'big')
         self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
-        LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} login request from {ip}:{port}, sent salt: {repeater.salt}')
+        LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login request from {ip}:{port}, sent salt: {repeater.salt}')
 
     def _handle_auth_response(self, repeater_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'login':
-            LOGGER.warning(f'Auth response from repeater {self._rid_to_int(repeater_id)} in wrong state')
+            LOGGER.warning(f'Auth response from repeater {rid_to_int(repeater_id)} in wrong state')
             self._send_nak(repeater_id, addr)
             return
             
         try:
             # Get config for this repeater including its passphrase
             repeater_config = self._matcher.get_repeater_config(
-                self._rid_to_int(repeater_id),
+                rid_to_int(repeater_id),
                 repeater.get_callsign_str()
             )
             
             # If no matching configuration found, reject the connection
             if repeater_config is None:
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} does not match any configured patterns and no default is set')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} does not match any configured patterns and no default is set')
                 self._send_nak(repeater_id, addr, reason="No matching configuration")
                 self._remove_repeater(repeater_id, "no_config_match")
                 return
@@ -1139,14 +1805,14 @@ class HBProtocol(asyncio.DatagramProtocol):
                 repeater.authenticated = True
                 repeater.connection_state = 'config'
                 self._send_packet(b''.join([RPTACK, repeater_id]), addr)
-                LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} authenticated successfully')
+                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated successfully')
             else:
-                LOGGER.warning(f'Repeater {self._rid_to_int(repeater_id)} failed authentication')
+                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} failed authentication')
                 self._send_nak(repeater_id, addr, reason="Authentication failed")
                 self._remove_repeater(repeater_id, "auth_failed")
                 
         except Exception as e:
-            LOGGER.error(f'Authentication error for repeater {self._rid_to_int(repeater_id)}: {str(e)}')
+            LOGGER.error(f'Authentication error for repeater {rid_to_int(repeater_id)}: {str(e)}')
             self._send_nak(repeater_id, addr)
             self._remove_repeater(repeater_id, "auth_error")
 
@@ -1156,7 +1822,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater_id = data[4:8]
             repeater = self._validate_repeater(repeater_id, addr)
             if not repeater or not repeater.authenticated or repeater.connection_state != 'config':
-                LOGGER.warning(f'Config from repeater {self._rid_to_int(repeater_id)} in wrong state')
+                LOGGER.warning(f'Config from repeater {rid_to_int(repeater_id)} in wrong state')
                 self._send_nak(repeater_id, addr)
                 return
                 
@@ -1177,7 +1843,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater.package_id = data[262:302]
             
             # Log detailed configuration at debug level
-            LOGGER.debug(f'Repeater {self._rid_to_int(repeater_id)} config:'
+            LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} config:'
                       f'\n    Callsign: {repeater.callsign.decode().strip()}'
                       f'\n    RX Freq: {repeater.rx_freq.decode().strip()}'
                       f'\n    TX Freq: {repeater.tx_freq.decode().strip()}'
@@ -1193,8 +1859,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._load_repeater_tg_config(repeater_id, repeater)
             
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
-            LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) configured successfully')
-            LOGGER.debug(f'Repeater state after config: id={self._rid_to_int(repeater_id)}, state={repeater.connection_state}, addr={repeater.sockaddr}')
+            LOGGER.info(f'Repeater {rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) configured successfully')
+            LOGGER.debug(f'Repeater state after config: id={rid_to_int(repeater_id)}, state={repeater.connection_state}, addr={repeater.sockaddr}')
             
             # Emit detailed repeater info (sent once on connection)
             self._emit_repeater_details(repeater_id, repeater)
@@ -1212,7 +1878,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         Emit detailed repeater information (sent once on connection).
         This includes metadata and pattern match information that doesn't change during the connection.
         """
-        rid_int = self._rid_to_int(repeater_id)
+        rid_int = rid_to_int(repeater_id)
         callsign = repeater.get_callsign_str()
         
         # Get pattern match info
@@ -1233,7 +1899,6 @@ class HBProtocol(asyncio.DatagramProtocol):
                 elif callsign and pattern.callsigns:
                     for pattern_str in pattern.callsigns:
                         pattern_regex = pattern_str.replace('*', '.*') if '*' in pattern_str else pattern_str
-                        import re
                         if re.match(f"^{pattern_regex}$", callsign, re.IGNORECASE):
                             match_reason = f"callsign: {pattern_str}"
                             break
@@ -1254,15 +1919,15 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Emit detailed info event
         self._events.emit('repeater_details', {
             'repeater_id': rid_int,
-            'latitude': repeater.latitude.decode('utf-8', errors='ignore').strip() if repeater.latitude else '',
-            'longitude': repeater.longitude.decode('utf-8', errors='ignore').strip() if repeater.longitude else '',
-            'height': repeater.height.decode('utf-8', errors='ignore').strip() if repeater.height else '',
-            'tx_power': repeater.tx_power.decode('utf-8', errors='ignore').strip() if repeater.tx_power else '',
-            'description': repeater.description.decode('utf-8', errors='ignore').strip() if repeater.description else '',
-            'url': repeater.url.decode('utf-8', errors='ignore').strip() if repeater.url else '',
-            'software_id': repeater.software_id.decode('utf-8', errors='ignore').strip() if repeater.software_id else '',
-            'package_id': repeater.package_id.decode('utf-8', errors='ignore').strip() if repeater.package_id else '',
-            'slots': repeater.slots.decode('utf-8', errors='ignore').strip() if repeater.slots else '',
+            'latitude': safe_decode_bytes(repeater.latitude),
+            'longitude': safe_decode_bytes(repeater.longitude),
+            'height': safe_decode_bytes(repeater.height),
+            'tx_power': safe_decode_bytes(repeater.tx_power),
+            'description': safe_decode_bytes(repeater.description),
+            'url': safe_decode_bytes(repeater.url),
+            'software_id': safe_decode_bytes(repeater.software_id),
+            'package_id': safe_decode_bytes(repeater.package_id),
+            'slots': safe_decode_bytes(repeater.slots),
             'matched_pattern': pattern_name,
             'pattern_description': pattern_desc,
             'match_reason': match_reason
@@ -1282,18 +1947,18 @@ class HBProtocol(asyncio.DatagramProtocol):
         try:
             # Parse options string
             options_str = data.decode('utf-8', errors='ignore').strip('\x00').strip()
-            LOGGER.info(f'📋 OPTIONS from {self._rid_to_int(repeater_id)} ({repeater.callsign.decode().strip()}): {options_str}')
+            LOGGER.info(f'📋 OPTIONS from {rid_to_int(repeater_id)} ({repeater.callsign.decode().strip()}): {options_str}')
             
             # Get original config TGs (these are the master allow list)
             repeater_config = self._matcher.get_repeater_config(
-                self._rid_to_int(repeater_id),
+                rid_to_int(repeater_id),
                 repeater.callsign.decode().strip() if repeater.callsign else None
             )
             
-            # Convert config to sets, handling None (allow all) properly
+            # Convert config to bytes sets, handling None (allow all) properly
             # None = allow all TGs, [] = deny all, [1,2,3] = specific TGs
-            config_ts1 = set(repeater_config.slot1_talkgroups) if repeater_config.slot1_talkgroups is not None else None
-            config_ts2 = set(repeater_config.slot2_talkgroups) if repeater_config.slot2_talkgroups is not None else None
+            config_ts1 = {tg.to_bytes(3, 'big') for tg in repeater_config.slot1_talkgroups} if repeater_config.slot1_talkgroups is not None else None
+            config_ts2 = {tg.to_bytes(3, 'big') for tg in repeater_config.slot2_talkgroups} if repeater_config.slot2_talkgroups is not None else None
             
             # Parse RPTO format: "TS1=1,2,3;TS2=4,5,6;..."
             requested_ts1 = set()
@@ -1307,10 +1972,10 @@ class HBProtocol(asyncio.DatagramProtocol):
                 key = key.strip().upper()
                 
                 if key == 'TS1' and value:
-                    requested_ts1 = {int(tg.strip()) for tg in value.split(',') 
+                    requested_ts1 = {int(tg.strip()).to_bytes(3, 'big') for tg in value.split(',') 
                                      if tg.strip().isdigit()}
                 elif key == 'TS2' and value:
-                    requested_ts2 = {int(tg.strip()) for tg in value.split(',') 
+                    requested_ts2 = {int(tg.strip()).to_bytes(3, 'big') for tg in value.split(',') 
                                      if tg.strip().isdigit()}
             
             # Check if this repeater is trusted
@@ -1323,11 +1988,13 @@ class HBProtocol(asyncio.DatagramProtocol):
                 if config_ts1 is not None and requested_ts1:
                     extra_ts1 = requested_ts1 - config_ts1
                     if extra_ts1:
-                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS1 TGs: {sorted(extra_ts1)}')
+                        extra_ts1_ints = sorted(int.from_bytes(tg, 'big') for tg in extra_ts1)
+                        LOGGER.info(f'🔓 Trusted repeater {rid_to_int(repeater_id)} using additional TS1 TGs: {extra_ts1_ints}')
                 if config_ts2 is not None and requested_ts2:
                     extra_ts2 = requested_ts2 - config_ts2
                     if extra_ts2:
-                        LOGGER.info(f'🔓 Trusted repeater {self._rid_to_int(repeater_id)} using additional TS2 TGs: {sorted(extra_ts2)}')
+                        extra_ts2_ints = sorted(int.from_bytes(tg, 'big') for tg in extra_ts2)
+                        LOGGER.info(f'🔓 Trusted repeater {rid_to_int(repeater_id)} using additional TS2 TGs: {extra_ts2_ints}')
                 
                 rejected_ts1 = set()
                 rejected_ts2 = set()
@@ -1359,9 +2026,11 @@ class HBProtocol(asyncio.DatagramProtocol):
                     rejected_ts2 = set()
             
             if rejected_ts1:
-                LOGGER.warning(f'⚠️  TS1 TG(s) {sorted(rejected_ts1)} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
+                rejected_ts1_ints = sorted(int.from_bytes(tg, 'big') for tg in rejected_ts1)
+                LOGGER.warning(f'⚠️  TS1 TG(s) {rejected_ts1_ints} requested by repeater {rid_to_int(repeater_id)} not allowed by config')
             if rejected_ts2:
-                LOGGER.warning(f'⚠️  TS2 TG(s) {sorted(rejected_ts2)} requested by repeater {self._rid_to_int(repeater_id)} not allowed by config')
+                rejected_ts2_ints = sorted(int.from_bytes(tg, 'big') for tg in rejected_ts2)
+                LOGGER.warning(f'⚠️  TS2 TG(s) {rejected_ts2_ints} requested by repeater {rid_to_int(repeater_id)} not allowed by config')
             
             # Replace repeater's TG sets (no need to keep old ones)
             repeater.slot1_talkgroups = final_ts1
@@ -1374,7 +2043,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Emit event to update dashboard in real-time
             self._events.emit('repeater_options_updated', {
-                'repeater_id': self._rid_to_int(repeater_id),
+                'repeater_id': rid_to_int(repeater_id),
                 'slot1_talkgroups': self._format_tg_json(final_ts1),
                 'slot2_talkgroups': self._format_tg_json(final_ts2),
                 'rpto_received': True
@@ -1384,7 +2053,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             
         except Exception as e:
-            LOGGER.error(f'Error processing RPTO from {self._rid_to_int(repeater_id)}: {e}')
+            LOGGER.error(f'Error processing RPTO from {rid_to_int(repeater_id)}: {e}')
             # Still send ACK to avoid retries
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
@@ -1405,7 +2074,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # - Header (format, length)
             # - Text blocks (7-bit encoded callsign/name)
             # For now, just acknowledge receipt
-            LOGGER.debug(f'📻 Talker Alias from {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
+            LOGGER.debug(f'📻 Talker Alias from {rid_to_int(repeater_id)} ({repeater.get_callsign_str()})')
             
             # TODO: Future enhancement - parse talker alias blocks and emit to dashboard
             # Talker alias format: https://github.com/g4klx/MMDVMHost/wiki/Talker-Alias
@@ -1414,7 +2083,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             
         except Exception as e:
-            LOGGER.error(f'Error processing DMRA from {self._rid_to_int(repeater_id)}: {e}')
+            LOGGER.error(f'Error processing DMRA from {rid_to_int(repeater_id)}: {e}')
             # Still send ACK to avoid retries
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
@@ -1422,7 +2091,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         """Handle ping (RPTPING/RPTP) from the repeater as a keepalive."""
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'Ping from repeater {self._rid_to_int(repeater_id)} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
+            LOGGER.warning(f'Ping from repeater {rid_to_int(repeater_id)} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
             self._send_nak(repeater_id, addr, reason="Wrong connection state")
             return
             
@@ -1430,7 +2099,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         repeater.last_ping = time()
         had_missed_pings = repeater.missed_pings > 0
         if had_missed_pings:
-            LOGGER.info(f'Ping counter reset for repeater {self._rid_to_int(repeater_id)} after {repeater.missed_pings} missed pings')
+            LOGGER.info(f'Ping counter reset for repeater {rid_to_int(repeater_id)} after {repeater.missed_pings} missed pings')
         repeater.missed_pings = 0
         repeater.ping_count += 1
         
@@ -1439,65 +2108,34 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
         
         # Send MSTPONG in response to RPTPING/RPTP from repeater
-        LOGGER.debug(f'Sending MSTPONG to repeater {self._rid_to_int(repeater_id)}')
+        LOGGER.debug(f'Sending MSTPONG to repeater {rid_to_int(repeater_id)}')
         self._send_packet(b''.join([MSTPONG, repeater_id]), addr)
 
     def _handle_disconnect(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle repeater disconnect"""
         repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
-            LOGGER.info(f'Repeater {self._rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) disconnected')
+            LOGGER.info(f'Repeater {rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) disconnected')
             self._remove_repeater(repeater_id, "disconnect")
             
     def _handle_status(self, repeater_id: bytes, data: bytes, addr: PeerAddress) -> None:
         """Handle repeater status report (including RSSI)"""
         repeater = self._validate_repeater(repeater_id, addr)
         if repeater:
-            LOGGER.debug(f'Status report from repeater {self._rid_to_int(repeater_id)}: {data[8:].hex()}')
+            LOGGER.debug(f'Status report from repeater {rid_to_int(repeater_id)}: {data[8:].hex()}')
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
 
     def _is_dmr_terminator(self, data: bytes, frame_type: int) -> bool:
-        """
-        Determine if a DMR packet is a stream terminator by checking the frame type.
-        
-        In the Homebrew protocol, terminators are indicated in byte 15 of the packet:
-        - Bits 4-5 (_frame_type): Must be 0x2 (HBPF_DATA_SYNC - data sync frame)
-        - Bits 0-3 (_dtype_vseq): Must be 0x2 (HBPF_SLT_VTERM - voice terminator)
-        
-        This is much simpler than ETSI sync pattern extraction, as the Homebrew
-        protocol explicitly flags terminator frames in the packet header.
-        
-        Args:
-            data: The full DMRD packet (including 20-byte Homebrew header + 33-byte DMR data)
-            frame_type: The frame type extracted from byte 15, bits 4-5
-                       (0 = voice, 1 = voice sync, 2 = data sync)
-        
-        Returns:
-            bool: True if this is a terminator frame, False otherwise
-        
-        Note:
-            This enables immediate terminator detection (~60ms latency) instead of
-            timeout-based detection (~200ms). HBlink3 uses this same method.
-        """
-        # Check packet length
-        if len(data) < 16:
-            return False
-            
-        # Extract the data type / voice sequence from bits 0-3 of byte 15
-        _bits = data[15]
-        _dtype_vseq = _bits & 0xF
-        
-        # Terminator: frame_type == 2 (DATA_SYNC) and dtype_vseq == 2 (SLT_VTERM)
-        # Constants: HBPF_DATA_SYNC = 0x2, HBPF_SLT_VTERM = 0x2
-        return frame_type == 0x2 and _dtype_vseq == 0x2
+        """DMR terminator detection - delegated to protocol module"""
+        return is_dmr_terminator(data, frame_type)
     
     def _calculate_stream_targets(self, source_repeater_id: bytes, slot: int, 
                                   dst_id: bytes, stream_id: bytes, rf_src: bytes) -> set:
         """
-        Calculate which repeaters should receive this ENTIRE transmission.
+        Calculate which repeaters AND outbound connections should receive this ENTIRE transmission.
         
         Checks both routing rules AND current slot availability at stream start.
-        If a slot is busy now, that repeater is excluded from THIS transmission,
+        If a slot is busy now, that target is excluded from THIS transmission,
         but will be reconsidered for the NEXT transmission.
         
         This "calculate once per stream" approach provides:
@@ -1506,11 +2144,13 @@ class HBProtocol(asyncio.DatagramProtocol):
         - Simpler code: Deterministic routing per transmission
         
         Returns:
-            Set of repeater_ids (bytes) that will receive ALL packets in this stream
+            Set of target identifiers:
+            - repeater_ids (bytes) for local repeaters
+            - ('outbound', name) tuples for outbound connections
         """
-        tgid = int.from_bytes(dst_id, 'big')
         target_set = set()
         
+        # Calculate local repeater targets
         for target_repeater_id, target_repeater in self._repeaters.items():
             # Skip source repeater
             if target_repeater_id == source_repeater_id:
@@ -1521,7 +2161,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 continue
             
             # Check outbound routing (TG allowed on this repeater/slot)
-            if not self._check_outbound_routing(target_repeater_id, slot, tgid):
+            if not self._check_outbound_routing(target_repeater_id, slot, dst_id):
                 continue
             
             # Check slot availability AT STREAM START (not per-packet!)
@@ -1533,6 +2173,48 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Passed all checks - will receive entire transmission
             target_set.add(target_repeater_id)
+        
+        # Calculate outbound connection targets
+        for conn_name, outbound in self._outbounds.items():
+            # Only forward to authenticated connections
+            if not outbound.authenticated:
+                continue
+            
+            # Check TG routing (is this TG allowed on this outbound connection?)
+            allowed_tgs = outbound.slot1_talkgroups if slot == 1 else outbound.slot2_talkgroups
+            
+            # None = allow all, empty set = deny all, non-empty set = specific TGs
+            if allowed_tgs is not None and (not allowed_tgs or dst_id not in allowed_tgs):
+                continue
+            
+            # Check TDMA slot availability - outbound connections are like repeaters
+            # Each slot can only carry ONE talkgroup stream at a time (air interface constraint)
+            current_stream = outbound.get_slot_stream(slot)
+            if current_stream:
+                # Same stream continuing
+                if current_stream.stream_id == stream_id:
+                    pass  # Same stream, ok to continue
+                # Different stream - check if in hang time or still active
+                elif current_stream.ended:
+                    # Stream ended, check hang time (protects TG conversations)
+                    hang_time = CONFIG.get('global', {}).get('stream_hang_time', 10.0)
+                    time_since_end = time() - current_stream.end_time if current_stream.end_time else 0
+                    if time_since_end < hang_time:
+                        # In hang time - only allow same TG or original user
+                        same_tg = (current_stream.dst_id == dst_id)
+                        same_user = (current_stream.rf_src == rf_src)
+                        if not (same_tg or same_user):
+                            LOGGER.debug(f'Outbound {conn_name} TS{slot} in hang time, '
+                                       f'excluded from this transmission')
+                            continue
+                else:
+                    # Different active stream - slot is busy
+                    LOGGER.debug(f'Outbound {conn_name} TS{slot} busy with different stream, '
+                               f'excluded from this transmission')
+                    continue
+            
+            # Passed all checks - will receive entire transmission
+            target_set.add(('outbound', conn_name))
         
         return target_set
     
@@ -1578,40 +2260,78 @@ class HBProtocol(asyncio.DatagramProtocol):
         is_terminator = self._is_dmr_terminator(data, _frame_type)
         
         # Simple loop through cached targets - no per-packet checks!
-        for target_repeater_id in source_stream.target_repeaters:
-            target_repeater = self._repeaters.get(target_repeater_id)
-            if not target_repeater:
-                continue  # Repeater disconnected mid-stream
-            
-            # Forward packet (no routing or slot checks - already approved!)
-            self._send_packet(data, target_repeater.sockaddr)
-            
-            # Track assumed stream state on target repeater
-            self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, 
-                                       stream_id, is_terminator, 
-                                       int.from_bytes(source_repeater_id, 'big'))
+        for target in source_stream.target_repeaters:
+            # Check if target is an outbound connection or local repeater
+            if isinstance(target, tuple) and target[0] == 'outbound':
+                # Target is an outbound connection (we're acting as a repeater to remote server)
+                conn_name = target[1]
+                outbound = self._outbounds.get(conn_name)
+                if not outbound or not outbound.authenticated:
+                    continue  # Connection dropped mid-stream
+                
+                # CRITICAL: Rewrite repeater ID in DMRD packet (bytes 11-14)
+                # The remote server only knows us as our outbound radio_id, not the source repeater
+                # Must modify packet to replace source repeater ID with our outbound connection ID
+                modified_data = bytearray(data)
+                our_id_bytes = outbound.config.radio_id.to_bytes(4, 'big')
+                modified_data[11:15] = our_id_bytes
+                
+                # Forward modified packet to outbound server
+                outbound.transport.sendto(bytes(modified_data))
+                
+                # Track assumed stream state on outbound slot (TDMA constraint)
+                # We must track what we're transmitting on each timeslot
+                self._update_assumed_stream_outbound(outbound, slot, rf_src, dst_id, 
+                                                    stream_id, is_terminator,
+                                                    int.from_bytes(source_repeater_id, 'big'))
+                
+            else:
+                # Target is a local repeater (bytes)
+                target_repeater_id = target
+                target_repeater = self._repeaters.get(target_repeater_id)
+                if not target_repeater:
+                    continue  # Repeater disconnected mid-stream
+                
+                # Forward packet (no routing or slot checks - already approved!)
+                self._send_packet(data, target_repeater.sockaddr)
+                
+                # Track assumed stream state on target repeater
+                self._update_assumed_stream(target_repeater, slot, rf_src, dst_id, 
+                                           stream_id, is_terminator, 
+                                           int.from_bytes(source_repeater_id, 'big'))
     
+    # ================================
+    # DMR Packet Processing
+    # ================================
+    
+    def _parse_dmr_packet(self, data: bytes) -> Optional[Dict[str, Any]]:
+        """Parse DMR packet - delegated to protocol module"""
+        return parse_dmr_packet(data)
+    
+# _safe_decode_bytes moved to utils.py
+
     def _handle_dmr_data(self, data: bytes, addr: PeerAddress) -> None:
         """Handle DMR data"""
-        if len(data) < 55:
+        # Parse packet using unified parser
+        packet = self._parse_dmr_packet(data)
+        if not packet:
             LOGGER.warning(f'Invalid DMR data packet from {addr[0]}:{addr[1]} - length {len(data)} < 55')
             return
             
-        repeater_id = data[11:15]
+        repeater_id = packet['repeater_id']
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'DMR data from repeater {self._rid_to_int(repeater_id)} in wrong state')
+            LOGGER.warning(f'DMR data from repeater {packet["repeater_id_int"]} in wrong state')
             return
             
-        # Extract packet information
-        _seq = data[4]
-        _rf_src = data[5:8]
-        _dst_id = data[8:11]
-        _bits = data[15]
-        _slot = 2 if (_bits & 0x80) else 1
-        _call_type = (_bits & 0x40) >> 6  # Bit 6: 1 = private/unit, 0 = group
-        _frame_type = (_bits & 0x30) >> 4  # 0 = voice, 1 = voice sync, 2 = data sync, 3 = unused
-        _stream_id = data[16:20]  # Stream ID for tracking unique transmissions
+        # Extract fields from parsed packet
+        _seq = packet['seq']
+        _rf_src = packet['rf_src']
+        _dst_id = packet['dst_id']
+        _slot = packet['slot']
+        _call_type = packet['call_type']
+        _frame_type = packet['frame_type']
+        _stream_id = packet['stream_id']
         
         # Check if this is a stream terminator (immediate end detection)
         # Note: _is_dmr_terminator() checks packet header flags for immediate detection
@@ -1622,7 +2342,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         if not stream_valid:
             # Stream contention or not allowed - drop packet silently
-            LOGGER.debug(f'Dropped packet from repeater {self._rid_to_int(repeater_id)} slot {_slot}: '
+            LOGGER.debug(f'Dropped packet from repeater {rid_to_int(repeater_id)} slot {_slot}: '
                         f'src={int.from_bytes(_rf_src, "big")}, dst={int.from_bytes(_dst_id, "big")}, '
                         f'reason=stream contention or talkgroup not allowed')
             return
@@ -1631,9 +2351,9 @@ class HBProtocol(asyncio.DatagramProtocol):
         current_stream = repeater.get_slot_stream(_slot)
         
         # Per-packet logging - only enable for heavy troubleshooting
-        #LOGGER.debug(f'DMR data from {self._rid_to_int(repeater_id)} slot {_slot}: '
-        #            f'seq={_seq}, src={int.from_bytes(_rf_src, "big")}, '
-        #            f'dst={int.from_bytes(_dst_id, "big")}, '
+        #LOGGER.debug(f'DMR data from {packet["repeater_id_int"]} slot {_slot}: '
+        #            f'seq={_seq}, src={packet["src_id_int"]}, '
+        #            f'dst={packet["dst_id_int"]}, '
         #            f'stream_id={_stream_id.hex()}, '
         #            f'frame_type={_frame_type}, '
         #            f'terminator={_is_terminator}, '
@@ -1647,10 +2367,10 @@ class HBProtocol(asyncio.DatagramProtocol):
         # Emit stream_update every 60 packets (10 superframes = 1 second)
         if current_stream and not current_stream.ended and current_stream.packet_count % 60 == 0:
             self._events.emit('stream_update', {
-                'repeater_id': self._rid_to_int(repeater_id),
+                'repeater_id': rid_to_int(repeater_id),
                 'slot': _slot,
-                'src_id': int.from_bytes(_rf_src, 'big'),
-                'dst_id': int.from_bytes(_dst_id, 'big'),
+                'src_id': int.from_bytes(current_stream.rf_src, 'big'),
+                'dst_id': int.from_bytes(current_stream.dst_id, 'big'),
                 'duration': round(time() - current_stream.start_time, 2),
                 'packets': current_stream.packet_count,
                 'call_type': current_stream.call_type
@@ -1707,14 +2427,16 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Emit stream_start event for repeater card display (but marked as assumed)
             # Dashboard will filter these from Recent Events log
-            self._events.emit('stream_start', {
-                'repeater_id': int.from_bytes(repeater.repeater_id, 'big'),
-                'slot': slot,
-                'src_id': int.from_bytes(rf_src, 'big'),
-                'dst_id': int.from_bytes(dst_id, 'big'),
-                'call_type': 'group',
-                'is_assumed': True
-            })
+            self._emit_stream_start(
+                'repeater',
+                int.from_bytes(repeater.repeater_id, 'big'),
+                slot,
+                rf_src,
+                dst_id,
+                stream_id,
+                'group',
+                True  # TX assumed stream
+            )
             
             # Update active calls counter
             self._active_calls += 1
@@ -1727,13 +2449,90 @@ class HBProtocol(asyncio.DatagramProtocol):
         if is_terminator and current_stream:
             self._end_stream(current_stream, repeater.repeater_id, slot, current_time, 'terminator')
 
+    def _update_assumed_stream_outbound(self, outbound: OutboundState, slot: int, rf_src: bytes,
+                                       dst_id: bytes, stream_id: bytes, is_terminator: bool,
+                                       source_repeater_id: int) -> None:
+        """
+        Update or create assumed stream state on an outbound connection's TDMA slot.
+        
+        Since we're acting as a repeater to the remote server and forwarding traffic,
+        we must track what we're transmitting on each timeslot (TDMA air interface constraint).
+        
+        Args:
+            outbound: Target outbound connection state
+            slot: Timeslot (1 or 2)
+            rf_src: Source subscriber ID
+            dst_id: Destination TGID
+            stream_id: Stream identifier
+            is_terminator: Whether this packet is a terminator
+            source_repeater_id: ID of source repeater (for logging)
+        """
+        current_stream = outbound.get_slot_stream(slot)
+        current_time = time()
+        
+        if not current_stream or current_stream.stream_id != stream_id:
+            # New assumed stream starting on this outbound timeslot
+            # Use a dummy repeater_id for outbound streams (can't use bytes for outbound)
+            dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
+            
+            new_stream = StreamState(
+                repeater_id=dummy_id,  # Our ID when acting as repeater
+                rf_src=rf_src,
+                dst_id=dst_id,
+                slot=slot,
+                start_time=current_time,
+                last_seen=current_time,
+                stream_id=stream_id,
+                packet_count=1,
+                call_type="group",  # Assume group call for forwarded streams
+                is_assumed=True  # Mark as assumed stream (TX, not RX)
+            )
+            outbound.set_slot_stream(slot, new_stream)
+            
+            # Emit stream_start event for dashboard (using outbound connection name as identifier)
+            # Keep structure minimal and JSON-serializable (match repeater-style fields
+            # where possible). Do NOT include UserEntry objects (callsign) here.
+            self._emit_stream_start(
+                'outbound',
+                outbound.config.name,
+                slot,
+                rf_src,
+                dst_id,
+                stream_id,
+                'group',
+                True  # TX assumed stream
+            )
+            
+            # Increment active calls counter
+            self._active_calls += 1
+        else:
+            # Update existing assumed stream
+            current_stream.last_seen = current_time
+            current_stream.packet_count += 1
+        
+        # Handle terminator - end the stream and start hang time
+        if is_terminator and current_stream:
+            # For outbound streams, use a synthetic repeater_id for logging
+            dummy_id = outbound.config.radio_id.to_bytes(4, 'big')
+            self._end_stream(current_stream, dummy_id, slot, current_time, 'terminator')
+            
+            # Emit stream_end event for dashboard
+            self._emit_stream_end(
+                'outbound',
+                outbound.config.name,
+                slot,
+                current_stream,
+                'terminator'
+            )
+
+
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
         cmd = data[:4]
         #if cmd != DMRD:  # Don't log DMR data packets
         #    LOGGER.debug(f'Sending {cmd.decode()} to {addr[0]}:{addr[1]}')
         # asyncio uses sendto() instead of write(data, addr)
-        self.transport.sendto(data, self._normalize_addr(addr))
+        self.transport.sendto(data, normalize_addr(addr))
 
     def _send_nak(self, repeater_id: bytes, addr: tuple, reason: str = None, is_shutdown: bool = False):
         """Send NAK to specified address
@@ -1745,7 +2544,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             is_shutdown: Whether this NAK is part of a graceful shutdown
         """
         log_level = logging.DEBUG if is_shutdown else logging.WARNING
-        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {self._rid_to_int(repeater_id)}'
+        log_msg = f'Sending NAK to {addr[0]}:{addr[1]} for repeater {rid_to_int(repeater_id)}'
         if reason:
             log_msg += f' - {reason}'
         
@@ -1753,79 +2552,18 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._send_packet(b''.join([MSTNAK, repeater_id]), addr)
 
 
-def cleanup_old_logs(log_dir: pathlib.Path, max_days: int) -> None:
-    """Clean up log files older than max_days based on their date suffix"""
-    from datetime import datetime, timedelta
-    current_date = datetime.now()
-    cutoff_date = current_date - timedelta(days=max_days)
-    
-    try:
-        for log_file in log_dir.glob('hblink.log.*'):
-            try:
-                # Extract date from filename (expecting format: hblink.log.YYYY-MM-DD)
-                date_str = log_file.name.split('.')[-1]
-                file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                
-                if file_date < cutoff_date:
-                    log_file.unlink()
-                    LOGGER.debug(f'Deleted old log file from {date_str}: {log_file}')
-            except (OSError, ValueError) as e:
-                LOGGER.warning(f'Error processing old log file {log_file}: {e}')
-    except Exception as e:
-        LOGGER.error(f'Error during log cleanup: {e}')
+# Logging functions moved to utils.py
 
-def setup_logging():
-    """Configure logging"""
-    logging_config = CONFIG.get('global', {}).get('logging', {})
-    
-    # Get logging configuration with defaults
-    log_file = logging_config.get('file', 'logs/hblink.log')
-    file_level = getattr(logging, logging_config.get('file_level', 'DEBUG'))
-    console_level = getattr(logging, logging_config.get('console_level', 'INFO'))
-    max_days = logging_config.get('retention_days', 30)
-    
-    log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    
-    # Create log directory if it doesn't exist
-    log_path = pathlib.Path(log_file)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Clean up old log files
-    cleanup_old_logs(log_path.parent, max_days)
-    
-    # Configure rotating file handler with date-based suffix
-    file_handler = logging.handlers.TimedRotatingFileHandler(
-        str(log_path),
-        when='midnight',
-        interval=1,
-        backupCount=max_days
-    )
-    # Set the suffix for rotated files to YYYY-MM-DD
-    file_handler.suffix = '%Y-%m-%d'
-    # Don't include seconds in date suffix
-    file_handler.namer = lambda name: name.replace('.%Y-%m-%d%H%M%S', '.%Y-%m-%d')
-    file_handler.setFormatter(log_format)
-    file_handler.setLevel(file_level)
-    
-    # Configure console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_format)
-    console_handler.setLevel(console_level)
-    
-    # Add handlers and set level to most verbose of the two
-    LOGGER.addHandler(file_handler)
-    LOGGER.addHandler(console_handler)
-    LOGGER.setLevel(min(file_level, console_level))
+# Configuration functions moved to config.py
 
 def load_config(config_file: str):
-    """Load JSON configuration file"""
-    try:
-        with open(config_file, 'r') as f:
-            global CONFIG
-            CONFIG = json.load(f)
-    except Exception as e:
-        LOGGER.error(f'Error loading configuration: {e}')
-        sys.exit(1)
+    """Wrapper for config module load_config - maintains global CONFIG"""
+    global CONFIG
+    CONFIG = load_config_func(config_file, LOGGER)
+
+def parse_outbound_connections() -> List[OutboundConnectionConfig]:
+    """Wrapper for config module parse_outbound_connections"""
+    return parse_outbound_func(CONFIG, LOGGER)
 
 async def async_main():
     """Main async entry point"""
@@ -1892,6 +2630,42 @@ async def async_main():
         LOGGER.error('Failed to bind to any interface')
         sys.exit(1)
     
+    # Parse and validate outbound connections
+    outbound_configs = parse_outbound_connections()
+    
+    # Reserve outbound IDs and initialize connections (all protocols share the state)
+    if outbound_configs and protocols:
+        # Use first protocol for outbound connection management
+        primary_protocol = protocols[0]
+        for config in outbound_configs:
+            if config.enabled:
+                # Reserve the ID to prevent DoS
+                if config.radio_id in primary_protocol._outbound_ids:
+                    LOGGER.error(f'✗ Duplicate outbound ID {config.radio_id} for "{config.name}"')
+                    sys.exit(1)
+                primary_protocol._outbound_ids.add(config.radio_id)
+                LOGGER.info(f'✓ Reserved ID {config.radio_id} for outbound "{config.name}"')
+                
+                # Parse options to get talkgroups for dashboard
+                slot1_tgs, slot2_tgs = primary_protocol._parse_options(config.options)
+                
+                # Emit initial connecting state event for dashboard
+                primary_protocol._events.emit('outbound_connecting', {
+                    'connection_name': config.name,
+                    'radio_id': config.radio_id,
+                    'remote_address': config.address,
+                    'remote_port': config.port,
+                    'slot1_talkgroups': list(slot1_tgs) if slot1_tgs else None,
+                    'slot2_talkgroups': list(slot2_tgs) if slot2_tgs else None
+                })
+                
+                # Start connection task
+                task = asyncio.create_task(
+                    primary_protocol._connect_outbound(config, loop),
+                    name=f'outbound_{config.name}'
+                )
+                LOGGER.info(f'✓ Started outbound connection task for "{config.name}"')
+    
     # Setup signal handlers (Linux/Unix native asyncio pattern)
     shutdown_event = asyncio.Event()
     
@@ -1924,7 +2698,9 @@ def main():
         sys.exit(1)
 
     load_config(sys.argv[1])
-    setup_logging()
+    # Setup logging using the imported function
+    global LOGGER
+    LOGGER = setup_logging(CONFIG, __name__)
     
     # Startup banner
     LOGGER.info('🚀 ═══════════════════════════════════════════════════════════════')
