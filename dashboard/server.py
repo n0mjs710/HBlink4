@@ -25,7 +25,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="HBlink4 Dashboard", version="1.0.0")
+app = FastAPI(title="HBlink4 Dashboard", version="1.1.0")
 
 # Load user database from CSV
 def load_user_database() -> Dict[int, str]:
