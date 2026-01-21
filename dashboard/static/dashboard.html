@@ -759,7 +759,7 @@
                 <a class="network-info-btn" id="networkInfoBtn" style="display: none;" target="_blank">🌐 Network Info</a>
                 <div class="connection-status clickable warning" id="wsStatus" title="Connecting to dashboard server...">Connecting...</div>
                 <div class="connection-status warning" id="hblinkStatus" title="Waiting for connection status...">Unknown</div>
-                <div class="audio-toggle disabled" id="audioToggle" title="Click to enable audio notifications">🔇 Audio Off</div>
+                <div class="audio-toggle disabled" id="audioToggle" title="Click to enable audio notifications">🔇 Notifications</div>
             </div>
         </header>
         
@@ -801,7 +801,7 @@
                         <tr style="background-color: #374151; color: white;">
                             <th style="padding: 8px; text-align: left;">Radio ID</th>
                             <th style="padding: 8px; text-align: left;">Callsign/Alias</th>
-                            <th style="padding: 8px; text-align: left;">Repeater</th>
+                            <th style="padding: 8px; text-align: left;">Source</th>
                             <th style="padding: 8px; text-align: center;">Slot</th>
                             <th style="padding: 8px; text-align: left;">Talkgroup</th>
                             <th style="padding: 8px; text-align: left;">Last Heard</th>
@@ -865,11 +865,11 @@
             const toggle = document.getElementById('audioToggle');
             if (audioEnabled) {
                 toggle.className = 'audio-toggle enabled';
-                toggle.textContent = '🔊 Audio On';
+                toggle.textContent = '🔊 Notifications';
                 toggle.title = 'Click to disable audio notifications';
             } else {
                 toggle.className = 'audio-toggle disabled';
-                toggle.textContent = '🔇 Audio Off';
+                toggle.textContent = '🔇 Notifications';
                 toggle.title = 'Click to enable audio notifications';
             }
         }
@@ -1802,12 +1802,14 @@
                 }
                 
                 const callsign = user.callsign || '-';
+                // Use source_name if available, fall back to repeater_id for backward compatibility
+                const source = user.source_name || user.repeater_id || '-';
                 
                 return `
                     <tr style="border-bottom: 1px solid #374151;">
                         <td style="padding: 8px;">${user.radio_id}</td>
                         <td style="padding: 8px; font-weight: 500; color: ${user.callsign ? 'white' : '#6b7280'};">${callsign}</td>
-                        <td style="padding: 8px;">${user.repeater_id}</td>
+                        <td style="padding: 8px;">${source}</td>
                         <td style="padding: 8px; text-align: center;">${user.slot}</td>
                         <td style="padding: 8px;">${user.talkgroup}</td>
                         <td style="padding: 8px; color: ${user.active ? '' : '#9ca3af'};">${timeDisplay}</td>

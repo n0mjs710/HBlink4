@@ -701,7 +701,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                 _dst_id,
                 _stream_id,
                 new_stream.call_type,
-                False  # Real RX stream
+                False,  # Real RX stream
+                remote_repeater_id  # Originating repeater ID from remote server
             )
             
             LOGGER.info(f'[{outbound_state.config.name}] RX stream started on TS{_slot}: '
@@ -949,7 +950,8 @@ class HBProtocol(asyncio.DatagramProtocol):
     
     def _emit_stream_start(self, connection_type: str, connection_id: str, 
                           slot: int, src_id: bytes, dst_id: bytes, stream_id: bytes,
-                          call_type: str, is_assumed: bool = False) -> None:
+                          call_type: str, is_assumed: bool = False,
+                          remote_repeater_id: int = None) -> None:
         """
         Stream_start event emission for all connection types.
         
@@ -962,6 +964,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             stream_id: Stream ID (bytes)
             call_type: Call type string
             is_assumed: Whether this is an assumed (TX) stream
+            remote_repeater_id: For outbound connections, the originating repeater ID
         """
         event_data = {
             'slot': slot,
@@ -977,6 +980,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         else:  # outbound 
             event_data['connection_type'] = connection_type
             event_data['connection_name'] = connection_id
+            if remote_repeater_id is not None:
+                event_data['remote_repeater_id'] = remote_repeater_id
             
         self._events.emit('stream_start', event_data)
     

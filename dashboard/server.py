@@ -708,12 +708,29 @@ class EventReceiver:
                 # Add/update user in last_heard immediately with "active" status
                 # Only for actual received calls, not retransmitted calls
                 if src_id:
+                    # Build source display: "Name (originating_repeater_id)"
+                    # For repeaters: callsign (repeater_id)
+                    # For outbound: connection_name (remote_repeater_id)
+                    if connection_type == 'outbound':
+                        conn_name = data.get('connection_name', 'Unknown')
+                        remote_rid = data.get('remote_repeater_id', 0)
+                        source_name = f"{conn_name} ({remote_rid})"
+                    else:
+                        repeater_id = data.get('repeater_id', 0)
+                        # Look up repeater callsign from state
+                        repeater_info = state.repeaters.get(repeater_id, {})
+                        repeater_callsign = repeater_info.get('callsign', '')
+                        if repeater_callsign:
+                            source_name = f"{repeater_callsign} ({repeater_id})"
+                        else:
+                            source_name = str(repeater_id)
+                    
                     # Find existing entry or create new one
                     existing_idx = next((i for i, u in enumerate(state.last_heard) if u['radio_id'] == src_id), None)
                     user_entry = {
                         'radio_id': src_id,
                         'callsign': callsign,
-                        'repeater_id': data.get('repeater_id', 0),
+                        'source_name': source_name,
                         'slot': data['slot'],
                         'talkgroup': data.get('dst_id', 0),
                         'last_heard': event['timestamp'],
