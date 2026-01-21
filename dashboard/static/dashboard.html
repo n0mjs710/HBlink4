@@ -771,8 +771,8 @@
         <h2 class="section-header">Statistics</h2>
         <div class="stats-bar">
                 <div class="stat-card">
-                    <div class="stat-label">Connected Repeaters</div>
-                    <div class="stat-value" id="statRepeaters">0</div>
+                    <div class="stat-label">Connections</div>
+                    <div class="stat-value" id="statConnections">0</div>
                 </div>
             <div class="stat-card">
                 <div class="stat-label">Active Streams</div>
@@ -818,15 +818,41 @@
             </div>
         </div>
         
-        <!-- Repeaters with Inline Slot Status -->
-        <h2 class="section-header">Repeaters <span id="repeaterCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
-        <div class="card">
-            <div id="repeatersContainer"></div>
+        <!-- Repeaters Section -->
+        <div id="repeatersSection" style="display: none;">
+            <h2 class="section-header">📶 Repeaters <span id="repeaterCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <div class="card">
+                <div id="repeatersContainer"></div>
+            </div>
         </div>
         
-        <!-- Outbound Connections -->
+        <!-- Hotspots Section -->
+        <div id="hotspotsSection" style="display: none;">
+            <h2 class="section-header" style="margin-top: 20px;">📱 Hotspots <span id="hotspotCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <div class="card">
+                <div id="hotspotsContainer"></div>
+            </div>
+        </div>
+        
+        <!-- Network Inbound Section -->
+        <div id="networksSection" style="display: none;">
+            <h2 class="section-header" style="margin-top: 20px;">🔗 Network Inbound <span id="networkCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <div class="card">
+                <div id="networksContainer"></div>
+            </div>
+        </div>
+        
+        <!-- Unknown Connections Section (fallback for unrecognized software) -->
+        <div id="unknownSection" style="display: none;">
+            <h2 class="section-header" style="margin-top: 20px;">❓ Other Connections <span id="unknownCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <div class="card">
+                <div id="unknownContainer"></div>
+            </div>
+        </div>
+        
+        <!-- Network Outbound -->
         <div id="outboundSection" style="display: none;">
-            <h2 class="section-header" style="margin-top: 20px;">Outbound Connections <span id="outboundCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <h2 class="section-header" style="margin-top: 20px;">🔗 Network Outbound <span id="outboundCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
             <div class="card">
                 <div id="outboundsContainer"></div>
             </div>
@@ -1060,10 +1086,19 @@
                     if (e.target === modal) modal.remove();
                 };
                 
+                // Select icon based on connection type
+                const connectionIcons = {
+                    'repeater': '📶',
+                    'hotspot': '📱',
+                    'network': '🔗',
+                    'unknown': '❓'
+                };
+                const icon = connectionIcons[details.connection_type] || '📶';
+                
                 modal.innerHTML = `
                     <div class="modal-content" onclick="event.stopPropagation()">
                         <div class="modal-header">
-                            <h2>📶 ${details.callsign} (${details.repeater_id})</h2>
+                            <h2>${icon} ${details.callsign} (${details.repeater_id})</h2>
                             <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
                         </div>
                         <div class="modal-body">
@@ -1201,10 +1236,23 @@
                                 </table>
                             </div>
                             
-                            ${details.metadata.description || details.metadata.url || details.metadata.software_id ? `
                             <div class="modal-section">
                                 <h3>ℹ️ Metadata</h3>
                                 <table class="modal-table">
+                                    <tr>
+                                        <td>Software ID:</td>
+                                        <td>${details.metadata.software_id || '<span style="color: #6b7280;">Not reported</span>'}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Connection Type:</td>
+                                        <td class="modal-highlight">${details.connection_type || 'unknown'}</td>
+                                    </tr>
+                                    ${details.metadata.package_id ? `
+                                    <tr>
+                                        <td>Package ID:</td>
+                                        <td>${details.metadata.package_id}</td>
+                                    </tr>
+                                    ` : ''}
                                     ${details.metadata.description ? `
                                     <tr>
                                         <td>Description:</td>
@@ -1217,21 +1265,8 @@
                                         <td><a href="${details.metadata.url}" class="modal-link" target="_blank">${details.metadata.url}</a></td>
                                     </tr>
                                     ` : ''}
-                                    ${details.metadata.software_id ? `
-                                    <tr>
-                                        <td>Software:</td>
-                                        <td>${details.metadata.software_id}</td>
-                                    </tr>
-                                    ` : ''}
-                                    ${details.metadata.package_id ? `
-                                    <tr>
-                                        <td>Package:</td>
-                                        <td>${details.metadata.package_id}</td>
-                                    </tr>
-                                    ` : ''}
                                 </table>
                             </div>
-                            ` : ''}
                             
                             <div class="modal-section">
                                 <h3>📊 Statistics (Today)</h3>
@@ -1310,15 +1345,19 @@
                 }
                 
                 // Reset stats to zero
-                document.getElementById('statRepeaters').textContent = '0';
+                document.getElementById('statConnections').textContent = '0';
                 document.getElementById('statStreams').textContent = '0';
             }
         }
         
         function updateStats(stats, repeaters, streams) {
-            document.getElementById('statRepeaters').textContent = 
-                Array.isArray(repeaters) ? repeaters.filter(r => r.status === 'connected').length : 
+            // Count connected inbound repeaters
+            const inboundCount = Array.isArray(repeaters) ? repeaters.filter(r => r.status === 'connected').length : 
                 (repeaters ? Object.keys(repeaters).length : 0);
+            // Count connected outbound connections
+            const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
+            const outboundCount = outboundList.filter(o => o.status === 'connected').length;
+            document.getElementById('statConnections').textContent = inboundCount + outboundCount;
             document.getElementById('statStreams').textContent = 
                 Array.isArray(streams) ? streams.filter(s => s.status === 'active').length :
                 (streams ? Object.keys(streams).length : 0);
@@ -1331,117 +1370,138 @@
         }
         
         function updateRepeaters(repeaters) {
-            const container = document.getElementById('repeatersContainer');
-            const countElement = document.getElementById('repeaterCount');
-
             // Accept either an array or an object map for repeaters
             const repeaterList = Array.isArray(repeaters) ? repeaters : Object.values(repeaters || {});
-
-            // Update the count in the header
-            const connectedCount = repeaterList.filter(r => r.status === 'connected').length;
-            if (countElement) {
-                countElement.textContent = connectedCount > 0 ? `(${connectedCount})` : '';
+            const connected = repeaterList.filter(r => r.status === 'connected');
+            
+            // Group by connection_type
+            const groups = {
+                repeater: connected.filter(r => r.connection_type === 'repeater'),
+                hotspot: connected.filter(r => r.connection_type === 'hotspot'),
+                network: connected.filter(r => r.connection_type === 'network'),
+                unknown: connected.filter(r => !r.connection_type || r.connection_type === 'unknown')
+            };
+            
+            // Update total count in stats (inbound + connected outbound)
+            const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
+            const outboundConnected = outboundList.filter(o => o.status === 'connected').length;
+            document.getElementById('statConnections').textContent = connected.length + outboundConnected;
+            
+            // Render each section
+            renderConnectionGroup('repeaters', 'repeaterCount', groups.repeater, '📶');
+            renderConnectionGroup('hotspots', 'hotspotCount', groups.hotspot, '📱');
+            renderConnectionGroup('networks', 'networkCount', groups.network, '🔗');
+            renderConnectionGroup('unknown', 'unknownCount', groups.unknown, '❓');
+        }
+        
+        function renderConnectionGroup(sectionName, countId, connections, icon) {
+            const section = document.getElementById(`${sectionName}Section`);
+            const container = document.getElementById(`${sectionName}Container`);
+            const countElement = document.getElementById(countId);
+            
+            // Show/hide section based on whether there are connections
+            if (connections.length === 0) {
+                section.style.display = 'none';
+                return;
             }
             
-            if (repeaterList.length === 0) {
-                container.innerHTML = '<p style="color: #64748b; text-align: center; padding: 20px;">No repeaters connected</p>';
-                return;
+            section.style.display = 'block';
+            if (countElement) {
+                countElement.textContent = `(${connections.length})`;
             }
             
             // Get streams data to show on slots
             const streams = state.streams || [];
-
-            container.innerHTML = repeaterList
-                .filter(r => r.status === 'connected')
-                .map(r => {
-                    // Find active streams for this repeater (only active or hang_time, not ended)
-                    const slot1Stream = streams.find(s => 
-                        s.repeater_id == r.repeater_id && 
-                        s.slot == 1 && 
-                        (s.status === 'active' || s.status === 'hang_time')
-                    );
-                    const slot2Stream = streams.find(s => 
-                        s.repeater_id == r.repeater_id && 
-                        s.slot == 2 && 
-                        (s.status === 'active' || s.status === 'hang_time')
-                    );
-                    
-                    // Calculate initial connection duration
-                    const connectedDuration = r.connected_at ? formatDuration(Date.now() / 1000 - r.connected_at) : '—';
-                    const hasMissedPings = r.missed_pings > 0;
-                    const headerClass = hasMissedPings ? 'repeater-header-warning' : 'repeater-header';
-                    
-                    return `
-                        <div class="repeater-card" data-repeater-id="${r.repeater_id}">
-                            <div class="repeater-info">
-                                <div class="${headerClass}" onclick="showRepeaterDetails(${r.repeater_id})" title="Click for detailed information">
-                                    📶 ${r.callsign || 'Unknown'} (${r.repeater_id})
-                                </div>
-                                <div class="repeater-meta">
-                                    <!-- Row 1: Location / TX / TS1 -->
-                                    <div class="repeater-meta-item">
-                                        ${r.location || 'Location unknown'}
-                                    </div>
-                                    ${r.tx_freq ? `
-                                    <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">TX:</span>
-                                        <span>${(parseFloat(r.tx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
-                                    </div>
-                                    ` : '<div></div>'}
-                                    ${r.slot1_talkgroups === null ? `
-                                    <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
-                                        <span class="repeater-meta-label">TS1 TGs:</span>
-                                        <span>All</span>
-                                    </div>
-                                    ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length === 0 ? `
-                                    <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
-                                        <span class="repeater-meta-label">TS1 TGs:</span>
-                                        <span>None</span>
-                                    </div>
-                                    ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length > 0 ? `
-                                    <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
-                                        <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS1 TGs:</span>
-                                        <span>${r.slot1_talkgroups.join(', ')}</span>
-                                    </div>
-                                    ` : '<div></div>'}
-                                    
-                                    <!-- Row 2: Connected / RX / TS2 -->
-                                    <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">Connected:</span>
-                                        <span data-connected-duration data-connected-at="${r.connected_at || ''}">${connectedDuration}</span>
-                                    </div>
-                                    ${r.rx_freq ? `
-                                    <div class="repeater-meta-item">
-                                        <span class="repeater-meta-label">RX:</span>
-                                        <span>${(parseFloat(r.rx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
-                                    </div>
-                                    ` : '<div></div>'}
-                                    ${r.slot2_talkgroups === null ? `
-                                    <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
-                                        <span class="repeater-meta-label">TS2 TGs:</span>
-                                        <span>All</span>
-                                    </div>
-                                    ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length === 0 ? `
-                                    <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
-                                        <span class="repeater-meta-label">TS2 TGs:</span>
-                                        <span>None</span>
-                                    </div>
-                                    ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length > 0 ? `
-                                    <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
-                                        <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS2 TGs:</span>
-                                        <span>${r.slot2_talkgroups.join(', ')}</span>
-                                    </div>
-                                    ` : '<div></div>'}
-                                </div>
+            
+            container.innerHTML = connections.map(r => {
+                // Find active streams for this repeater (only active or hang_time, not ended)
+                const slot1Stream = streams.find(s => 
+                    s.repeater_id == r.repeater_id && 
+                    s.slot == 1 && 
+                    (s.status === 'active' || s.status === 'hang_time')
+                );
+                const slot2Stream = streams.find(s => 
+                    s.repeater_id == r.repeater_id && 
+                    s.slot == 2 && 
+                    (s.status === 'active' || s.status === 'hang_time')
+                );
+                
+                // Calculate initial connection duration
+                const connectedDuration = r.connected_at ? formatDuration(Date.now() / 1000 - r.connected_at) : '—';
+                const hasMissedPings = r.missed_pings > 0;
+                const headerClass = hasMissedPings ? 'repeater-header-warning' : 'repeater-header';
+                
+                return `
+                    <div class="repeater-card" data-repeater-id="${r.repeater_id}">
+                        <div class="repeater-info">
+                            <div class="${headerClass}" onclick="showRepeaterDetails(${r.repeater_id})" title="Click for detailed information">
+                                ${icon} ${r.callsign || 'Unknown'} (${r.repeater_id})
                             </div>
-                            
-                            <div class="slots-container">
-                                ${renderSlot(1, slot1Stream)}
-                                ${renderSlot(2, slot2Stream)}
+                            <div class="repeater-meta">
+                                <!-- Row 1: Location / TX / TS1 -->
+                                <div class="repeater-meta-item">
+                                    ${r.location || 'Location unknown'}
+                                </div>
+                                ${r.tx_freq ? `
+                                <div class="repeater-meta-item">
+                                    <span class="repeater-meta-label">TX:</span>
+                                    <span>${(parseFloat(r.tx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
+                                </div>
+                                ` : '<div></div>'}
+                                ${r.slot1_talkgroups === null ? `
+                                <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
+                                    <span class="repeater-meta-label">TS1 TGs:</span>
+                                    <span>All</span>
+                                </div>
+                                ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length === 0 ? `
+                                <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
+                                    <span class="repeater-meta-label">TS1 TGs:</span>
+                                    <span>None</span>
+                                </div>
+                                ` : Array.isArray(r.slot1_talkgroups) && r.slot1_talkgroups.length > 0 ? `
+                                <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
+                                    <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS1 TGs:</span>
+                                    <span>${r.slot1_talkgroups.join(', ')}</span>
+                                </div>
+                                ` : '<div></div>'}
+                                
+                                <!-- Row 2: Connected / RX / TS2 -->
+                                <div class="repeater-meta-item">
+                                    <span class="repeater-meta-label">Connected:</span>
+                                    <span data-connected-duration data-connected-at="${r.connected_at || ''}">${connectedDuration}</span>
+                                </div>
+                                ${r.rx_freq ? `
+                                <div class="repeater-meta-item">
+                                    <span class="repeater-meta-label">RX:</span>
+                                    <span>${(parseFloat(r.rx_freq) / 1000000).toFixed(4).padStart(8, '0')} MHz</span>
+                                </div>
+                                ` : '<div></div>'}
+                                ${r.slot2_talkgroups === null ? `
+                                <div class="repeater-meta-item" title="All talkgroups allowed (no configuration)">
+                                    <span class="repeater-meta-label">TS2 TGs:</span>
+                                    <span>All</span>
+                                </div>
+                                ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length === 0 ? `
+                                <div class="repeater-meta-item" title="All talkgroups denied (empty configuration)">
+                                    <span class="repeater-meta-label">TS2 TGs:</span>
+                                    <span>None</span>
+                                </div>
+                                ` : Array.isArray(r.slot2_talkgroups) && r.slot2_talkgroups.length > 0 ? `
+                                <div class="repeater-meta-item" ${r.rpto_received ? 'title="TGs supplied by repeater via RPTO"' : ''}>
+                                    <span class="repeater-meta-label ${r.rpto_received ? 'rpto-tgs' : ''}">TS2 TGs:</span>
+                                    <span>${r.slot2_talkgroups.join(', ')}</span>
+                                </div>
+                                ` : '<div></div>'}
                             </div>
                         </div>
-                    `;
-                }).join('');
+                        
+                        <div class="slots-container">
+                            ${renderSlot(1, slot1Stream)}
+                            ${renderSlot(2, slot2Stream)}
+                        </div>
+                    </div>
+                `;
+            }).join('');
         }
         
         function renderSlot(slotNum, stream) {
@@ -2066,7 +2126,10 @@
             });
             fetch('/api/stats').then(r => r.json()).then(data => {
                 state.stats = data.stats;
-                document.getElementById('statRepeaters').textContent = data.repeaters_connected;
+                // Compute total connections: inbound repeaters + connected outbounds
+                const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
+                const outboundConnected = outboundList.filter(o => o.status === 'connected').length;
+                document.getElementById('statConnections').textContent = data.repeaters_connected + outboundConnected;
                 document.getElementById('statStreams').textContent = data.active_streams;
                 document.getElementById('statTotalCalls').textContent = data.stats.total_calls_today.toLocaleString();
                 document.getElementById('statRetransmittedCalls').textContent = data.stats.retransmitted_calls.toLocaleString();

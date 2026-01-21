@@ -671,12 +671,6 @@ class EventReceiver:
                 # Outbound stream - key by connection_name.slot
                 key = f"{data['connection_name']}.{data['slot']}"
             else:
-                if 'connection_type' in data:
-                    logger.debug("Stream start with connection_type=%s: %s", connection_type, event)
-                elif 'connection_name' in data:
-                    # Outbound streams should include connection_type; log if it is missing
-                    logger.warning("Stream start missing connection_type but has connection_name: %s", event)
-
                 repeater_id = data.get('repeater_id')
                 if repeater_id is None:
                     logger.error("Stream start missing repeater_id: %s", event)
@@ -698,12 +692,10 @@ class EventReceiver:
             }
             
             # Count different stream types
-            logger.debug(f"Stream conditions: is_assumed={data.get('is_assumed', False)}, connection_type={connection_type}, src_id={src_id}")
             if not data.get('is_assumed', False):
                 # RX streams: actual traffic being received (from repeaters OR outbound connections)
                 # Only exclude TX streams (is_assumed=True)
                 state.stats['total_calls_today'] += 1
-                logger.debug(f"Adding to last_heard: src_id={src_id}, callsign={callsign}")
                 
                 # Add/update user in last_heard immediately with "active" status
                 # Only for actual received calls, not retransmitted calls
@@ -995,6 +987,7 @@ async def get_repeater_details(repeater_id: int):
     return {
         "repeater_id": repeater_id,
         "callsign": repeater.get('callsign', 'UNKNOWN'),
+        "connection_type": repeater.get('connection_type', details.get('connection_type', 'unknown')),
         "connection": {
             "address": address,
             "connected_at": repeater.get('connected_at', 0),
@@ -1027,8 +1020,8 @@ async def get_repeater_details(repeater_id: int):
         "metadata": {
             "description": details.get('description', ''),
             "url": details.get('url', ''),
-            "software_id": details.get('software_id', ''),
-            "package_id": details.get('package_id', '')
+            "software_id": repeater.get('software_id') or details.get('software_id', ''),
+            "package_id": repeater.get('package_id') or details.get('package_id', '')
         },
         "statistics": {
             "total_streams_today": total_streams,

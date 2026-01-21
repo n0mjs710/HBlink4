@@ -9,7 +9,7 @@ The HBlink4 server configuration file consists of five main sections:
 - **Dashboard** - Web dashboard and event communication
 - **Blacklist Rules** - Access control for blocking repeaters
 - **Repeater Configurations** - Per-repeater authentication and routing
-- **Outbound Connections** - Server-to-server links (optional)
+- **Network Outbound** - Server-to-server links (optional)
 
 ## Global Settings
 
@@ -221,6 +221,85 @@ When using TCP transport with HBlink4 and dashboard on **different machines**, y
 ```
 
 **Important**: Both HBlink4 config (`config/config.json`) and dashboard config (`dashboard/config.json`) must use the **same transport type and connection details**. See [Dashboard Documentation](../dashboard/README.md) for dashboard-side configuration.
+
+## Connection Type Detection
+
+The `connection_type_detection` section configures how connected devices are categorized and displayed in the dashboard. Connections are grouped into four categories with distinct icons:
+
+- 📶 **Repeaters** - Full duplex repeaters and club sites
+- 📱 **Hotspots** - Personal hotspots (Pi-Star, WPSD, MMDVM_HS boards)
+- 🔗 **Network Inbound** - Servers connecting to us (HBlink, FreeDMR, BrandMeister)
+- ❓ **Other** - Unrecognized connection types
+
+```json
+{
+    "connection_type_detection": {
+        "description": "Categorize connections for dashboard display...",
+        "hotspot_packages": [
+            "mmdvm_hs", "dvmega", "zumspot", "jumbospot", "nanodv",
+            "openspot", "dmo", "simplex"
+        ],
+        "network_packages": [
+            "hblink", "freedmr", "brandmeister", "xlx", "dmr+", "tgif", "ipsc"
+        ],
+        "repeater_packages": [
+            "repeater", "duplex", "stm32", "unknown"
+        ],
+        "hotspot_software": [
+            "pi-star", "pistar", "ps4", "wpsd"
+        ],
+        "network_software": [
+            "hblink", "freedmr", "brandmeister", "xlx"
+        ]
+    }
+}
+```
+
+| Setting | Type | Description |
+|---------|------|-------------|
+| `hotspot_packages` | array | Package ID substrings that identify hotspots |
+| `network_packages` | array | Package ID substrings that identify network links |
+| `repeater_packages` | array | Package ID substrings that identify repeaters |
+| `hotspot_software` | array | Software ID substrings that identify hotspots (fallback) |
+| `network_software` | array | Software ID substrings that identify network links (fallback) |
+
+### Detection Logic
+
+1. **Primary**: Match against `package_id` field from the RPTC config packet
+2. **Fallback**: If no package_id match, check `software_id` field
+3. **Default**: If neither matches, connection appears in "Other" section
+
+**Matching behavior:**
+- All matching is **case-insensitive** (`MMDVM_HS` matches `mmdvm_hs`)
+- **Substring matching** is used (`mmdvm_hs` matches `MMDVM_MMDVM_HS_Dual_Hat`)
+- Network patterns are checked first, then hotspots, then repeaters
+- Generic `MMDVM` (exact match) defaults to repeater
+
+### Common Package IDs
+
+From real-world connections:
+
+| Package ID | Typical Detection |
+|------------|------------------|
+| `MMDVM_MMDVM_HS_Hat` | Hotspot (matches `mmdvm_hs`) |
+| `MMDVM_MMDVM_HS_Dual_Hat` | Hotspot (matches `mmdvm_hs`) |
+| `MMDVM_DMO` | Hotspot (matches `dmo`) |
+| `MMDVM_HBlink` | Network (matches `hblink`) |
+| `MMDVM` | Repeater (exact match default) |
+| `MMDVM_Unknown` | Repeater (matches `unknown`) |
+
+### Customizing Detection
+
+To add custom hardware to a category, add its package_id substring to the appropriate array:
+
+```json
+// Example: Add custom hardware to hotspots
+"hotspot_packages": [
+    "mmdvm_hs", "dvmega", "zumspot", "jumbospot", "nanodv",
+    "openspot", "dmo", "simplex",
+    "my_custom_hotspot"  // Added
+]
+```
 
 ### Stream Management
 
@@ -536,7 +615,7 @@ The `trust` flag allows designated repeaters to bypass talkgroup restrictions. T
 
 Patterns are evaluated in the order they appear in the configuration file. The first pattern that matches is used. Within each pattern, all match types (IDs, ID ranges, callsigns) are checked with OR logic.
 
-## Outbound Connections
+## Network Outbound
 
 The `outbound_connections` section is **optional** and defines server-to-server links. This allows your HBlink4 server to connect to other HomeBrew Protocol servers as a client (similar to how repeaters connect to your server).
 

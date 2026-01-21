@@ -3,6 +3,18 @@ Data models and state classes for HBlink4
 
 This module contains all the data classes used to represent the state
 of repeaters, outbound connections, and active streams.
+
+TERMINOLOGY NOTE:
+In the codebase, "repeater" refers to ANY inbound connection using the
+HomeBrew protocol - this includes actual repeaters, hotspots, and network
+links from other servers. The dashboard uses connection_type detection
+(see utils.detect_connection_type) to categorize and display these as:
+  - Repeaters (full duplex sites)
+  - Hotspots (personal devices)
+  - Network Inbound (server-to-server links)
+  - Other (unrecognized)
+
+Outbound connections (Network Outbound) are tracked separately in OutboundState.
 """
 import asyncio
 from dataclasses import dataclass, field
@@ -155,7 +167,13 @@ class OutboundState:
 
 @dataclass
 class RepeaterState:
-    """Data class for storing repeater state"""
+    """
+    Data class for storing inbound connection state.
+    
+    NOTE: Despite the name, this represents ANY inbound HomeBrew connection,
+    not just physical repeaters. The connection_type field is used by the
+    dashboard to categorize as: repeater, hotspot, network, or unknown.
+    """
     repeater_id: bytes
     ip: str
     port: int
@@ -168,6 +186,10 @@ class RepeaterState:
     connection_state: str = 'login'  # States: login, config, connected
     last_rssi: int = 0
     rssi_count: int = 0
+    
+    # Connection type detected from software_id
+    # Values: 'repeater', 'hotspot', 'network', 'unknown'
+    connection_type: str = 'unknown'
     
     # Metadata fields with defaults - stored as bytes to match protocol
     callsign: bytes = b''

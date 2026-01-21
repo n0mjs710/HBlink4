@@ -87,7 +87,7 @@ The dashboard is started automatically with `./run_all.sh` or can be started sep
 
 ### Statistics Cards
 Top row displays key metrics:
-- **Connected Repeaters**: Number of repeaters currently connected
+- **Connections**: Total connections (inbound repeaters/hotspots/network + connected outbound)
 - **Active Streams**: Number of streams currently in progress (RX and TX)
 - **Total Calls Today**: Number of calls received from repeaters today (RX only)
 - **Retransmitted Calls Today**: Number of calls forwarded to other repeaters today (TX)
@@ -114,13 +114,27 @@ Real-time view of ongoing transmissions:
 - Packet count
 
 ### Connected Repeaters
-List of all connected repeaters:
+Connections are automatically categorized by device type:
+
+- 📶 **Repeaters** - Full duplex repeaters and club sites (generic MMDVM, MMDVM_Unknown)
+- 📱 **Hotspots** - Personal hotspots (MMDVM_HS boards, Pi-Star, WPSD, DMO/simplex)
+- 🔗 **Network Inbound** - Servers connecting to us (HBlink, FreeDMR)
+- ❓ **Other** - Unrecognized connection types
+
+Each category shows:
 - Repeater ID and callsign
 - IP address
 - Connected duration
 - Last keepalive time
 - Configuration (mode, slots, colorcode)
 - Warning indicator if keepalives are being missed
+
+Click any connection card to view detailed information including:
+- Software ID and Package ID (for troubleshooting detection)
+- Connection Type (repeater, hotspot, network, unknown)
+- Location, frequencies, and access control settings
+
+Detection is based on the `package_id` field from MMDVM/Pi-Star/WPSD configuration, with fallback to `software_id`. Customize detection patterns in `config/config.json` under `connection_type_detection`. See the [Configuration Guide](../docs/configuration.md#connection-type-detection) for details.
 
 ### Recent Events
 User-focused activity log showing:

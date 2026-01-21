@@ -69,6 +69,97 @@ def bytes_to_int(value: bytes) -> int:
     return int.from_bytes(value, 'big')
 
 
+# Default connection type detection patterns (used if not in config)
+# These can be overridden in config.json under "connection_type_detection"
+DEFAULT_HOTSPOT_PACKAGES = [
+    'mmdvm_hs', 'dvmega', 'zumspot', 'jumbospot', 'nanodv',
+    'openspot', 'dmo', 'simplex'
+]
+
+DEFAULT_NETWORK_PACKAGES = [
+    'hblink', 'freedmr', 'brandmeister', 'xlx', 'dmr+', 'tgif', 'ipsc'
+]
+
+DEFAULT_REPEATER_PACKAGES = [
+    'repeater', 'duplex', 'stm32', 'unknown'
+]
+
+DEFAULT_HOTSPOT_SOFTWARE = [
+    'pi-star', 'pistar', 'ps4', 'wpsd'
+]
+
+DEFAULT_NETWORK_SOFTWARE = [
+    'hblink', 'freedmr', 'brandmeister', 'xlx'
+]
+
+
+def detect_connection_type(software_id: bytes, package_id: bytes = None, config: dict = None) -> str:
+    """
+    Detect connection type based on package_id (primary) or software_id (fallback).
+    
+    Categories:
+    - 'repeater': Full repeaters, club sites
+    - 'hotspot': Personal hotspots (Pi-Star, WPSD, MMDVM_HS boards, simplex/DMO)
+    - 'network': Network inbound connections (HBlink, FreeDMR, BrandMeister)
+    - 'unknown': Unrecognized - defaults shown in "Other" section
+    
+    Args:
+        software_id: Raw bytes from RPTC packet (40 bytes, null-padded)
+        package_id: Raw bytes from RPTC packet (40 bytes, null-padded) - primary detection
+        config: Optional config dict with connection_type_detection settings
+        
+    Returns:
+        Connection type string: 'repeater', 'hotspot', 'network', or 'unknown'
+    """
+    # Load patterns from config or use defaults
+    detection_config = (config or {}).get('connection_type_detection', {})
+    
+    hotspot_packages = detection_config.get('hotspot_packages', DEFAULT_HOTSPOT_PACKAGES)
+    network_packages = detection_config.get('network_packages', DEFAULT_NETWORK_PACKAGES)
+    repeater_packages = detection_config.get('repeater_packages', DEFAULT_REPEATER_PACKAGES)
+    hotspot_software = detection_config.get('hotspot_software', DEFAULT_HOTSPOT_SOFTWARE)
+    network_software = detection_config.get('network_software', DEFAULT_NETWORK_SOFTWARE)
+    
+    # Try package_id first (more reliable)
+    if package_id:
+        pkg_str = package_id.decode('utf-8', errors='ignore').strip().lower()
+        
+        if pkg_str:
+            # Check network first (server connections)
+            for network_pkg in network_packages:
+                if network_pkg in pkg_str:
+                    return 'network'
+            
+            # Check hotspot patterns
+            for hotspot_pkg in hotspot_packages:
+                if hotspot_pkg in pkg_str:
+                    return 'hotspot'
+            
+            # Check repeater patterns
+            for repeater_pkg in repeater_packages:
+                if repeater_pkg in pkg_str:
+                    return 'repeater'
+            
+            # Generic "MMDVM" without qualifiers - likely a repeater
+            if pkg_str == 'mmdvm':
+                return 'repeater'
+    
+    # Fallback to software_id if package_id didn't match
+    if software_id:
+        sw_str = software_id.decode('utf-8', errors='ignore').strip().lower()
+        
+        if sw_str:
+            # Known network software
+            if any(x in sw_str for x in network_software):
+                return 'network'
+            
+            # Pi-Star/WPSD variants are typically hotspots
+            if any(x in sw_str for x in hotspot_software):
+                return 'hotspot'
+    
+    return 'unknown'
+
+
 def cleanup_old_logs(log_dir: pathlib.Path, max_days: int, logger: logging.Logger = None) -> None:
     """
     Clean up log files older than max_days based on their date suffix.

@@ -21,6 +21,25 @@
             "timeout": 600
         }
     },
+    "connection_type_detection": {
+        "_comment": "Categorize connections for dashboard display (📶 Repeaters, 📱 Hotspots, 🔗 Network Inbound, ❓ Other). Matching is case-insensitive and uses substring matching against package_id (primary) or software_id (fallback).",
+        "hotspot_packages": [
+            "mmdvm_hs", "dvmega", "zumspot", "jumbospot", "nanodv",
+            "openspot", "dmo", "simplex"
+        ],
+        "network_packages": [
+            "hblink", "freedmr", "brandmeister", "xlx", "dmr+", "tgif", "ipsc"
+        ],
+        "repeater_packages": [
+            "repeater", "duplex", "stm32", "unknown"
+        ],
+        "hotspot_software": [
+            "pi-star", "pistar", "ps4", "wpsd"
+        ],
+        "network_software": [
+            "hblink", "freedmr", "brandmeister", "xlx"
+        ]
+    },
     "dashboard": {
         "enabled": true,
         "disable_ipv6": false,

@@ -42,7 +42,7 @@ try:
     from .user_cache import UserCache
     from .utils import (
         safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
-        cleanup_old_logs, setup_logging, PeerAddress
+        cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type
     )
     from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
     from .protocol import (
@@ -63,7 +63,7 @@ except ImportError:
     from user_cache import UserCache
     from utils import (
         safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
-        cleanup_old_logs, setup_logging, PeerAddress
+        cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type
     )
     from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
     from protocol import (
@@ -91,6 +91,7 @@ class HBProtocol(asyncio.DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Server Protocol"""
     def __init__(self, *args, **kwargs):
         super().__init__()
+        # All inbound connections (repeaters, hotspots, network links) - see models.py terminology note
         self._repeaters: Dict[bytes, RepeaterState] = {}
         
         # Outbound connection state management (Phase 2)
@@ -191,6 +192,9 @@ class HBProtocol(asyncio.DatagramProtocol):
             'rx_freq': repeater.get_rx_freq_str(),
             'tx_freq': repeater.get_tx_freq_str(),
             'colorcode': repeater.get_colorcode_str(),
+            'connection_type': repeater.connection_type,
+            'software_id': safe_decode_bytes(repeater.software_id),
+            'package_id': safe_decode_bytes(repeater.package_id),
             'slot1_talkgroups': self._format_tg_json(repeater.slot1_talkgroups),
             'slot2_talkgroups': self._format_tg_json(repeater.slot2_talkgroups),
             'rpto_received': repeater.rpto_received,
@@ -1842,6 +1846,11 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater.software_id = data[222:262]
             repeater.package_id = data[262:302]
             
+            # Detect connection type from package_id (primary) and software_id (fallback)
+            repeater.connection_type = detect_connection_type(
+                repeater.software_id, repeater.package_id, self._config
+            )
+            
             # Log detailed configuration at debug level
             LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} config:'
                       f'\n    Callsign: {repeater.callsign.decode().strip()}'
@@ -1850,7 +1859,9 @@ class HBProtocol(asyncio.DatagramProtocol):
                       f'\n    Power: {repeater.tx_power.decode().strip()}'
                       f'\n    ColorCode: {repeater.colorcode.decode().strip()}'
                       f'\n    Location: {repeater.location.decode().strip()}'
-                      f'\n    Software: {repeater.software_id.decode().strip()}')
+                      f'\n    Software: {repeater.software_id.decode().strip()}'
+                      f'\n    Package: {repeater.package_id.decode().strip()}'
+                      f'\n    Type: {repeater.connection_type}')
 
             repeater.connected = True
             repeater.connection_state = 'connected'
@@ -1927,6 +1938,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             'url': safe_decode_bytes(repeater.url),
             'software_id': safe_decode_bytes(repeater.software_id),
             'package_id': safe_decode_bytes(repeater.package_id),
+            'connection_type': repeater.connection_type,
             'slots': safe_decode_bytes(repeater.slots),
             'matched_pattern': pattern_name,
             'pattern_description': pattern_desc,
