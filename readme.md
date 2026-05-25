@@ -7,7 +7,7 @@ There has been some chatter coming my way about what is "official" with respect 
  - **HBlink3 (DEPRECIATED:** Rewrite in Python3, mostly the same code base updated. Dropped direct support for IPSC/HBP translations.
  - **HBlink4 (ACTIVE DEVLOPMENT):** Ground up re-write for modern times. Repeater, not system based. Supports full dynamic TGID subscription and TS/TGID translation based on "Options" configuration send by MMDVMHost or DMRGatway. Includes integrated dashboard application as part of the package.
 
-For those who need Motorola IPSC connectivity, **see my compantion project ipsc2hbp to convert from Motorola's proprietary network protocol to MMDVM's***.
+For those who need Motorola IPSC connectivity, **see my companion project ipsc2hbp to convert from Motorola's proprietary network protocol to MMDVM's**.
 
 ## Architecture
 
