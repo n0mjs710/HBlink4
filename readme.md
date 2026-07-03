@@ -106,13 +106,26 @@ Comprehensive documentation is available in the `docs/` directory:
 
 
 
-## Support
+## No Support Is Provided
 
-No end-user support is provided. The development team for this software is exactly 1 person, with limited resources and no ability to duplicate environments for testing. Flagging genuine code issues is apprecicated, but please to not open issues because it doesn't work the way you'd like it to. There are no feature requests.
+This is not commercial software. It is provided free of charge. The author(s)
+received no compensation for creating and maintaining it. Countless hours over
+many years have gone into the this. If you have problems, the author will try
+to help if possible, please have no expectations for support. There is no online
+group, such as DVSwitch or groups.io that is an "official" outlet for information.
+The only definitive source of information is me. Beware of others claiming to
+be authoritative. User-based mutual support is great, and I'm all for it. But
+please understand, this is what they are, and I have not sanctioned anyone to be
+the "home" of my software packages.
 
-## Contributing
+## GitHub "Issues"
 
-Contributions are welcome! Please feel free to submit a Pull Request. Do not submit a Pull Request to the main branch for added features without consultation first. Added features may collide with other mainline features under development, and additions that are inconsistent with the goals of the project may not be accepted. If you want to add a feature, it's best to discuss it first. Use alternative branches named for the feature being added.
+Do not use GitHub issues for support. Genuine bugs are accepted as issues. Before 
+opening one, make sure that it is a true problem with the software and not merely
+a misconfiguration, or contention around a feature that was not supported. Isssues
+should never be used to ask for or recommend features. Issues that do not include
+complete details, relevent tracebacks, error messages, configuration snippets, 
+operatrional conditions surrounding the event, etc. will be closed without action.
 
 ## License
 
