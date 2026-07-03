@@ -118,7 +118,7 @@ be authoritative. User-based mutual support is great, and I'm all for it. But
 please understand, this is what they are, and I have not sanctioned anyone to be
 the "home" of my software packages.
 
-## GitHub "Issues"
+### GitHub "Issues"
 
 Do not use GitHub issues for support. Genuine bugs are accepted as issues. Before 
 opening one, make sure that it is a true problem with the software and not merely
