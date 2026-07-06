@@ -18,7 +18,8 @@ import socket
 from typing import Dict, Any, Optional, Tuple, Union, List, Set
 from time import time
 from random import randint
-from hashlib import sha256
+from hashlib import sha256, sha1
+from hmac import new as hmac_new, compare_digest
 import re
 
 import signal
@@ -45,14 +46,15 @@ try:
         cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
         fmt_ts_tg
     )
-    from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
+    from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func, parse_openbridge_connections as parse_openbridge_func
     from .protocol import (
         parse_dmr_packet, is_dmr_terminator, validate_packet_length,
         extract_packet_command, get_call_type_name, format_id_display,
         get_slot_name
     )
     from .models import (
-        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState
+        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState,
+        OpenBridgeConnectionConfig, OpenBridgeState
     )
     from .lc import (
         LC_OPT_GROUP_DEFAULT, LC_CARRIER_NONE, LC_CARRIER_VHEAD,
@@ -74,14 +76,15 @@ except ImportError:
         cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
         fmt_ts_tg
     )
-    from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func
+    from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func, parse_openbridge_connections as parse_openbridge_func
     from protocol import (
         parse_dmr_packet, is_dmr_terminator, validate_packet_length,
         extract_packet_command, get_call_type_name, format_id_display,
         get_slot_name
     )
     from models import (
-        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState
+        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState,
+        OpenBridgeConnectionConfig, OpenBridgeState
     )
     from lc import (
         LC_OPT_GROUP_DEFAULT, LC_CARRIER_NONE, LC_CARRIER_VHEAD,
@@ -98,10 +101,26 @@ class OutboundProtocol(asyncio.DatagramProtocol):
         super().__init__()
         self.hbprotocol = hbprotocol
         self.connection_name = connection_name
-    
+
     def datagram_received(self, data: bytes, addr: tuple):
         """Receive packet for this specific outbound connection"""
         self.hbprotocol._handle_outbound_packet(self.connection_name, data, addr)
+
+
+class OpenBridgeProtocol(asyncio.DatagramProtocol):
+    """Protocol instance for a single OpenBridge (OBP) trunk socket.
+
+    Each OBP gets its own bound UDP socket. OBP has no login/keepalive
+    handshake; authentication is the per-packet HMAC plus the source socket.
+    """
+    def __init__(self, hbprotocol: 'HBProtocol', obp_name: str):
+        super().__init__()
+        self.hbprotocol = hbprotocol
+        self.obp_name = obp_name
+
+    def datagram_received(self, data: bytes, addr: tuple):
+        self.hbprotocol._handle_openbridge_packet(self.obp_name, data, addr)
+
 
 class HBProtocol(asyncio.DatagramProtocol):
     """UDP Implementation of HomeBrew DMR Server Protocol"""
@@ -112,6 +131,8 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Outbound connection state management (Phase 2)
         self._outbounds: Dict[str, 'OutboundState'] = {}  # keyed by connection name
+        self._openbridges: Dict[str, 'OpenBridgeState'] = {}  # keyed by OBP name
+        self._obp_by_tgid: Dict[bytes, str] = {}  # canonical 3-byte TGID -> owning OBP name (enabled only)
         self._outbound_by_id: Dict[bytes, str] = {}  # radio_id (4 bytes) -> name for packet routing by ID
         self._outbound_ids: Set[int] = set()  # reserved IDs to prevent DoS
         
@@ -3103,6 +3124,95 @@ class HBProtocol(asyncio.DatagramProtocol):
             )
 
 
+    # ------------------------------------------------------------------
+    # OpenBridge (OBP) — stream-multiplexed, TGID-transparent trunk.
+    # Wire frame: 53-byte DMRD + 20-byte HMAC-SHA1(passphrase, DMRD).
+    # No login/keepalive; auth is the per-packet HMAC plus the source socket.
+    # Position B: the wire TGID IS the canonical TGID (no OBP-edge re-number);
+    # the talkgroup_slots table assigns the LOCAL timeslot and is the
+    # fail-closed filter. See development/openbridge-hblink3-hblink4-design.md.
+    # ------------------------------------------------------------------
+
+    async def _start_openbridge(self, config: 'OpenBridgeConnectionConfig', loop) -> None:
+        """Bind one OBP socket and register its state (one socket per OBP)."""
+        try:
+            infos = await loop.getaddrinfo(config.target_address, config.target_port,
+                                           type=socket.SOCK_DGRAM)
+            target_ip, target_port = infos[0][4][0], infos[0][4][1]
+        except Exception as e:
+            LOGGER.error(f'[OBP {config.name}] target DNS resolution failed: {e}')
+            return
+        try:
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: OpenBridgeProtocol(self, config.name),
+                local_addr=(config.local_address, config.local_port)
+            )
+        except Exception as e:
+            LOGGER.error(f'[OBP {config.name}] failed to bind '
+                         f'{config.local_address}:{config.local_port}: {e}')
+            return
+        state = OpenBridgeState(config=config, ip=target_ip, port=target_port, transport=transport)
+        self._openbridges[config.name] = state
+        for tgid in config.talkgroup_slots:
+            self._obp_by_tgid[tgid] = config.name
+        LOGGER.info(f'✓ OpenBridge "{config.name}" bound {config.local_address}:{config.local_port} '
+                    f'→ {target_ip}:{target_port} ({len(config.talkgroup_slots)} talkgroups)')
+
+    @staticmethod
+    def _obp_key(passphrase) -> bytes:
+        """OBP HMAC key: passphrase as bytes."""
+        return passphrase.encode('utf-8') if isinstance(passphrase, str) else passphrase
+
+    def _handle_openbridge_packet(self, obp_name: str, packet: bytes, addr: tuple) -> None:
+        """Authenticate, filter, and (TODO: route) an inbound OBP frame."""
+        state = self._openbridges.get(obp_name)
+        if state is None:
+            return
+        cfg = state.config
+
+        # OBP carries only DMRD frames (53-byte DMRD + 20-byte HMAC-SHA1).
+        if len(packet) != 73 or packet[:4] != DMRD:
+            return
+        dmrd = packet[:53]
+        rx_hmac = packet[53:]
+        calc = hmac_new(self._obp_key(cfg.passphrase), dmrd, sha1).digest()
+        # Auth: HMAC must match AND the source socket must be the configured peer.
+        if not compare_digest(rx_hmac, calc) or (addr[0], addr[1]) != (state.ip, state.port):
+            LOGGER.debug(f'[OBP {obp_name}] frame discarded (HMAC or source mismatch)')
+            return
+
+        dst_id = dmrd[8:11]                 # canonical TGID (wire == canonical)
+        local_ts = cfg.talkgroup_slots.get(dst_id)
+        if local_ts is None:
+            return                          # unmapped TGID -> dropped (fail-closed filter)
+
+        rf_src = dmrd[5:8]
+        peer_id = dmrd[11:15]
+        stream_id = dmrd[16:20]
+        # TODO(item 4): inject into the routing core as a source on
+        # (local_ts, dst_id), tracked in state.streams[stream_id], with the
+        # per-connection reflection guard applied on egress. For now, receipt
+        # is authenticated, filtered, and TS-assigned — routing follows.
+        LOGGER.debug(f'[OBP {obp_name}] RX stream {stream_id.hex()} '
+                     f'src={int.from_bytes(rf_src, "big")} '
+                     f'tgid={int.from_bytes(dst_id, "big")} -> local TS{local_ts}')
+
+    def _obp_build_egress(self, state: 'OpenBridgeState', dmrd53: bytes,
+                          source_peer_id: bytes) -> bytes:
+        """Frame a 53-byte DMRD as a 73-byte OBP packet for this OBP.
+
+        - RptrId (bytes 11:15): the true source peer when preserve_source_peer,
+          else our network_id (Brandmeister-spec behavior).
+        - Wire slot forced to 1 (OBP convention; the far end derives its own
+          local TS from its talkgroup_slots table). Bit 0x80 is the slot-2 flag.
+        - HMAC-SHA1(passphrase, DMRD) appended.
+        """
+        cfg = state.config
+        rptr_id = source_peer_id if cfg.preserve_source_peer else cfg.network_id.to_bytes(4, 'big')
+        bits = dmrd53[15] & ~0x80          # force slot 1 on the wire
+        dmrd = b''.join([dmrd53[:11], rptr_id, bytes([bits]), dmrd53[16:]])
+        return dmrd + hmac_new(self._obp_key(cfg.passphrase), dmrd, sha1).digest()
+
     def _send_packet(self, data: bytes, addr: tuple):
         """Send packet to specified address"""
         cmd = data[:4]
@@ -3141,6 +3251,10 @@ def load_config(config_file: str):
 def parse_outbound_connections() -> List[OutboundConnectionConfig]:
     """Wrapper for config module parse_outbound_connections"""
     return parse_outbound_func(CONFIG, LOGGER)
+
+def parse_openbridge_connections() -> List[OpenBridgeConnectionConfig]:
+    """Wrapper for config module parse_openbridge_connections"""
+    return parse_openbridge_func(CONFIG, LOGGER)
 
 async def async_main():
     """Main async entry point"""
@@ -3242,7 +3356,17 @@ async def async_main():
                     name=f'outbound_{config.name}'
                 )
                 LOGGER.info(f'✓ Started outbound connection task for "{config.name}"')
-    
+
+    # Parse and start OpenBridge (OBP) trunk connections. One bound socket per
+    # OBP; no login/keepalive. Only enabled OBPs are started (validation already
+    # enforced one-OBP-per-TGID across enabled OBPs).
+    openbridge_configs = parse_openbridge_connections()
+    if openbridge_configs and protocols:
+        primary_protocol = protocols[0]
+        for config in openbridge_configs:
+            if config.enabled:
+                await primary_protocol._start_openbridge(config, loop)
+
     # Setup signal handlers (Linux/Unix native asyncio pattern)
     shutdown_event = asyncio.Event()
     
