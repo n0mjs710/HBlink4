@@ -118,3 +118,67 @@ def test_egress_without_preserve_stamps_network_id():
     st = OpenBridgeState(config=o, ip="10.0.0.9", port=1)
     d = _bare_protocol()._obp_build_egress(st, _dmrd(31), (3112001).to_bytes(4, 'big'))[:53]
     assert d[11:15] == (3129900).to_bytes(4, 'big')  # Brandmeister-spec: RptrId = network_id
+
+
+# ---- routing: target selection + reflection guard --------------------------
+
+def _obp_state(name, tgslots, ip="10.0.0.9", port=62035, passphrase="secret",
+               network_id=3129900, preserve=True):
+    cfg = OpenBridgeConnectionConfig(
+        enabled=True, name=name, network_id=network_id, local_address="0.0.0.0",
+        local_port=1, target_address="x", target_port=1, passphrase=passphrase,
+        talkgroup_slots=tgslots, preserve_source_peer=preserve)
+    return OpenBridgeState(config=cfg, ip=ip, port=port)
+
+
+def test_calc_targets_obp_ownership_and_reflection():
+    t31, t3120 = (31).to_bytes(3, 'big'), (3120).to_bytes(3, 'big')
+    p = HBProtocol.__new__(HBProtocol)
+    p._repeaters, p._outbounds = {}, {}
+    p._openbridges = {"A": _obp_state("A", {t31: 1}), "B": _obp_state("B", {t3120: 2})}
+
+    # Repeater-sourced TG31 -> only OBP A owns it
+    tg = p._calculate_stream_targets(b'\x00\x00\x00\x01', 1, t31, b'\x00\x00\x00\x01', b'\x00\x00\x01')
+    assert ('openbridge', 'A') in tg and ('openbridge', 'B') not in tg
+
+    # Reflection guard: OBP A is the source of a TG31 stream -> A must NOT be a target
+    tg2 = p._calculate_stream_targets(('openbridge', 'A'), 1, t31, b'\x00\x00\x00\x01', b'\x00\x00\x01')
+    assert ('openbridge', 'A') not in tg2
+
+    # Unowned TGID -> no OBP target
+    tg3 = p._calculate_stream_targets(b'\x00\x00\x00\x01', 1, (999).to_bytes(3, 'big'),
+                                      b'\x00\x00\x00\x01', b'\x00\x00\x01')
+    assert not any(isinstance(t, tuple) and t[0] == 'openbridge' for t in tg3)
+
+
+# ---- ingress lifecycle: auth -> filter -> TS-normalize -> track -> forward --
+
+def test_ingress_creates_stream_normalizes_slot_and_forwards():
+    t3120 = (3120).to_bytes(3, 'big')
+    p = HBProtocol.__new__(HBProtocol)
+    p._repeaters, p._outbounds = {}, {}
+    st = _obp_state("A", {t3120: 2})               # TG3120 -> local TS2
+    p._openbridges = {"A": st}
+    forwarded = []
+    p._forward_stream = lambda *a, **k: forwarded.append(a)
+
+    # Build a valid inbound OBP frame for TG3120 (wire slot 1 by convention)
+    frame = p._obp_build_egress(st, _dmrd(3120, slot=1, peer=3112001), (3112001).to_bytes(4, 'big'))
+    sid = frame[16:20]
+
+    p._handle_openbridge_packet("A", frame, ("10.0.0.9", 62035))
+
+    # Stream tracked by stream_id, on the assigned local TS2
+    assert sid in st.streams and st.streams[sid].slot == 2
+    # Forward invoked with source tag + assigned slot; DMR frame normalized to TS2
+    assert forwarded, "forward not called"
+    fdata, fsource, fslot = forwarded[0][0], forwarded[0][1], forwarded[0][2]
+    assert fsource == ('openbridge', 'A') and fslot == 2
+    assert fdata[15] & 0x80, "slot bit not normalized to TS2 before forwarding"
+
+    # Unmapped TGID is dropped (no stream, no forward)
+    forwarded.clear()
+    bad = p._obp_build_egress(st, _dmrd(999, slot=1, sid=b'\x11\x22\x33\x44'),
+                              (3112001).to_bytes(4, 'big'))
+    p._handle_openbridge_packet("A", bad, ("10.0.0.9", 62035))
+    assert not forwarded and bad[16:20] not in st.streams
