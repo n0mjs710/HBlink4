@@ -1534,9 +1534,17 @@ class HBProtocol(asyncio.DatagramProtocol):
         for obp in self._openbridges.values():
             if not obp.streams:
                 continue
-            stale = [sid for sid, s in obp.streams.items()
+            stale = [(sid, s) for sid, s in obp.streams.items()
                      if s.ended or (current_time - s.last_seen) > stream_timeout]
-            for sid in stale:
+            for sid, s in stale:
+                # If the terminator was lost, the stream_end was never emitted, so
+                # the dashboard pill would hang. Emit it now (RX or TX alike — both
+                # live in this dict). Streams already flagged ended emitted their
+                # stream_end at the terminator; don't double-emit those.
+                if not s.ended:
+                    s.ended = True
+                    s.end_time = current_time
+                    self._emit_stream_end('openbridge', obp.config.name, s.slot, s, 'timeout')
                 del obp.streams[sid]
 
         # Cleanup old denied stream entries (older than 10 seconds)
@@ -3644,6 +3652,12 @@ class HBProtocol(asyncio.DatagramProtocol):
                 obp.transport.sendto(
                     self._obp_build_egress(obp, dmrd53, source_peer_id), obp.sockaddr)
 
+                # Track the assumed TX stream so the dashboard draws an outbound
+                # pill and the stream ends cleanly (terminator or reaper backstop).
+                self._update_assumed_stream_obp(
+                    obp, net_slot, net_rf_src, net_dst_id, stream_id, is_terminator,
+                    is_unit_call=source_stream.is_unit_call)
+
             else:
                 # Target is a local repeater (bytes)
                 target_repeater_id = target
@@ -3935,6 +3949,62 @@ class HBProtocol(asyncio.DatagramProtocol):
                 current_stream,
                 'terminator'
             )
+
+    def _update_assumed_stream_obp(self, obp: 'OpenBridgeState', slot: int, rf_src: bytes,
+                                   dst_id: bytes, stream_id: bytes, is_terminator: bool,
+                                   is_unit_call: bool = False) -> None:
+        """Track and emit dashboard events for a TX (assumed) stream on an OBP trunk.
+
+        OBP is stream-multiplexed (no TDMA slot), so the assumed TX stream is
+        keyed by stream_id in the trunk's own stream dict — the same dict the
+        RX/ingress path uses and the stale-stream reaper already sweeps (source
+        != target for any stream, so RX and TX entries never collide). Marked
+        is_assumed=True so the dashboard renders it as an outbound pill. Mirrors
+        the OBP ingress emit and deliberately does NOT touch _active_calls,
+        matching ingress (OBP streams are not counted toward the active total).
+        """
+        current_time = time()
+        stream = obp.streams.get(stream_id)
+        if stream is None:
+            call_type = "private" if is_unit_call else "group"
+            stream = StreamState(
+                repeater_id=obp.config.network_id.to_bytes(4, 'big'),  # our ID (TX)
+                rf_src=rf_src,
+                dst_id=dst_id,
+                slot=slot,
+                start_time=current_time,
+                last_seen=current_time,
+                stream_id=stream_id,
+                packet_count=1,
+                call_type=call_type,
+                is_assumed=True,  # TX, not received from the peer
+                is_unit_call=is_unit_call,
+            )
+            obp.streams[stream_id] = stream
+            LOGGER.info(f'[OBP {obp.config.name}] TX stream start '
+                        f'src={int.from_bytes(rf_src, "big")} '
+                        f'tgid={int.from_bytes(dst_id, "big")} -> TS{slot} '
+                        f'stream_id={stream_id.hex()}')
+            self._emit_stream_start(
+                'openbridge',
+                obp.config.name,
+                slot,
+                rf_src,
+                dst_id,
+                stream_id,
+                call_type,
+                True,  # TX assumed stream
+            )
+        else:
+            stream.last_seen = current_time
+            stream.packet_count += 1
+
+        if is_terminator and not stream.ended:
+            stream.ended = True
+            stream.end_time = current_time
+            LOGGER.info(f'[OBP {obp.config.name}] TX stream end '
+                        f'stream_id={stream_id.hex()} packets={stream.packet_count}')
+            self._emit_stream_end('openbridge', obp.config.name, slot, stream, 'terminator')
 
 
     # ------------------------------------------------------------------
