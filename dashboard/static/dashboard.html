@@ -1828,14 +1828,14 @@
                 const streamHtml = active.length
                     ? `<div class="obp-streams">` + active.map(s => {
                         const who = s.callsign ? `${s.callsign} (${s.src_id})` : s.src_id;
-                        const hang = s.status === 'hang_time';
-                        // Match renderSlot(): TX (assumed/forwarded) vs RX (received
-                        // from the peer), then HANG and DATA overrides.
+                        // TX (assumed/forwarded) vs RX (received from the peer),
+                        // with a DATA override. OBP is stream-multiplexed with no
+                        // slot to protect and no hang time, so there is no HANG
+                        // state here (unlike renderSlot()).
                         let badge = s.is_assumed ? 'transmitting' : 'receiving';
                         let label = s.is_assumed ? '⬆️ TX' : '⬇️ RX';
-                        if (hang) { badge = 'hang_time'; label = 'HANG'; }
                         if (s.is_data) { badge = 'data'; label = 'DATA'; }
-                        return `<span class="obp-stream-pill ${hang ? 'hang_time' : ''}">`
+                        return `<span class="obp-stream-pill">`
                              + `<span class="slot-status-badge ${badge}">${label}</span> `
                              + `${who} → <span class="slot-col-value highlight">TG${s.dst_id}</span> `
                              + `<span style="color:#64748b">TS${s.slot}</span></span>`;
