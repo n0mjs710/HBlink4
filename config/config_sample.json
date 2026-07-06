@@ -167,5 +167,43 @@
             "options": "TS1=*;TS2=*",
             "description": "Backup connection (disabled)"
         }
+    ],
+    "openbridge_connections": [
+        {
+            "enabled": true,
+            "name": "KS-Core-Trunk",
+            "network_id": 3129900,
+            "local_address": "0.0.0.0",
+            "local_port": 62035,
+            "target_address": "core.ks-dmr.example",
+            "target_port": 62035,
+            "passphrase": "shared-obp-secret",
+            "preserve_source_peer": true,
+            "talkgroup_slots": {
+                "31": "1",
+                "8": "1",
+                "3120": "2",
+                "3100": "2"
+            },
+            "description": "OBP trunk to the HBlink3 core; carries these canonical TGIDs (TGID -> local TS)"
+        },
+        {
+            "enabled": false,
+            "name": "KS-Core-Trunk-Backup",
+            "network_id": 3129901,
+            "local_address": "0.0.0.0",
+            "local_port": 62036,
+            "target_address": "core-backup.ks-dmr.example",
+            "target_port": 62035,
+            "passphrase": "shared-obp-secret",
+            "preserve_source_peer": true,
+            "talkgroup_slots": {
+                "31": "1",
+                "8": "1",
+                "3120": "2",
+                "3100": "2"
+            },
+            "description": "Standby trunk (disabled) — mirrors the active trunk's TGIDs for manual failover"
+        }
     ]
 }

@@ -72,6 +72,48 @@ class OutboundConnectionConfig:
 
 
 @dataclass
+class OpenBridgeConnectionConfig:
+    """Configuration for an OpenBridge (OBP) trunk connection.
+
+    OBP is a stream-multiplexed, TGID-transparent trunk: no per-user login, no
+    options handshake, no per-repeater metadata. ``talkgroup_slots`` is the one
+    table that does triple duty — ownership, fail-closed filter, and timeslot
+    assignment. See development/openbridge-hblink3-hblink4-design.md.
+    """
+    enabled: bool
+    name: str
+    network_id: int          # our OBP network ID; stamped into egress RptrId when preserve_source_peer is False
+    local_address: str       # local bind address
+    local_port: int
+    target_address: str      # remote OBP peer
+    target_port: int
+    passphrase: str
+    # Canonical TGID (3-byte, big-endian) -> local timeslot (1 or 2).
+    # Ownership + fail-closed filter + TS assignment, all in one map.
+    talkgroup_slots: Dict[bytes, int] = field(default_factory=dict)
+    # Retain the true source peer/repeater ID in the egress RptrId instead of
+    # overwriting it with network_id (the Brandmeister-spec behavior). Default
+    # True favors transparency with cooperating software; set False for
+    # strict-spec peers that require network_id in RptrId.
+    preserve_source_peer: bool = True
+    description: str = ""
+
+    def __post_init__(self):
+        """Validate required fields."""
+        if not self.name:
+            raise ValueError("OpenBridge connection must have a name")
+        if not self.target_address:
+            raise ValueError(f"OpenBridge connection '{self.name}' must have a target_address")
+        if not self.passphrase:
+            raise ValueError(f"OpenBridge connection '{self.name}' must have a passphrase")
+        for label, p in (('local_port', self.local_port), ('target_port', self.target_port)):
+            if p <= 0 or p > 65535:
+                raise ValueError(f"OpenBridge connection '{self.name}' has invalid {label}: {p}")
+        if not (0 < self.network_id <= 0xFFFFFFFF):
+            raise ValueError(f"OpenBridge connection '{self.name}' has invalid network_id: {self.network_id}")
+
+
+@dataclass
 class StreamState:
     """Tracks an active DMR transmission stream"""
     repeater_id: bytes          # Repeater this stream is on
@@ -181,6 +223,48 @@ class OutboundState:
             self.slot1_stream = stream
         elif slot == 2:
             self.slot2_stream = stream
+
+
+@dataclass
+class OpenBridgeState:
+    """State for an OpenBridge (OBP) trunk connection.
+
+    Unlike RepeaterState / OutboundState (2-slot TDMA, one stream per slot), OBP
+    is stream-multiplexed: many concurrent streams, tracked by stream_id. OBP
+    concurrency is NOT gated by timeslots — this dict is the deliberate departure
+    from the device model that lets a trunk carry a firehose.
+    """
+    config: OpenBridgeConnectionConfig
+    ip: str                  # resolved target IP
+    port: int                # target port
+    transport: Optional[asyncio.DatagramTransport] = None
+    # Many concurrent streams, keyed by 4-byte stream_id (reaped on timeout).
+    streams: Dict[bytes, 'StreamState'] = field(default_factory=dict)
+
+    @property
+    def sockaddr(self) -> Tuple[str, int]:
+        """Target socket address tuple."""
+        return (self.ip, self.port)
+
+    def get_stream(self, stream_id: bytes) -> Optional['StreamState']:
+        """Return the active stream with this id, or None."""
+        return self.streams.get(stream_id)
+
+    def add_stream(self, stream: 'StreamState') -> None:
+        """Track a new stream by its stream_id."""
+        self.streams[stream.stream_id] = stream
+
+    def remove_stream(self, stream_id: bytes) -> None:
+        """Stop tracking a stream (ended or reaped)."""
+        self.streams.pop(stream_id, None)
+
+    def owns_tgid(self, dst_id: bytes) -> bool:
+        """True if this OBP carries (owns) the given canonical TGID."""
+        return dst_id in self.config.talkgroup_slots
+
+    def ts_for_tgid(self, dst_id: bytes) -> Optional[int]:
+        """Local timeslot for a canonical TGID on ingress, or None if unmapped (dropped)."""
+        return self.config.talkgroup_slots.get(dst_id)
 
 
 @dataclass
