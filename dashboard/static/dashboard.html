@@ -945,6 +945,8 @@
                     const outboundList = Array.isArray(state.outbounds)
                         ? state.outbounds : Object.values(state.outbounds || {});
                     updateOutbounds(outboundList);
+                } else if (connectionType === 'openbridge') {
+                    updateOpenbridges(state.openbridges);
                 } else if (state.repeaters) {
                     updateRepeaters(state.repeaters);
                 }
@@ -2198,6 +2200,14 @@
                             s.connection_name === data.connection_name &&
                             s.slot === data.slot
                         );
+                    } else if (connection_type === 'openbridge') {
+                        // OBP is stream-multiplexed: identify by stream_id, not
+                        // slot (many concurrent streams can share a slot).
+                        startStreamIndex = state.streams.findIndex(s =>
+                            s.connection_type === 'openbridge' &&
+                            s.connection_name === data.connection_name &&
+                            s.stream_id === data.stream_id
+                        );
                     } else {
                         startStreamIndex = state.streams.findIndex(s =>
                             s.repeater_id == data.repeater_id && s.slot == data.slot
@@ -2220,15 +2230,23 @@
                     // Voice calls: clear any lingering data timer for this
                     // slot (a real voice transmission supersedes).
                     {
-                        const persistConnId = connection_type === 'outbound'
+                        const persistConnId = (connection_type === 'outbound' || connection_type === 'openbridge')
                             ? data.connection_name : data.repeater_id;
-                        const persistKey = dataPersistKey(connection_type, persistConnId, data.slot);
+                        // OBP is stream-multiplexed — scope the persist timer to the
+                        // stream_id, not the slot (multiple streams share a slot).
+                        const persistScope = connection_type === 'openbridge' ? data.stream_id : data.slot;
+                        const persistKey = dataPersistKey(connection_type, persistConnId, persistScope);
                         if (data.is_data) {
                             scheduleDataPersistDrop(persistKey, connection_type, (s) => {
                                 if (connection_type === 'outbound') {
                                     return s.connection_type === 'outbound'
                                         && s.connection_name === data.connection_name
                                         && Number(s.slot) === Number(data.slot);
+                                }
+                                if (connection_type === 'openbridge') {
+                                    return s.connection_type === 'openbridge'
+                                        && s.connection_name === data.connection_name
+                                        && s.stream_id === data.stream_id;
                                 }
                                 return s.repeater_id == data.repeater_id
                                     && Number(s.slot) === Number(data.slot);
@@ -2242,6 +2260,8 @@
                     if (connection_type === 'outbound') {
                         updateOutbounds(state.outbounds);
                         updateOpenbridges(state.openbridges);
+                    } else if (connection_type === 'openbridge') {
+                        updateOpenbridges(state.openbridges);
                     } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
                     }
@@ -2252,6 +2272,27 @@
                 case 'stream_end':
                     // Update stream status to hang_time
                     const endConnectionType = data.connection_type || 'repeater';
+
+                    if (endConnectionType === 'openbridge') {
+                        // OBP has no hang time — drop the ended stream outright so
+                        // the pill clears immediately (matches server.py, which
+                        // deletes OBP streams on end). Multiplexed: match by
+                        // stream_id. Data pills are governed by the persistence
+                        // timer; leave those for scheduleDataPersistDrop to remove.
+                        const endObp = state.streams.find(s =>
+                            s.connection_type === 'openbridge' &&
+                            s.connection_name === data.connection_name &&
+                            s.stream_id === data.stream_id);
+                        if (endObp && !endObp.is_data) {
+                            state.streams = state.streams.filter(s =>
+                                !(s.connection_type === 'openbridge' &&
+                                  s.connection_name === data.connection_name &&
+                                  s.stream_id === data.stream_id));
+                        }
+                        updateOpenbridges(state.openbridges);
+                        break;
+                    }
+
                     const endStreamIndex = state.streams.findIndex(s => {
                         if (endConnectionType === 'outbound') {
                             return s.connection_type === 'outbound' &&
