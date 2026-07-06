@@ -4062,8 +4062,12 @@ class HBProtocol(asyncio.DatagramProtocol):
 
     def _obp_build_egress(self, state: 'OpenBridgeState', dmrd53: bytes,
                           source_peer_id: bytes) -> bytes:
-        """Frame a 53-byte DMRD as a 73-byte OBP packet for this OBP.
+        """Frame a DMRD as a 73-byte OBP packet for this OBP.
 
+        - Truncated to a canonical 53-byte DMRD: HBP repeater sources deliver
+          55-byte frames (trailing BER/RSSI bytes) which must be dropped so the
+          wire frame is exactly 53 DMRD + 20 HMAC = 73; the peer computes its
+          HMAC over 53 bytes and rejects anything longer.
         - RptrId (bytes 11:15): the true source peer when preserve_source_peer,
           else our network_id (Brandmeister-spec behavior).
         - Wire slot forced to 1 (OBP convention; the far end derives its own
@@ -4073,7 +4077,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         cfg = state.config
         rptr_id = source_peer_id if cfg.preserve_source_peer else cfg.network_id.to_bytes(4, 'big')
         bits = dmrd53[15] & ~0x80          # force slot 1 on the wire
-        dmrd = b''.join([dmrd53[:11], rptr_id, bytes([bits]), dmrd53[16:]])
+        dmrd = b''.join([dmrd53[:11], rptr_id, bytes([bits]), dmrd53[16:53]])
         return dmrd + hmac_new(self._obp_key(cfg.passphrase), dmrd, sha1).digest()
 
     def _send_packet(self, data: bytes, addr: tuple):
