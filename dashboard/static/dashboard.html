@@ -505,7 +505,32 @@
             background: #fbbf24;   /* gold */
             color: #1e293b;
         }
-        
+
+        /* OpenBridge active-stream pills — flow left→right, wrap as a group */
+        .obp-streams {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .obp-stream-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #0f213b;
+            border: 1px solid #334155;
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .obp-stream-pill.hang_time {
+            opacity: 0.75;
+        }
+        .obp-stream-pill.idle {
+            color: #64748b;
+        }
+
         .repeater-header-warning {
             font-size: 16px;
             font-weight: 600;
@@ -873,7 +898,7 @@
 
         <!-- OpenBridge Trunks -->
         <div id="openbridgeSection" style="display: none;">
-            <h2 class="section-header" style="margin-top: 20px;">🌉 OpenBridge <span id="openbridgeCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <h2 class="section-header" style="margin-top: 20px;">↔️ OpenBridge <span id="openbridgeCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
             <div class="card">
                 <div id="openbridgesContainer"></div>
             </div>
@@ -1798,18 +1823,21 @@
                     s.connection_type === 'openbridge' &&
                     s.connection_name === o.connection_name &&
                     (s.status === 'active' || s.status === 'hang_time'));
-                const streamHtml = active.length ? active.map(s => {
-                    const who = s.callsign ? `${s.callsign} (${s.src_id})` : s.src_id;
-                    return `<div class="slot receiving" style="grid-template-columns:auto;width:auto;margin-top:4px">`
-                         + `<span><span class="slot-status-badge receiving">RX</span> ${who} → `
-                         + `<span class="slot-col-value highlight">TG${s.dst_id}</span> `
-                         + `<span style="color:#64748b">TS${s.slot}</span></span></div>`;
-                }).join('') : '<div class="slot idle" style="grid-template-columns:auto;width:auto;margin-top:4px"><span class="slot-col-value empty">— idle —</span></div>';
+                const streamHtml = active.length
+                    ? `<div class="obp-streams">` + active.map(s => {
+                        const who = s.callsign ? `${s.callsign} (${s.src_id})` : s.src_id;
+                        const hang = s.status === 'hang_time';
+                        return `<span class="obp-stream-pill ${hang ? 'hang_time' : ''}">`
+                             + `<span class="slot-status-badge ${hang ? 'hang_time' : 'receiving'}">${hang ? 'HANG' : 'RX'}</span> `
+                             + `${who} → <span class="slot-col-value highlight">TG${s.dst_id}</span> `
+                             + `<span style="color:#64748b">TS${s.slot}</span></span>`;
+                      }).join('') + `</div>`
+                    : `<div class="obp-streams"><span class="obp-stream-pill idle">— idle —</span></div>`;
 
                 return `
                     <div class="repeater-card" style="flex-direction:column;align-items:stretch">
                         <div class="repeater-info" style="min-width:100%">
-                            <div class="${headerClass}">🌉 ${o.connection_name}
+                            <div class="${headerClass}">↔️ ${o.connection_name}
                                 <span style="font-weight:400;color:#94a3b8">(NetID ${o.network_id})</span></div>
                             <div style="color:#94a3b8;font-size:13px;margin:2px 0">
                                 ${o.remote_address}:${o.remote_port} · up ${upDur} ·
