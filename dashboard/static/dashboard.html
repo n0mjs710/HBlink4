@@ -865,7 +865,15 @@
                 <div id="outboundsContainer"></div>
             </div>
         </div>
-        
+
+        <!-- OpenBridge Trunks -->
+        <div id="openbridgeSection" style="display: none;">
+            <h2 class="section-header" style="margin-top: 20px;">🌉 OpenBridge <span id="openbridgeCount" style="color: #38bdf8; font-weight: 700;"></span></h2>
+            <div class="card">
+                <div id="openbridgesContainer"></div>
+            </div>
+        </div>
+
         <div class="card" style="margin-top: 15px;">
             <h2>Recent Events</h2>
             <div id="eventsLog"></div>
@@ -879,6 +887,7 @@
             repeaters: [],
             repeater_details: {},  // Detailed info for each repeater
             outbounds: [],  // Outbound connections
+            openbridges: [],  // OpenBridge trunks
             streams: [],
             events: [],
             last_heard: [],
@@ -1031,6 +1040,7 @@
                 if (data.type === 'initial_state') {
                     state.repeaters = data.data.repeaters;
                     state.outbounds = data.data.outbounds || [];
+                    state.openbridges = data.data.openbridges || [];
                     state.streams = data.data.streams;
                     state.events = data.data.events;
                     state.stats = data.data.stats;
@@ -1042,6 +1052,7 @@
 
                     updateRepeaters(state.repeaters);
                     updateOutbounds(state.outbounds);
+                    updateOpenbridges(state.openbridges);
                     updateStreams(state.streams);
                     updateEvents(state.events);
                     updateStats(state.stats, state.repeaters, state.streams);
@@ -1706,6 +1717,62 @@
             `;
         }
         
+        function updateOpenbridges(openbridges) {
+            const container = document.getElementById('openbridgesContainer');
+            const countElement = document.getElementById('openbridgeCount');
+            const section = document.getElementById('openbridgeSection');
+            const list = Array.isArray(openbridges) ? openbridges : Object.values(openbridges || {});
+
+            if (list.length === 0) {
+                if (section) section.style.display = 'none';
+                return;
+            }
+            if (section) section.style.display = 'block';
+
+            const upCount = list.filter(o => o.status === 'connected').length;
+            if (countElement) countElement.textContent = upCount > 0 ? `(${upCount})` : '';
+
+            const streams = state.streams || [];
+
+            container.innerHTML = list.map(o => {
+                const up = o.status === 'connected';
+                const headerClass = up ? 'outbound-header-connected' : 'outbound-header-disconnected';
+                const upDur = (up && o.connected_at) ? formatDuration(Date.now() / 1000 - o.connected_at) : '—';
+
+                // Talkgroup ownership map { "tgid": ts } -> "31/TS1, 3120/TS2 …"
+                const tgs = o.talkgroups || {};
+                const tgList = Object.keys(tgs).sort((a, b) => Number(a) - Number(b))
+                    .map(t => `${t}<span style="color:#64748b">/TS${tgs[t]}</span>`).join(', ') || '—';
+
+                // Live streams on this trunk (OBP is stream-multiplexed — list them all)
+                const active = streams.filter(s =>
+                    s.connection_type === 'openbridge' &&
+                    s.connection_name === o.connection_name &&
+                    (s.status === 'active' || s.status === 'hang_time'));
+                const streamHtml = active.length ? active.map(s => {
+                    const who = s.callsign ? `${s.callsign} (${s.src_id})` : s.src_id;
+                    return `<div class="slot receiving" style="grid-template-columns:auto;width:auto;margin-top:4px">`
+                         + `<span><span class="slot-status-badge receiving">RX</span> ${who} → `
+                         + `<span class="slot-col-value highlight">TG${s.dst_id}</span> `
+                         + `<span style="color:#64748b">TS${s.slot}</span></span></div>`;
+                }).join('') : '<div class="slot idle" style="grid-template-columns:auto;width:auto;margin-top:4px"><span class="slot-col-value empty">— idle —</span></div>';
+
+                return `
+                    <div class="repeater-card" style="flex-direction:column;align-items:stretch">
+                        <div class="repeater-info" style="min-width:100%">
+                            <div class="${headerClass}">🌉 ${o.connection_name}
+                                <span style="font-weight:400;color:#94a3b8">(NetID ${o.network_id})</span></div>
+                            <div style="color:#94a3b8;font-size:13px;margin:2px 0">
+                                ${o.remote_address}:${o.remote_port} · up ${upDur} ·
+                                ${o.preserve_source_peer ? 'preserves source peer' : 'network_id in RptrId'}</div>
+                            <div style="font-size:12px;margin-top:4px">
+                                <span style="color:#94a3b8">TGs:</span> ${tgList}</div>
+                            ${streamHtml}
+                        </div>
+                    </div>`;
+            }).join('');
+        }
+
         function updateOutbounds(outbounds) {
             const container = document.getElementById('outboundsContainer');
             const countElement = document.getElementById('outboundCount');
@@ -1858,6 +1925,7 @@
             if (state.outbounds) {
                 const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
                 updateOutbounds(outboundList);
+                updateOpenbridges(state.openbridges);
             }
         }
         
@@ -2048,6 +2116,7 @@
                     // Immediately update the display
                     if (connection_type === 'outbound') {
                         updateOutbounds(state.outbounds);
+                        updateOpenbridges(state.openbridges);
                     } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
                     }
@@ -2080,6 +2149,7 @@
                     if (endConnectionType === 'outbound') {
                         const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
                         updateOutbounds(outboundList);
+                        updateOpenbridges(state.openbridges);
                     } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
                         // Update last heard display for repeater RX streams
@@ -2102,6 +2172,7 @@
                     if (hangConnectionType === 'outbound') {
                         const outboundList = Array.isArray(state.outbounds) ? state.outbounds : Object.values(state.outbounds || {});
                         updateOutbounds(outboundList);
+                        updateOpenbridges(state.openbridges);
                     } else if (state.repeaters) {
                         updateRepeaters(state.repeaters);
                         // Also update last heard display for repeater RX streams
@@ -2178,6 +2249,7 @@
                         state.outbounds.push({ ...data, status: 'connected' });
                     }
                     updateOutbounds(state.outbounds);
+                    updateOpenbridges(state.openbridges);
                     playConnectTone();
                     break;
                 
@@ -2190,6 +2262,7 @@
                         state.outbounds.push({ ...data, status: 'connecting' });
                     }
                     updateOutbounds(state.outbounds);
+                    updateOpenbridges(state.openbridges);
                     break;
                 
                 case 'outbound_disconnected':
@@ -2198,6 +2271,7 @@
                     if (disconnectIdx >= 0) {
                         state.outbounds[disconnectIdx] = { ...state.outbounds[disconnectIdx], ...data, status: 'disconnected' };
                         updateOutbounds(state.outbounds);
+                        updateOpenbridges(state.openbridges);
                         playDisconnectTone();
                     }
                     break;
@@ -2211,6 +2285,7 @@
                         state.outbounds.push({ ...data, status: 'error' });
                     }
                     updateOutbounds(state.outbounds);
+                    updateOpenbridges(state.openbridges);
                     playAlertTone();
                     break;
             }

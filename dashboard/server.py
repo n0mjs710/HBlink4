@@ -103,7 +103,8 @@ class DashboardState:
         self.repeaters: Dict[int, dict] = {}
         self.repeater_details: Dict[int, dict] = {}  # Detailed info (sent once per connection)
         self.outbounds: Dict[str, dict] = {}  # Outbound connections (key: connection_name)
-        self.streams: Dict[str, dict] = {}  # key: f"{repeater_id}.{slot}"
+        self.openbridges: Dict[str, dict] = {}  # OpenBridge trunks (key: connection_name)
+        self.streams: Dict[str, dict] = {}  # key: f"{repeater_id}.{slot}" (OBP: f"{name}.{stream_id}")
         self.events: deque = deque(maxlen=500)  # Ring buffer of recent events
         self.last_heard: List[dict] = []  # Last heard users
         self.last_heard_stats: dict = {}  # User cache statistics
@@ -366,6 +367,7 @@ async def broadcast_hblink_status(connected: bool):
                         'repeaters': list(state.repeaters.values()),
                         'repeater_details': state.repeater_details,
                         'outbounds': list(state.outbounds.values()),
+                        'openbridges': list(state.openbridges.values()),
                         'streams': list(state.streams.values()),
                         'events': list(state.events)[-50:],
                         'stats': state.stats,
@@ -400,6 +402,7 @@ class TCPProtocol(asyncio.Protocol):
         logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
         state.outbounds.clear()
+        state.openbridges.clear()
         state.streams.clear()
         
         # Set connection status synchronously (async broadcast may be delayed)
@@ -470,6 +473,7 @@ class UnixProtocol(asyncio.Protocol):
         logger.info("🔄 Clearing dashboard state - requesting HBlink4 state sync")
         state.repeaters.clear()
         state.outbounds.clear()
+        state.openbridges.clear()
         state.streams.clear()
         
         # Set connection status synchronously (async broadcast may be delayed)
@@ -669,7 +673,10 @@ class EventReceiver:
             # Handle both repeater streams and outbound connection streams
             connection_type = data.get('connection_type', 'repeater')
             
-            if connection_type == 'outbound':
+            if connection_type == 'openbridge':
+                # OBP is stream-multiplexed - key by connection_name.stream_id
+                key = f"{data['connection_name']}.{data.get('stream_id')}"
+            elif connection_type == 'outbound':
                 # Outbound stream - key by connection_name.slot
                 key = f"{data['connection_name']}.{data['slot']}"
             else:
@@ -705,7 +712,10 @@ class EventReceiver:
                     # Build source display: "Name (originating_repeater_id)"
                     # For repeaters: callsign (repeater_id)
                     # For outbound: connection_name (remote_repeater_id)
-                    if connection_type == 'outbound':
+                    if connection_type == 'openbridge':
+                        # OBP source: the trunk name (the origin peer rides in the frame)
+                        source_name = data.get('connection_name', 'OpenBridge')
+                    elif connection_type == 'outbound':
                         conn_name = data.get('connection_name', 'Unknown')
                         remote_rid = data.get('remote_repeater_id', 0)
                         source_name = f"{conn_name} ({remote_rid})"
@@ -731,8 +741,8 @@ class EventReceiver:
                         'active': True  # Mark as currently active
                     }
                     # Only local repeater ingresses have translation state we can reference;
-                    # outbound-connection ingresses are remote and carry no local map.
-                    if connection_type != 'outbound':
+                    # outbound- and OBP-ingresses are remote and carry no local map.
+                    if connection_type == 'repeater':
                         user_entry['source_repeater_id'] = data.get('repeater_id')
                     
                     if existing_idx is not None:
@@ -747,8 +757,10 @@ class EventReceiver:
                 # Don't add to last_heard - these represent the same call being forwarded
                 state.stats['retransmitted_calls'] += 1
             
-            # Update repeater/outbound last activity
-            if connection_type == 'outbound' and data['connection_name'] in state.outbounds:
+            # Update repeater/outbound/OBP last activity
+            if connection_type == 'openbridge' and data['connection_name'] in state.openbridges:
+                state.openbridges[data['connection_name']]['last_activity'] = event['timestamp']
+            elif connection_type == 'outbound' and data['connection_name'] in state.outbounds:
                 state.outbounds[data['connection_name']]['last_activity'] = event['timestamp']
             elif data.get('repeater_id') in state.repeaters:
                 state.repeaters[data['repeater_id']]['last_activity'] = event['timestamp']
@@ -756,11 +768,13 @@ class EventReceiver:
         elif event_type == 'stream_update':
             # Handle both repeater and outbound streams
             connection_type = data.get('connection_type', 'repeater')
-            if connection_type == 'outbound':
+            if connection_type == 'openbridge':
+                key = f"{data['connection_name']}.{data.get('stream_id')}"
+            elif connection_type == 'outbound':
                 key = f"{data['connection_name']}.{data['slot']}"
             else:
                 key = f"{data['repeater_id']}.{data['slot']}"
-                
+
             if key in state.streams:
                 state.streams[key]['packets'] = data['packets']
                 state.streams[key]['duration'] = data['duration']
@@ -768,11 +782,13 @@ class EventReceiver:
         elif event_type == 'stream_end':
             # Handle both repeater and outbound streams
             connection_type = data.get('connection_type', 'repeater')
-            if connection_type == 'outbound':
+            if connection_type == 'openbridge':
+                key = f"{data['connection_name']}.{data.get('stream_id')}"
+            elif connection_type == 'outbound':
                 key = f"{data['connection_name']}.{data['slot']}"
             else:
                 key = f"{data['repeater_id']}.{data['slot']}"
-                
+
             if key in state.streams:
                 # Stream ended and entering hang time (combined event)
                 stream = state.streams[key]
@@ -794,6 +810,10 @@ class EventReceiver:
                         if user_entry:
                             user_entry['active'] = False
                             user_entry['last_heard'] = event['timestamp']
+
+                # OBP is stream-multiplexed with no hang time — drop the ended stream now.
+                if connection_type == 'openbridge':
+                    del state.streams[key]
         
         elif event_type == 'hang_time_expired':
             # Hang time has expired, clear the slot (handle both repeater and outbound)
@@ -828,7 +848,26 @@ class EventReceiver:
                 'status': 'connected'
             }
             logger.info(f"Outbound connection established: {conn_name} (radio_id={data.get('radio_id')}) at {data.get('remote_address')}:{data.get('remote_port')}")
-        
+
+        elif event_type == 'openbridge_connected':
+            # OpenBridge trunk is up (bound socket; no auth handshake)
+            conn_name = data['connection_name']
+            state.openbridges[conn_name] = {
+                **data,
+                'connected_at': event['timestamp'],
+                'last_activity': event['timestamp'],
+                'status': 'connected',
+            }
+            logger.info(f"OpenBridge trunk up: {conn_name} (network_id={data.get('network_id')}) "
+                        f"→ {data.get('remote_address')}:{data.get('remote_port')} "
+                        f"({len(data.get('talkgroups', {}))} talkgroups)")
+
+        elif event_type == 'openbridge_disconnected':
+            conn_name = data['connection_name']
+            if conn_name in state.openbridges:
+                state.openbridges[conn_name]['status'] = 'disconnected'
+                state.openbridges[conn_name]['disconnected_at'] = event['timestamp']
+
         elif event_type == 'outbound_disconnected':
             # Outbound connection lost - change to disconnected status but don't remove
             conn_name = data['connection_name']
@@ -1055,6 +1094,7 @@ async def websocket_endpoint(websocket: WebSocket):
             'repeaters': list(state.repeaters.values()),
             'repeater_details': state.repeater_details,
             'outbounds': list(state.outbounds.values()),
+            'openbridges': list(state.openbridges.values()),
             'streams': list(state.streams.values()),
             'events': list(state.events)[-50:],
             'stats': state.stats,
