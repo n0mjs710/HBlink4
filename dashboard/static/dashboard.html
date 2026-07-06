@@ -2531,9 +2531,120 @@
         document.getElementById('audioToggle').addEventListener('click', toggleAudio);
         updateAudioToggle();
         
+        // ---------------------------------------------------------------------------
+        // Demo mode (?demo in URL) — coherent static scenario, no WebSocket/server.
+        // Paradigm (HBlink4 = edge access server fed by an HBlink3 core over OBP):
+        //   • KS-CORE OBP trunk carries US-Nationwide (31/TS1), KS-Statewide
+        //     (3120/TS2) and MO-Local (3100/TS2) to/from the core.
+        //   • N0CAL is transmitting KS-Statewide (3120) IN on the trunk → delivered
+        //     to subscribed devices (W0ABC, KD0XYZ) on TS2.
+        //   • W0ABC keyed US-Nationwide (31) on its TS1 → egresses OUT the trunk.
+        //   • W0DEF just finished MO-Local (3100) on KD0XYZ TS1 → TX hang.
+        //   • N0MJS has an RF translation TS2/TG8 ↔ Net TS2/TG3120 (shown gold).
+        // The 1s ticker still runs, so active durations count up live.
+        // ---------------------------------------------------------------------------
+        function loadDemo() {
+            const now = Date.now() / 1000;   // unix seconds
+
+            state.repeaters = [
+                { repeater_id: 3112001, callsign: 'W0ABC', location: 'Topeka, KS',
+                  status: 'connected', connection_type: 'repeater',
+                  rx_freq: '448800000', tx_freq: '443800000',
+                  connected_at: now - 3672, missed_pings: 0,
+                  slot1_talkgroups: [31], slot2_talkgroups: [3120, 3100],
+                  translations: [], rpto_received: false },
+                { repeater_id: 3112002, callsign: 'KD0XYZ', location: 'Lawrence, KS',
+                  status: 'connected', connection_type: 'hotspot',
+                  rx_freq: '', tx_freq: '',
+                  connected_at: now - 1245, missed_pings: 0,
+                  slot1_talkgroups: [3100], slot2_talkgroups: [3120],
+                  translations: [], rpto_received: true },
+                { repeater_id: 3112003, callsign: 'N0MJS', location: 'Wichita, KS',
+                  status: 'connected', connection_type: 'repeater',
+                  rx_freq: '449500000', tx_freq: '444500000',
+                  connected_at: now - 412, missed_pings: 1,
+                  slot1_talkgroups: [31], slot2_talkgroups: [3120],
+                  translations: [[2, 8, 2, 3120]], rpto_received: false },
+            ];
+
+            state.outbounds = [
+                { connection_name: 'KC-REGIONAL', radio_id: 3129200, status: 'connected',
+                  connected_at: now - 5412, missed_acks: 0,
+                  remote_address: '10.5.0.1', remote_port: 54001,
+                  slot1_talkgroups: [31], slot2_talkgroups: [3100] },
+            ];
+
+            state.openbridges = [
+                { connection_name: 'KS-CORE', network_id: 3120, status: 'connected',
+                  connected_at: now - 8130,
+                  remote_address: 'core.ksdmr.net', remote_port: 62031,
+                  preserve_source_peer: true,
+                  talkgroups: { '31': 1, '3120': 2, '3100': 2 } },
+            ];
+
+            state.streams = [
+                // Call A: KS-Statewide (3120) inbound on the trunk → devices (TS2)
+                { connection_type: 'openbridge', connection_name: 'KS-CORE', slot: 2,
+                  status: 'active', is_assumed: false, is_data: false, call_type: 'group',
+                  src_id: 3188765, callsign: 'N0CAL', dst_id: 3120, start_time: now - 6 },
+                { repeater_id: 3112001, slot: 2, status: 'active', is_assumed: true,
+                  is_data: false, call_type: 'group', src_id: 3188765, dst_id: 3120, start_time: now - 6 },
+                { repeater_id: 3112002, slot: 2, status: 'active', is_assumed: true,
+                  is_data: false, call_type: 'group', src_id: 3188765, dst_id: 3120, start_time: now - 6 },
+                // Call B: W0ABC keys US-Nationwide (31) on TS1 → egress OUT the trunk
+                { repeater_id: 3112001, slot: 1, status: 'active', is_assumed: false,
+                  is_data: false, call_type: 'group', src_id: 3112001, dst_id: 31, start_time: now - 4 },
+                { connection_type: 'openbridge', connection_name: 'KS-CORE', slot: 1,
+                  status: 'active', is_assumed: true, is_data: false, call_type: 'group',
+                  src_id: 3112001, callsign: 'W0ABC', dst_id: 31, start_time: now - 4 },
+                // Call C: MO-Local (3100) just ended on KD0XYZ TS1 → TX hang
+                { repeater_id: 3112002, slot: 1, status: 'hang_time', is_assumed: true,
+                  is_data: false, call_type: 'group', src_id: 3161001, dst_id: 3100, start_time: now - 22 },
+            ];
+
+            state.last_heard = [
+                { radio_id: 3188765, callsign: 'N0CAL', talkgroup: 3120, slot: 2,
+                  call_type: 'group', is_data: false, active: true,
+                  source_name: 'KS-CORE', last_heard: now - 6 },
+                { radio_id: 3112001, callsign: 'W0ABC', talkgroup: 31, slot: 1,
+                  call_type: 'group', is_data: false, active: true,
+                  source_name: 'W0ABC', source_repeater_id: 3112001, last_heard: now - 4 },
+                { radio_id: 3161001, callsign: 'W0DEF', talkgroup: 3100, slot: 1,
+                  call_type: 'group', is_data: false, active: false,
+                  source_name: 'KD0XYZ', source_repeater_id: 3112002, last_heard: now - 22 },
+                { radio_id: 3112003, callsign: 'KE0FGH', talkgroup: 3112001, slot: 2,
+                  call_type: 'private', is_data: false, active: false,
+                  source_name: 'N0MJS', source_repeater_id: 3112003, last_heard: now - 95 },
+                { radio_id: 3112002, callsign: 'KD0XYZ', talkgroup: 3100, slot: 1,
+                  call_type: 'group', is_data: true, active: false,
+                  source_name: 'KD0XYZ', source_repeater_id: 3112002, last_heard: now - 140 },
+                { radio_id: 3129100, callsign: '', talkgroup: 31, slot: 1,
+                  call_type: 'group', is_data: false, active: false,
+                  source_name: 'KC-REGIONAL', last_heard: now - 305 },
+            ];
+
+            state.stats = { total_calls_today: 1287, total_duration_today: 14520, retransmitted_calls: 342 };
+            state.events = [];
+            state.user_db_status = null;
+
+            updateHBlinkStatus(true);
+            updateWebSocketStatus(true);
+            updateRepeaters(state.repeaters);
+            updateOutbounds(state.outbounds);
+            updateOpenbridges(state.openbridges);
+            updateEvents(state.events);
+            updateStats(state.stats, state.repeaters, state.streams);
+            updateLastHeard(state.last_heard);
+            updateUserDbStatus(state.user_db_status);
+        }
+
         // Initialize dashboard
         loadConfig();
-        connectWebSocket();
+        if (new URLSearchParams(location.search).has('demo')) {
+            loadDemo();
+        } else {
+            connectWebSocket();
+        }
     </script>
 </body>
 </html>
