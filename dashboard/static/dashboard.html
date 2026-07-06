@@ -1813,10 +1813,12 @@
                 const headerClass = up ? 'outbound-header-connected' : 'outbound-header-disconnected';
                 const upDur = (up && o.connected_at) ? formatDuration(Date.now() / 1000 - o.connected_at) : '—';
 
-                // Talkgroup ownership map { "tgid": ts } -> "31/TS1, 3120/TS2 …"
+                // Talkgroup ownership map { "tgid": ts } -> "TS1/31, TS2/3120 …"
+                // (display as TS/TGID — standard DMR nomenclature; config keys by TGID
+                //  because the table's job is to assign each TGID a TS.)
                 const tgs = o.talkgroups || {};
                 const tgList = Object.keys(tgs).sort((a, b) => Number(a) - Number(b))
-                    .map(t => `${t}<span style="color:#64748b">/TS${tgs[t]}</span>`).join(', ') || '—';
+                    .map(t => `TS${tgs[t]}/${t}`).join(', ') || '—';
 
                 // Live streams on this trunk (OBP is stream-multiplexed — list them all)
                 const active = streams.filter(s =>
