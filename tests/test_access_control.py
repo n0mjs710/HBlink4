@@ -2,6 +2,7 @@
 Unit tests for the access_control module
 """
 
+import copy
 import unittest
 import logging
 from hblink4.access_control import (
@@ -12,53 +13,103 @@ from hblink4.access_control import (
 logging.basicConfig(level=logging.INFO,
                    format='%(message)s')
 
+
+# --- Self-contained fixture configuration -----------------------------------
+# These tests exercise the RepeaterMatcher against a FIXED, known config defined
+# here — deliberately NOT loaded from config_sample.json. The sample config is a
+# user-editable example that was restructured historically (its patterns were
+# renamed), which silently broke these tests. Keeping the fixture inline makes
+# them hermetic: they test the matcher's logic and can't drift when the sample
+# config changes. Pattern order matters (first match wins).
+_REPEATER_CONFIG = {
+    "patterns": [
+        {
+            "name": "KS-DMR Network",
+            "description": "All repeaters in the KS-DMR network",
+            # Range includes 312100 so it wins over Club Network / WA0EDA for that ID.
+            "match": {"id_ranges": [[312000, 312100]]},
+            "config": {
+                "passphrase": "ks-dmr-network-key",
+                "slot1_talkgroups": [8, 9],
+                "slot2_talkgroups": [3120, 3121, 3122],
+            },
+        },
+        {
+            "name": "WA0EDA Repeaters",
+            "description": "All WA0EDA club repeaters",
+            "match": {"callsigns": ["WA0EDA*"]},
+            "config": {
+                "passphrase": "wa0eda-network-key",
+                "slot1_talkgroups": [8],
+                "slot2_talkgroups": [31201, 31202],
+            },
+        },
+        {
+            "name": "Regional Network Repeaters",
+            "description": "Multiple ID ranges in one pattern",
+            "match": {"id_ranges": [[310000, 310999], [311000, 311999], [312000, 312999]]},
+            "config": {
+                "passphrase": "regional-network-key",
+                "slot1_talkgroups": [1, 2, 3, 8],
+                "slot2_talkgroups": [3100, 3101],
+            },
+        },
+        {
+            "name": "Club Network",
+            "description": "Multiple specific repeaters for a club network",
+            "match": {"ids": [312100, 312101, 312102]},
+            "config": {
+                "passphrase": "club-network-key",
+                "slot1_talkgroups": [8],
+                "slot2_talkgroups": [3100, 3101, 3102],
+            },
+        },
+    ],
+    "default": {
+        "passphrase": "passw0rd",
+        "slot1_talkgroups": [1],
+        "slot2_talkgroups": [2],
+    },
+}
+
+_BLACKLIST = {
+    "patterns": [
+        {"name": "Blocked IDs", "description": "Should never be used",
+         "match": {"ids": [1, 2]}, "reason": "Repeated abuse of network"},
+        {"name": "Blocked Range", "description": "Unauthorized network range",
+         "match": {"id_ranges": [[315000, 315999]]}, "reason": "Unauthorized DMR-MARC range"},
+        {"name": "Blocked Callsigns", "description": "Banned operators",
+         "match": {"callsigns": ["BADACTOR*", "SPAM*"]}, "reason": "Network abuse"},
+    ]
+}
+
+
 class TestRepeaterMatcher(unittest.TestCase):
     def setUp(self):
-        """Load test configuration from the sample config file"""
-        import json
-        import os
-
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 
-                                 'config', 'config_sample.json')
-        
-        with open(config_path, 'r') as f:
-            full_config = json.load(f)
-            
-        # Include both repeater and blacklist configurations
+        """Build a hermetic matcher from the inline fixture (not config_sample.json)."""
         self.config = {
-            "repeaters": full_config["repeater_configurations"],
-            "blacklist": full_config["blacklist"]
+            "repeaters": copy.deepcopy(_REPEATER_CONFIG),
+            "blacklist": copy.deepcopy(_BLACKLIST),
         }
-        
-        # Invalid configuration with multiple match types
+        # Config exercising multiple match types in one pattern
         self.invalid_config = {
             "repeaters": {
                 "patterns": [
                     {
                         "name": "Invalid Multiple Matches",
-                        "match": {
-                            "ids": [312100],
-                            "callsigns": ["WA0EDA*"]
-                        },
+                        "match": {"ids": [312100], "callsigns": ["WA0EDA*"]},
                         "config": {
                             "enabled": True,
                             "timeout": 20,
                             "passphrase": "invalid",
                             "talkgroups": [3120],
-                            "description": "Invalid Config"
-                        }
+                            "description": "Invalid Config",
+                        },
                     }
                 ],
-                "default": full_config["repeater_configurations"]["default"]
+                "default": copy.deepcopy(_REPEATER_CONFIG["default"]),
             }
         }
-        
-        logging.info("\n=== Test Configuration Loaded ===")
-        logging.info("Testing with patterns from config file:")
-        for pattern in self.config["repeaters"]["patterns"]:
-            logging.info(f"\nPattern: {pattern['name']}")
-            logging.info(f"Match criteria: {pattern['match']}")
-            logging.info(f"Configuration: {pattern['config']}")
         self.matcher = RepeaterMatcher(self.config)
 
     def _format_config_section(self, section: dict) -> str:
