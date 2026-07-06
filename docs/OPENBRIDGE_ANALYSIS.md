@@ -1,5 +1,10 @@
 # OpenBridge Protocol Analysis for HBlink4
 
+> **Status: implemented.** OpenBridge support now ships in HBlink4. This document
+> is retained as background/feasibility analysis; for the implemented feature —
+> configuration, routing behavior, dashboard, and the HBlink3-core/HBlink4-edge
+> topology — see **[OpenBridge Trunks](openbridge.md)**.
+
 ## Executive Summary
 
 OpenBridge is an alternative sub-protocol within the HomeBrew DMR specification designed specifically for **server-to-server communication**. Unlike the standard HomeBrew Protocol (HBP) which emulates a repeater-to-server relationship with full login/authentication/configuration handshake, OpenBridge is a **connectionless, HMAC-authenticated** protocol optimized for high-throughput inter-server traffic.

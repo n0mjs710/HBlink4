@@ -822,6 +822,62 @@ Set `enabled: false` to temporarily disable a connection without removing it fro
 }
 ```
 
+## OpenBridge Trunks
+
+OpenBridge (OBP) trunks carry many talkgroups' worth of server-to-server traffic
+over a single HMAC-authenticated socket — typically to/from a core such as
+HBlink3. Unlike Network Outbound (which emulates a two-slot repeater), OBP is
+stream-multiplexed and TGID-transparent. Declare trunks in the top-level
+`openbridge_connections` array. Full guide: [OpenBridge Trunks](openbridge.md).
+
+```json
+"openbridge_connections": [
+    {
+        "enabled": true,
+        "name": "KS-Core-Trunk",
+        "network_id": 3129900,
+        "local_address": "0.0.0.0",
+        "local_port": 62035,
+        "target_address": "core.example.net",
+        "target_port": 62035,
+        "passphrase": "shared-obp-secret",
+        "preserve_source_peer": true,
+        "talkgroup_slots": {
+            "31": "1",
+            "3120": "2"
+        }
+    }
+]
+```
+
+### Fields
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `enabled` | yes | Start this trunk. |
+| `name` | yes | Unique trunk name (logs + dashboard). |
+| `network_id` | yes | This side's OBP network ID. Stamped into egress RptrId **only** when `preserve_source_peer` is `false`. |
+| `local_address` / `local_port` | yes | Local bind for this trunk's own socket (one socket per OBP). |
+| `target_address` / `target_port` | yes | Remote OBP peer; ingress is accepted only from this socket. |
+| `passphrase` | yes | Shared secret keying the per-packet HMAC-SHA1. Must match the peer. |
+| `preserve_source_peer` | no (default `true`) | `true`: keep the true source peer in the egress RptrId; `false`: overwrite with `network_id` (Brandmeister-spec). |
+| `talkgroup_slots` | yes | Canonical **TGID → local TS** map (ownership + fail-closed filter + slot assignment). |
+
+### `talkgroup_slots`
+
+Both the TGID key and the TS value are JSON strings (`"31": "1"`) so the file
+reads consistently; they are parsed to a 3-byte TGID and an integer TS at load.
+The map form structurally enforces **one TS per TGID**. Any TGID not listed is
+**dropped** in both directions (fail-closed). The wire TGID is used as-is — an
+OBP edge assigns a timeslot but never renumbers the talkgroup.
+
+### Validation (fatal at startup)
+
+- TS must be `1` or `2`; TGID must be in range.
+- **One OBP per canonical TGID** across all *enabled* trunks (prevents OBP→OBP
+  transit and duplication). A disabled standby trunk may mirror an active
+  trunk's TGIDs, so flipping `enabled` performs a manual failover.
+
 ## Example Configuration
 
 See `config/config_sample.json` in the repository for a complete example showing all configuration sections.

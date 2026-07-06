@@ -30,6 +30,7 @@ HBlink4 focuses on being an efficient **endpoint network server** with the follo
 - **Real-time duration counter with 1-second updates**
 - **Two-tier stream end detection (immediate terminator + timeout fallback)**
 - **Per-repeater DMRD translation** - slot/TGID remap and outbound rf_src override declared via RPTO (see [DMRD Translation](docs/dmrd_translation.md))
+- **OpenBridge (OBP) trunks** - stream-multiplexed, HMAC-authenticated server-to-server trunking to/from a core (e.g. HBlink3); many talkgroups over one socket (see [OpenBridge Trunks](docs/openbridge.md))
 - **User routing cache for efficient private call routing**
 - Pattern-based repeater configuration and blacklisting
 - Per-slot transmission management
@@ -91,6 +92,7 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[Connecting Repeaters](docs/connecting_to_hblink4.md)** - How to connect repeaters to HBlink4
 - **[Call Routing](docs/routing.md)** - Inbound/outbound filtering, contention, and assumed slot state
 - **[DMRD Translation](docs/dmrd_translation.md)** - Per-repeater slot/TGID remap and rf_src override (RPTO extended syntax)
+- **[OpenBridge Trunks](docs/openbridge.md)** - Stream-multiplexed server-to-server trunking (OBP): config, routing, dashboard, and the HBlink3-core/HBlink4-edge topology
 - **[Stream Tracking](docs/stream_tracking.md)** - How DMR transmission streams are managed
 - **[Stream Tracking Diagrams](docs/stream_tracking_diagrams.md)** - Visual walkthrough of stream lifecycle and contention
 - **[Hang Time](docs/hang_time.md)** - Preventing conversation interruption
@@ -98,7 +100,7 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[Integration Guide](docs/integration.md)** - Using HBlink4 as a module
 - **[Logging](docs/logging.md)** - Log management and rotation
 - **[Roadmap / TODO](docs/TODO.md)** - Planned work (unit calls, performance monitoring, config UI)
-- **[OpenBridge Analysis](docs/OPENBRIDGE_ANALYSIS.md)** - Reference analysis for future OpenBridge support
+- **[OpenBridge Analysis](docs/OPENBRIDGE_ANALYSIS.md)** - Background feasibility analysis (OpenBridge is now implemented — see [OpenBridge Trunks](docs/openbridge.md))
 - **[Release Notes v4.7.0](docs/RELEASE_NOTES_v4.7.0.md)** - Current release — asyncio, DMRA, outbound connections, DMRD translation
 
 
