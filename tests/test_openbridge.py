@@ -12,6 +12,7 @@ from hashlib import sha1
 from hmac import new as hmac_new, compare_digest
 
 import pytest
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'hblink4'))
 
@@ -159,6 +160,7 @@ def test_ingress_creates_stream_normalizes_slot_and_forwards():
     p._repeaters, p._outbounds = {}, {}
     st = _obp_state("A", {t3120: 2})               # TG3120 -> local TS2
     p._openbridges = {"A": st}
+    p._events = Mock()                             # dashboard event emitter (stubbed)
     forwarded = []
     p._forward_stream = lambda *a, **k: forwarded.append(a)
 
@@ -175,6 +177,12 @@ def test_ingress_creates_stream_normalizes_slot_and_forwards():
     fdata, fsource, fslot = forwarded[0][0], forwarded[0][1], forwarded[0][2]
     assert fsource == ('openbridge', 'A') and fslot == 2
     assert fdata[15] & 0x80, "slot bit not normalized to TS2 before forwarding"
+
+    # Dashboard stream_start event emitted, tagged as an OpenBridge source
+    assert p._events.emit.called
+    etype, edata = p._events.emit.call_args.args
+    assert etype == 'stream_start' and edata['connection_type'] == 'openbridge' \
+        and edata['connection_name'] == 'A'
 
     # Unmapped TGID is dropped (no stream, no forward)
     forwarded.clear()

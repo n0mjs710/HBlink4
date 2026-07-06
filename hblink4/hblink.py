@@ -1346,7 +1346,11 @@ class HBProtocol(asyncio.DatagramProtocol):
                     'slot2_talkgroups': self._format_tg_json(outbound.slot2_talkgroups)
                 })
             
-            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters, {len(self._outbounds)} outbound connections')
+            # Send all OpenBridge trunks (bound = up; OBP has no auth handshake)
+            for obp in self._openbridges.values():
+                self._events.emit('openbridge_connected', self._openbridge_event_data(obp))
+
+            LOGGER.info(f'📤 Sent initial state: {len([r for r in self._repeaters.values() if r.connected])} connected repeaters, {len(self._outbounds)} outbound connections, {len(self._openbridges)} OpenBridge trunks')
         except Exception as e:
             LOGGER.error(f'Error sending initial state: {e}')
     
@@ -3212,6 +3216,20 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._obp_by_tgid[tgid] = config.name
         LOGGER.info(f'✓ OpenBridge "{config.name}" bound {config.local_address}:{config.local_port} '
                     f'→ {target_ip}:{target_port} ({len(config.talkgroup_slots)} talkgroups)')
+        self._events.emit('openbridge_connected', self._openbridge_event_data(state))
+
+    def _openbridge_event_data(self, state: 'OpenBridgeState') -> dict:
+        """Dashboard payload describing an OBP trunk (name, peer, and TGID→TS map)."""
+        cfg = state.config
+        return {
+            'connection_name': cfg.name,
+            'network_id': cfg.network_id,
+            'remote_address': cfg.target_address,
+            'remote_port': state.port,
+            'preserve_source_peer': cfg.preserve_source_peer,
+            'talkgroups': {str(int.from_bytes(t, 'big')): ts
+                           for t, ts in cfg.talkgroup_slots.items()},
+        }
 
     @staticmethod
     def _obp_key(passphrase) -> bytes:
@@ -3271,6 +3289,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             LOGGER.info(f'[OBP {obp_name}] RX stream start src={int.from_bytes(rf_src, "big")} '
                         f'tgid={int.from_bytes(dst_id, "big")} -> TS{local_ts} '
                         f'stream_id={stream_id.hex()} targets={len(targets)}')
+            self._emit_stream_start('openbridge', obp_name, local_ts, rf_src, dst_id,
+                                    stream_id, 'group')
         else:
             stream.last_seen = now
             stream.packet_count += 1
@@ -3284,6 +3304,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             stream.end_time = now
             LOGGER.info(f'[OBP {obp_name}] RX stream end stream_id={stream_id.hex()} '
                         f'packets={stream.packet_count}')
+            self._emit_stream_end('openbridge', obp_name, local_ts, stream, 'terminator')
 
     def _obp_build_egress(self, state: 'OpenBridgeState', dmrd53: bytes,
                           source_peer_id: bytes) -> bytes:
