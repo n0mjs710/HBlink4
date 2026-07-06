@@ -164,3 +164,175 @@ def classify_lc_carrier(frame_type: int, dtype_vseq: int) -> int:
     if 1 <= dtype_vseq <= 4:
         return LC_CARRIER_EMB
     return LC_CARRIER_NONE
+
+
+# Stream kind classification ------------------------------------------------
+#
+# Distinguish voice calls from data calls by the first-packet frame type.
+# The HBP `call_type` bit (byte 15 bit 6) only encodes group vs individual
+# DMR addressing — it does NOT tell us voice vs data. Both voice and data
+# calls can use either group or private addressing; the data-vs-voice split
+# lives in the DMR payload's frame_type / dtype_vseq instead.
+#
+# Voice calls start on VHEAD (frame_type=2, dtype_vseq=1) and carry voice
+# frames (frame_type 0 or 1) afterward. Data calls start on CSBK, a Data
+# Header, or a data PDU frame — all of which use frame_type=2 with a
+# dtype_vseq other than 1 (VHEAD) or 2 (VTERM).
+
+STREAM_KIND_VOICE = 'voice'
+STREAM_KIND_DATA = 'data'
+
+# dtype_vseq names for log output. Meaningful only when frame_type == 2.
+_DTYPE_NAMES: Dict[int, str] = {
+    0: 'PI-Header',
+    1: 'VHEAD',
+    2: 'VTERM',
+    3: 'CSBK',
+    4: 'MBC-Header',
+    5: 'MBC-Continuation',
+    6: 'Data-Header',
+    7: 'Rate-1/2 Data',
+    8: 'Rate-3/4 Data',
+    9: 'Idle',
+    10: 'Rate-1 Data',
+    11: 'Unified-Single-Block',
+    12: 'Unified-Data-Cont',
+}
+
+
+def classify_stream_kind(frame_type: int, dtype_vseq: int) -> str:
+    """Return STREAM_KIND_VOICE or STREAM_KIND_DATA for this packet.
+
+    Only meaningful on the first packet of a stream — that's where the
+    caller decides whether to track/forward as voice or log-and-drop as
+    data. Mid-stream packets follow the classification set at stream start.
+    """
+    if frame_type == 2:
+        if dtype_vseq == 1 or dtype_vseq == 2:
+            return STREAM_KIND_VOICE
+        return STREAM_KIND_DATA
+    # frame_type 0 (voice) or 1 (voice sync). Late-entry voice streams can
+    # arrive mid-superframe without a VHEAD — still voice.
+    return STREAM_KIND_VOICE
+
+
+def dtype_name(dtype_vseq: int) -> str:
+    """Human-readable name for a dtype_vseq value (data-sync frames)."""
+    return _DTYPE_NAMES.get(dtype_vseq, f'dtype-{dtype_vseq}')
+
+
+# Data header decode -------------------------------------------------------
+#
+# DMR Data Header and CSBK frames ride in the same BPTC(196,96) codeword
+# that voice VHEAD/VTERM use. dmr_utils3 already decodes the BPTC for us
+# but truncates to the 72-bit (9-byte) voice-LC payload, dropping the RS
+# parity tail. Data Header payloads are 96 bits (10 bytes data + 2 bytes
+# CRC-CCITT) so we need to pull the full 96 bits from the info buffer.
+#
+# The 24 bits beyond decode_full_lc's output live at specific post-BPTC
+# positions documented in dmr_utils3.bptc.decode_full_lc's source (the
+# commented-out "RS1293 FEC we don't need" block). Order matters.
+
+_DATA_HEADER_TAIL_POSITIONS: Tuple[int, ...] = (
+    68, 53, 174, 159, 144, 129, 114, 99, 84, 69, 54, 39,
+    24, 145, 130, 115, 100, 85, 70, 55, 40, 25, 10, 191,
+)
+
+
+# DPF (Data Packet Format) — byte 0 bits 5..0
+_DPF_NAMES: Dict[int, str] = {
+    0x0: 'UDT',
+    0x1: 'Response',
+    0x2: 'Unconfirmed-Data',
+    0x3: 'Confirmed-Data',
+    0xD: 'Short-Data-Defined',
+    0xE: 'Short-Data-Raw',
+    0xF: 'Proprietary',
+}
+
+# SAP (Service Access Point) — byte 1 bits 7..4
+_SAP_NAMES: Dict[int, str] = {
+    0x0: 'UDT',
+    0x2: 'TCP/IP-HC',
+    0x3: 'UDP/IP-HC',
+    0x4: 'IP-Packet-Data',
+    0x5: 'ARP',
+    0x9: 'Proprietary',     # MotoTRBO XCMP / LRRP / APRS ride here
+    0xA: 'Short-Data',
+}
+
+
+def dpf_name(dpf: int) -> str:
+    return _DPF_NAMES.get(dpf, f'DPF-{dpf:#x}')
+
+
+def sap_name(sap: int) -> str:
+    return _SAP_NAMES.get(sap, f'SAP-{sap:#x}')
+
+
+def _decode_bptc_96(payload: bytes) -> Optional[bytes]:
+    """Decode a 33-byte DMR data-sync payload → 12 bytes (96 bits).
+
+    Shares the BPTC(196,96) decode path with voice_head_term but returns
+    the full 96-bit payload instead of truncating to the 72-bit voice LC.
+    Returns None on decode failure.
+
+    The 12 bytes are laid out per the transport that rides in this frame:
+    for a Data Header, bytes 0-9 are the header and bytes 10-11 are the
+    CRC-CCITT. For a CSBK, bytes 0-9 are the CSBK payload and bytes 10-11
+    are the CRC.
+    """
+    if len(payload) < 33:
+        return None
+    try:
+        bits = bitarray(endian='big')
+        bits.frombytes(payload)
+        info = bits[0:98] + bits[166:264]
+        head_72 = bptc.decode_full_lc(info)
+    except Exception:
+        return None
+    if head_72 is None or len(head_72) < 72:
+        return None
+    tail = bitarray(endian='big')
+    for pos in _DATA_HEADER_TAIL_POSITIONS:
+        if pos >= len(info):
+            return None
+        tail.append(info[pos])
+    full = head_72 + tail
+    return full.tobytes()
+
+
+def decode_data_header(payload: bytes) -> Optional[Dict[str, object]]:
+    """Extract identifying fields from a DMR Data Header payload.
+
+    Args:
+        payload: 33-byte DMR payload from a frame_type=2 / dtype_vseq=6
+                 packet (Data Header).
+
+    Returns:
+        Dict with keys: group (bool), response_requested (bool),
+        dpf (int), dpf_name (str), sap (int), sap_name (str),
+        blocks_to_follow (int) — only meaningful for Confirmed/Unconfirmed
+        Data Headers (DPF 2 or 3), else 0 — and raw (12-byte payload).
+        Returns None on decode failure.
+
+    Does not verify the CRC-CCITT tail — callers that need confidence can
+    check raw[-2:] against their own CRC implementation. All decoded fields
+    come from bytes 0-1 which are the least CRC-sensitive part of the
+    header.
+    """
+    raw = _decode_bptc_96(payload)
+    if raw is None or len(raw) < 12:
+        return None
+    b0 = raw[0]
+    b1 = raw[1]
+    return {
+        'group': bool(b0 & 0x80),
+        'response_requested': bool(b0 & 0x40),
+        'dpf': b0 & 0x3F,
+        'dpf_name': dpf_name(b0 & 0x3F),
+        'sap': (b1 >> 4) & 0x0F,
+        'sap_name': sap_name((b1 >> 4) & 0x0F),
+        'blocks_to_follow': b1 & 0x0F,
+        'raw': raw,
+    }

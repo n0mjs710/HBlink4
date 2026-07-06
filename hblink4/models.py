@@ -43,7 +43,13 @@ class OutboundConnectionConfig:
     radio_id: int
     passphrase: str
     options: str = ""
-    
+    # Whether unit (private) calls traverse this outbound link. When True, we
+    # forward local unit calls out over this link (broadcast or cache-hit) and
+    # accept unit calls arriving on it. When False, unit calls are dropped at
+    # the link boundary. Defaults off because peers may not share our unit
+    # call model.
+    unit_calls_enabled: bool = False
+
     # Metadata fields with defaults
     callsign: str = ""
     rx_frequency: int = 0
@@ -130,6 +136,15 @@ class StreamState:
     is_assumed: bool = False  # True if this is an assumed stream (forwarded to target, not received from it)
     target_repeaters: Optional[set] = None  # Cached set of repeater_ids approved for forwarding
     routing_cached: bool = False  # True once routing has been calculated
+
+    # Unit-call metadata. `is_unit_call` is True when this stream carries a
+    # private (subscriber-to-subscriber) call; `dst_id` holds the target radio
+    # ID instead of a TGID in that case. `is_broadcast_unit_call` is True when
+    # we couldn't locate the target in the user cache and fanned the call out
+    # to every unit-enabled repeater — pruned to one-to-one once the target
+    # responds (Phase 3).
+    is_unit_call: bool = False
+    is_broadcast_unit_call: bool = False
 
     # DMR Link Control for outbound rewrites under translation.
     #
@@ -316,6 +331,11 @@ class RepeaterState:
     slot2_talkgroups: Optional[set] = None  # Set of 3-byte TGIDs
 
     rpto_received: bool = False  # True if repeater sent RPTO to override config TGs
+
+    # Whether this repeater participates in unit (private) call routing. Seeded
+    # from the matched pattern's `default_unit_calls` when the repeater connects,
+    # and overridden by a `UNIT=true|false` entry in RPTO if present.
+    unit_calls_enabled: bool = False
 
     # DMRD translation maps (inverses of each other; empty = no translation).
     # inbound_map:  local (slot,tgid) → network (slot,tgid) — applied when this

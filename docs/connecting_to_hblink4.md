@@ -226,6 +226,7 @@ For the full semantics (Link Control rewriting, collision handling, mid-stream R
 - Make sure your keepalive/ping interval is set correctly (5-30 seconds typical)
 - Try connecting from a different network to rule out ISP issues
 - Contact the server administrator - the server may be overloaded or having issues
+- Ensure you are not connecting multiple devices with the same Radio ID
 
 ## Getting Help
 

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hblink4.hblink import StreamState, RepeaterState, HBProtocol
 from hblink4.access_control import RepeaterMatcher, RepeaterConfig
 from time import time
+from types import SimpleNamespace
 import json
 
 
@@ -89,44 +90,137 @@ def test_routing_cache_fields():
     print("Routing Cache Fields tests passed!\n")
 
 
+class _StubProtocol(HBProtocol):
+    """Minimal HBProtocol for driving _handle_options without a real asyncio
+    event loop, transport, or matcher wiring. Inherits the real parsing/format
+    helpers so we test the actual production logic, not a re-implementation."""
+
+    def __init__(self, matcher, repeater):
+        # Skip HBProtocol.__init__ — only fields touched by _handle_options matter.
+        self._matcher = matcher
+        self._stub_repeater = repeater
+        self._events = SimpleNamespace(emit=lambda *a, **kw: None)
+
+    def _validate_repeater(self, repeater_id, addr):
+        return self._stub_repeater
+
+    def _send_packet(self, data, addr):
+        pass
+
+
+def _run_handle_options(options_str, *, trust, config_ts1, config_ts2):
+    """Drive a real HBProtocol._handle_options through a stub and return the
+    resolved (slot1, slot2) sets on the repeater."""
+    repeater_id_int = 312100
+    repeater_id = repeater_id_int.to_bytes(4, 'big')
+    matcher = RepeaterMatcher({
+        'blacklist': {'patterns': []},
+        'repeater_configurations': {
+            'patterns': [{
+                'name': 'test',
+                'description': '',
+                'match': {'ids': [repeater_id_int]},
+                'config': {
+                    'passphrase': 'test',
+                    'slot1_talkgroups': config_ts1,
+                    'slot2_talkgroups': config_ts2,
+                    'trust': trust,
+                },
+            }],
+        },
+    })
+    repeater = RepeaterState(
+        repeater_id=repeater_id,
+        ip='127.0.0.1',
+        port=54000,
+        callsign=b'TEST    ',
+        connection_state='connected',
+    )
+    # Mirror what authentication does: seed the repeater's TG sets from config.
+    repeater.slot1_talkgroups = (
+        {tg.to_bytes(3, 'big') for tg in config_ts1} if config_ts1 is not None else None
+    )
+    repeater.slot2_talkgroups = (
+        {tg.to_bytes(3, 'big') for tg in config_ts2} if config_ts2 is not None else None
+    )
+
+    proto = _StubProtocol(matcher, repeater)
+    # Wire-format payload: 300-byte UTF-8 buffer, NUL-padded.
+    payload = options_str.encode().ljust(300, b'\x00')[:300]
+    proto._handle_options(repeater_id, payload, ('127.0.0.1', 54000))
+
+    return repeater.slot1_talkgroups, repeater.slot2_talkgroups
+
+
+def _normalize(value):
+    """Make TG sets comparable: None stays None; sets become sorted int tuples."""
+    if value is None:
+        return None
+    if all(isinstance(x, bytes) for x in value):
+        return tuple(sorted(int.from_bytes(b, 'big') for b in value))
+    return tuple(sorted(value))
+
+
 def test_rpto_parsing():
-    """Test RPTO message parsing logic"""
+    """Drive _handle_options end-to-end and verify how it resolves TG sets."""
     print("=== Testing RPTO Parsing ===")
-    
-    # Test valid RPTO formats
-    test_cases = [
-        ("TS1=1,2,3;TS2=4,5,6", {1, 2, 3}, {4, 5, 6}),
-        ("TS1=1;TS2=4", {1}, {4}),
-        ("TS1=9", {9}, set()),
-        ("TS2=9", set(), {9}),
-        ("TS1=1,2,3", {1, 2, 3}, set()),
-        ("TS1=1,2,3;TS2=", {1, 2, 3}, set()),  # Empty TS2
-        ("", set(), set()),  # Empty string
+
+    # (options, trust, config_ts1, config_ts2, expected_ts1, expected_ts2, label)
+    # config_*: None = allow-all, list = whitelist
+    # expected_*: None = allow-all, list (possibly empty) = exact set
+    cases = [
+        ("TS1=1,2,3;TS2=4,5,6", False, [1, 2, 3, 4, 5, 6], [4, 5, 6, 7],
+         [1, 2, 3], [4, 5, 6],
+         "explicit lists on both slots"),
+
+        ("TS1=9", False, [9, 10], [3120],
+         [9], [3120],
+         "TS2 unspecified falls back to config"),
+
+        # Regression: prior to the fix, empty TS1= was indistinguishable from
+        # "TS1 not mentioned" and silently fell back to config.
+        ("TS1=;TS2=3120", False, [9, 10], [3120, 3121],
+         [], [3120],
+         "empty TS1= disables TS1 (regression for fall-back-to-config bug)"),
+
+        ("TS1=3120;TS2=", False, [3120], [3121],
+         [3120], [],
+         "empty TS2= disables TS2"),
+
+        ("TS1=*;TS2=3120", False, [1, 2, 3], [3120],
+         [1, 2, 3], [3120],
+         "TS1=* preserved as 'not specified' → falls back to config"),
+
+        ("TS1=;TS2=4", False, None, None,
+         [], [4],
+         "empty TS1= overrides allow-all config"),
+
+        ("TS2=4", False, None, None,
+         None, [4],
+         "TS1 unspecified preserves allow-all config"),
+
+        ("TS1=;TS2=4", True, [1, 2, 3], [4, 5],
+         [], [4],
+         "trusted: empty TS1= still disables TS1"),
+
+        ("TS1=999", True, [1, 2, 3], [4, 5],
+         [999], [4, 5],
+         "trusted: requested TS1 used as-is, TS2 falls back to config"),
+
+        ("", False, [1, 2], [3, 4],
+         [1, 2], [3, 4],
+         "empty options falls back to config on both slots"),
     ]
-    
-    for options_str, expected_ts1, expected_ts2 in test_cases:
-        # Parse options (mimicking _handle_options logic)
-        requested_ts1 = set()
-        requested_ts2 = set()
-        
-        for part in options_str.split(';'):
-            part = part.strip()
-            if not part or '=' not in part:
-                continue
-            key, value = part.split('=', 1)
-            key = key.strip().upper()
-            
-            if key == 'TS1' and value:
-                requested_ts1 = {int(tg.strip()) for tg in value.split(',') 
-                                 if tg.strip().isdigit()}
-            elif key == 'TS2' and value:
-                requested_ts2 = {int(tg.strip()) for tg in value.split(',') 
-                                 if tg.strip().isdigit()}
-        
-        assert requested_ts1 == expected_ts1, f"TS1 parsing failed for '{options_str}'"
-        assert requested_ts2 == expected_ts2, f"TS2 parsing failed for '{options_str}'"
-        print(f"✓ Parsed '{options_str}' → TS1={sorted(requested_ts1) if requested_ts1 else '[]'}, TS2={sorted(requested_ts2) if requested_ts2 else '[]'}")
-    
+
+    for opts, trust, c1, c2, e1, e2, label in cases:
+        f1, f2 = _run_handle_options(opts, trust=trust, config_ts1=c1, config_ts2=c2)
+        got1, got2 = _normalize(f1), _normalize(f2)
+        want1, want2 = _normalize(e1), _normalize(e2)
+        assert got1 == want1, f"FAIL [{label}]: TS1 expected {want1}, got {got1}"
+        assert got2 == want2, f"FAIL [{label}]: TS2 expected {want2}, got {got2}"
+        print(f"✓ {label}")
+        print(f"  '{opts}' (trust={trust}) → TS1={got1}, TS2={got2}")
+
     print("RPTO Parsing tests passed!\n")
 
 

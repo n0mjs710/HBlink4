@@ -66,6 +66,9 @@ class RepeaterConfig:
     slot1_talkgroups: Optional[List[int]] = None
     slot2_talkgroups: Optional[List[int]] = None
     trust: bool = False  # If True, use requested TGs as-is (config = defaults only)
+    # Per-pattern default for unit (private) call participation. Repeaters can
+    # override via UNIT=true|false in RPTO. Absent UNIT in RPTO = use this.
+    default_unit_calls: bool = False
 
 @dataclass
 class PatternMatch:

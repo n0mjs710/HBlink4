@@ -1,11 +1,13 @@
 # HBlink4
 
-HBlink4 is a DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. HBlink4 operates as an endpoint network server with granular per-repeater control and does not implement transit call-routing between DMR networks.
+HBlink4 is a DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. HBlink4 operates as an endpoint network server with granular per-repeater control; transit call-routing between DMR networks is limited.
 
 There has been some chatter coming my way about what is "official" with respect to HBlink. I can't stop others from claiming they are the "official" source, or using account names that make them look officical. All I can say is that I'm the author, and I'm the copyright holder. What is the status?
  - **HBlink (DEPRECIATED):** Original Python2 based system, interacted with DMRlink for IPSC/HBP translations. Worked on a "system" level and supported internetworking via a "conference bridge" paradigm. Highly configurable for a time before DMRgateway.
- - **HBlink3 (DEPRECIATED:** Rewrite in Python3, mostly the same code base updated. Dropped direct support for IPSC/HBP translations.
- - **HBlink4 (ACTIVE DEEVLOPMENT):** Ground up re-write for modern times. Repeater, not system based. Supports full dynamic TGID subscription and TS/TGID translation based on "Options" configuration send by MMDVMHost or DMRGatway. Includes integrated dashboard application as part of the package.
+ - **HBlink3 (ACTIVE DEVELOPMENT):** Rewrite in Python3, mostly the same code base updated. Dropped direct support for IPSC/HBP translations.
+ - **HBlink4 (ACTIVE DEVLOPMENT):** Ground up re-write for modern times. Repeater, not system based. Supports full dynamic TGID subscription and TS/TGID translation based on "Options" configuration send by MMDVMHost or DMRGatway. Includes integrated dashboard application as part of the package.
+
+For those who need Motorola IPSC connectivity, **see my companion project ipsc2hbp to convert from Motorola's proprietary network protocol to MMDVM's**.
 
 ## Architecture
 
@@ -31,7 +33,7 @@ HBlink4 focuses on being an efficient **endpoint network server** with the follo
 - **Two-tier stream end detection (immediate terminator + timeout fallback)**
 - **Per-repeater DMRD translation** - slot/TGID remap and outbound rf_src override declared via RPTO (see [DMRD Translation](docs/dmrd_translation.md))
 - **OpenBridge (OBP) trunks** - stream-multiplexed, HMAC-authenticated server-to-server trunking to/from a core (e.g. HBlink3); many talkgroups over one socket (see [OpenBridge Trunks](docs/openbridge.md))
-- **User routing cache for efficient private call routing**
+- **Unit (private) call routing** - User cache with broadcast fallback, subscriber-pair hang time, cross-slot support, and optional forwarding over outbound server links (implicit reverse-path tree when peers are HBlink4)
 - Pattern-based repeater configuration and blacklisting
 - Per-slot transmission management
 
@@ -99,19 +101,33 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[Protocol Specification](docs/protocol.md)** - HomeBrew DMR protocol details
 - **[Integration Guide](docs/integration.md)** - Using HBlink4 as a module
 - **[Logging](docs/logging.md)** - Log management and rotation
-- **[Roadmap / TODO](docs/TODO.md)** - Planned work (unit calls, performance monitoring, config UI)
+- **[Roadmap / TODO](docs/TODO.md)** - Planned work (performance monitoring, multi-hop outbound, config UI)
 - **[OpenBridge Analysis](docs/OPENBRIDGE_ANALYSIS.md)** - Background feasibility analysis (OpenBridge is now implemented — see [OpenBridge Trunks](docs/openbridge.md))
-- **[Release Notes v4.7.0](docs/RELEASE_NOTES_v4.7.0.md)** - Current release — asyncio, DMRA, outbound connections, DMRD translation
+- **[Release Notes v4.8.0](docs/RELEASE_NOTES_v4.8.0.md)** - Current release — unit (private) call routing, DMR data-call classification, RPTO empty-slot fix
+- **[Release Notes v4.7.0](docs/RELEASE_NOTES_v4.7.0.md)** - asyncio, DMRA, outbound connections, DMRD translation
 
 
 
-## Support
+## No Support Is Provided
 
-No end-user support is provided. The development team for this software is exactly 1 person, with limited resources and no ability to duplicate environments for testing. Flagging genuine code issues is apprecicated, but please to not open issues because it doesn't work the way you'd like it to. There are no feature requests.
+This is not commercial software. It is provided free of charge. The author(s)
+received no compensation for creating and maintaining it. Countless hours over
+many years have gone into the this. If you have problems, the author will try
+to help if possible, please have no expectations for support. There is no online
+group, such as DVSwitch or groups.io that is an "official" outlet for information.
+The only definitive source of information is me. Beware of others claiming to
+be authoritative. User-based mutual support is great, and I'm all for it. But
+please understand, this is what they are, and I have not sanctioned anyone to be
+the "home" of my software packages.
 
-## Contributing
+### GitHub "Issues"
 
-Contributions are welcome! Please feel free to submit a Pull Request. Do not submit a Pull Request to the main branch for added features without consultation first. Added features may collide with other mainline features under development, and additions that are inconsistent with the goals of the project may not be accepted. If you want to add a feature, it's best to discuss it first. Use alternative branches named for the feature being added.
+Do not use GitHub issues for support. Genuine bugs are accepted as issues. Before 
+opening one, make sure that it is a true problem with the software and not merely
+a misconfiguration, or contention around a feature that was not supported. Isssues
+should never be used to ask for or recommend features. Issues that do not include
+complete details, relevent tracebacks, error messages, configuration snippets, 
+operatrional conditions surrounding the event, etc. will be closed without action.
 
 ## License
 

@@ -529,35 +529,40 @@ DEBUG - Removed repeater 312100 from route-cache of stream on repeater 312101 sl
 INFO - RX stream started on repeater 312100 slot 1: src=312567, dst=3121, stream_id=abc123, targets=3
 ```
 
-## Private Call Routing
+## Unit (Private) Call Routing
 
-HBlink4 uses a user cache to enable efficient private call routing.
+HBlink4 routes unit (subscriber-to-subscriber) calls using a user cache with broadcast fallback. See [configuration.md § Unit Call Forwarding](configuration.md#unit-private-call-forwarding) for the config surface; this section describes runtime behavior.
 
 **User Cache:**
-- Tracks last known repeater for each DMR ID
-- Updated on every transmission (stream start)
-- Timeout: 600 seconds (configurable, minimum 60)
-- Cleanup: Every 60 seconds (removes expired entries)
+- Tracks last known source (local repeater *or* outbound connection) for each DMR ID
+- Updated on every stream start — group and unit calls both populate it
+- Timeout: 600 seconds default, minimum 60 (see `user_cache.timeout`)
+- Cleanup: every 60 seconds, plus lazy expiration on lookup
 
-**Private Call Process:**
-1. Extract `dst_id` from packet
-2. Check `call_type` bit: 0 = private, 1 = group
-3. If private call:
-   - Look up `dst_id` in user cache
-   - If found: Route to that specific repeater only
-   - If not found: Drop packet (user not seen recently)
-4. If group call:
-   - Use normal talkgroup routing (all repeaters with this TG)
+**Eligibility gate (source side):**
+- Local repeater must have `unit_calls_enabled` (pattern default `default_unit_calls` + optional `UNIT=true|false` RPTO override for trusted repeaters)
+- Outbound-sourced unit calls require `unit_calls_enabled: true` on the outbound config
 
-**Configuration:**
-```json
-{
-    "global": {
-        "user_cache": {
-            "timeout": 600  // Seconds (minimum 60)
-        }
-    }
-}
+**Routing (`_handle_unit_stream_start` / `_handle_outbound_unit_call`):**
+1. Extract `rf_src` (source radio) and `dst_id` (target radio — *not* a TGID) from the packet; `call_type` bit is 1 for unit calls (0 is group).
+2. Look up `dst_id` via `UserCache.get_source_for_user(dst_id)`:
+   - **Cache hit, local target** → route to that single repeater (on the source's originating slot)
+   - **Cache hit, outbound target** → route to that single outbound (only for locally-sourced calls — outbound-to-outbound is blocked to prevent loops)
+   - **Cache miss or ineligible target** → broadcast to every unit-enabled local repeater plus every unit-enabled outbound (again, locally-sourced calls only — outbound-sourced broadcasts stay local)
+3. Update the user cache with the source radio's location (local `repeater_id` or `outbound_name`).
+4. Forward. Subsequent calls in either direction route one-to-one once both ends have populated the cache, so only the very first unit call between two users whose cache entries have both lapsed pays the broadcast cost.
+
+**Slot handling — ships in the night:** unit calls always forward on the *source's* originating slot. The target's last-heard slot (tracked in the cache for informational display) is not a routing constraint, because DMR radios can monitor both TS1 and TS2 simultaneously.
+
+**Hang time:** keyed on the `(rf_src, dst_id)` subscriber pair rather than a talkgroup. Either direction of the same conversation (A→B or B→A) passes through during hang time; the same source calling a new target also passes through. Anything else is a hijack and is denied.
+
+**Anti-loop for outbound links:** unit calls arriving on an outbound connection are never re-forwarded to any outbound. Group calls have the same restriction. For star/tree topologies this is correct; multi-hop chain/mesh topologies would require stream-id-based loop detection (tracked in [TODO.md](TODO.md)).
+
+**Log lines are normalized with group calls:**
+```
+Unit RX stream started on repeater 312017 TS/RID: 1/3120102 src=3120101 targets=15 stream_id=a5e9442f [broadcast]
+Unit RX stream ended   on repeater 312017 TS/RID: 1/3120102 src=3120101 duration=3.06s packets=50 reason=terminator - entering hang time (5.0s)
+Group RX stream started on repeater 312017 TS/TGID: 1/3120 src=3120101 targets=5 stream_id=... [FAST TG SWITCH]
 ```
 
 ## Performance Characteristics

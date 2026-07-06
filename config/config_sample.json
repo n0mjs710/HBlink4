@@ -98,7 +98,8 @@
                     "passphrase": "core-network-key",
                     "trust": true,
                     "slot1_talkgroups": [8, 9],
-                    "slot2_talkgroups": [3120, 3121, 3122]
+                    "slot2_talkgroups": [3120, 3121, 3122],
+                    "default_unit_calls": true
                 }
             },
             {
@@ -154,7 +155,8 @@
             "url": "https://hblink.example.com",
             "software_id": "HBlink4",
             "package_id": "HBlink4 v2.0",
-            "options": "TS1=1,2,3,8,9;TS2=3100,3120,3121,9998"
+            "options": "TS1=1,2,3,8,9;TS2=3100,3120,3121,9998",
+            "unit_calls_enabled": true
         },
         {
             "enabled": false,

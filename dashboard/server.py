@@ -737,6 +737,8 @@ class EventReceiver:
                         'source_name': source_name,
                         'slot': data['slot'],
                         'talkgroup': data.get('dst_id', 0),
+                        'call_type': data.get('call_type', 'group'),  # "group" or "private" (addressing)
+                        'is_data': data.get('is_data', False),  # voice vs data (payload kind)
                         'last_heard': event['timestamp'],
                         'active': True  # Mark as currently active
                     }

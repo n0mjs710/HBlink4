@@ -61,6 +61,8 @@ The `global` section contains server-wide settings that control the basic operat
 
 **User Cache**: The user cache tracks the last known repeater for each DMR ID to enable efficient private call routing. Entries are automatically cleaned up every 60 seconds. The timeout must be at least 60 seconds.
 
+> ⚠️ **Don't set `user_cache.timeout` shorter than your longest expected transmission.** A cache entry's `last_heard` is refreshed only at stream start (PTT), not on every voice packet, so a transmission that outlasts the timeout will leave the talker's entry expired by the time they unkey — even though they were clearly active the whole time. DMR transmissions can run 2–3 minutes, so keep the timeout well above that. The 600-second default comfortably covers normal operation; the 60-second minimum is permitted but only appropriate for testing or very short-TX environments. Setting it too low degrades unit-call routing by forcing unnecessary broadcasts immediately after long transmissions.
+
 ### Dual-Stack IPv6 Support
 
 HBlink4 is **dual-stack native** and can listen on both IPv4 and IPv6 simultaneously:
@@ -520,6 +522,7 @@ Multiple match types in a single pattern are combined with OR logic (any match t
 | `slot1_talkgroups` | array | List of allowed talkgroup IDs for timeslot 1 (bidirectional) |
 | `slot2_talkgroups` | array | List of allowed talkgroup IDs for timeslot 2 (bidirectional) |
 | `trust` | boolean | If true, repeater can use any TG (config TGs become defaults) |
+| `default_unit_calls` | boolean | Default unit (private) call participation for repeaters matching this pattern. Repeaters can override via `UNIT=true\|false` in RPTO. (default: `false`) |
 
 **Symmetric Routing:**
 The same talkgroup lists control BOTH directions:
@@ -620,9 +623,10 @@ See **[dmrd_translation.md](dmrd_translation.md)** for full semantics, use cases
 **Extended RPTO grammar:**
 
 ```
-TS1 = entry[,entry...]     ; subscription (and optional remap) on network TS1
-TS2 = entry[,entry...]     ; subscription (and optional remap) on network TS2
-SRC = radio_id             ; outbound rf_src override (group voice only)
+TS1  = entry[,entry...]    ; subscription (and optional remap) on network TS1
+TS2  = entry[,entry...]    ; subscription (and optional remap) on network TS2
+SRC  = radio_id            ; outbound rf_src override (group voice only)
+UNIT = true|false          ; opt in/out of unit (private) call routing
 
 entry  = net_tgid_spec [ : local_slot [ : local_tgid ] ]
 net_tgid_spec = N         ; exact TGID (specificity 3)
@@ -630,6 +634,8 @@ net_tgid_spec = N         ; exact TGID (specificity 3)
 local_slot = 1 | 2 | *    ; * = preserve the network slot
 local_tgid = N | *        ; * = preserve the matched network TGID
 ```
+
+**`UNIT=`** overrides the pattern's `default_unit_calls` for this repeater. Accepts `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` (case-insensitive). **Honored only for trusted repeaters (`trust: true`)** — untrusted repeaters silently stay on the pattern default with a warning logged. If absent from RPTO, the pattern default is used.
 
 Rules:
 
@@ -722,6 +728,17 @@ These fields are sent to the remote server during the RPTC (configuration) hands
 | `url` | string | `""` | Website URL |
 | `software_id` | string | `"HBlink4"` | Software identifier |
 | `package_id` | string | `"HBlink4 v2.0"` | Package version |
+| `unit_calls_enabled` | boolean | `false` | Whether unit (private) calls traverse this outbound link. When `true`, local unit calls fan out over this link and unit calls arriving on it are forwarded to local repeaters. When `false`, unit calls are dropped at the link boundary. Set to `true` only for peers that participate in unit-call routing (e.g. other HBlink4 servers). |
+
+### Unit (Private) Call Forwarding
+
+When `unit_calls_enabled: true`, this outbound participates in unit-call routing:
+
+- **Local → outbound**: if the target subscriber isn't in our user cache (or its cache entry points to a different location), a local unit call is broadcast to every unit-enabled outbound and local repeater. Once we've heard the target (over this link or another), subsequent calls route one-to-one to wherever the cache says it was last seen.
+- **Outbound → local**: unit calls arriving over the link are forwarded to local repeaters using the same cache/broadcast logic, and the source subscriber is cached as reachable via this outbound. A subsequent local call to that subscriber will route back over the same link — an implicit reverse-path forwarding tree when both peers run HBlink4.
+- **Anti-loop**: unit calls arriving on an outbound are never re-forwarded to any outbound (including a different one). Each peer owns fanout on its own side of the link.
+
+> ℹ️ **No cross-outbound forwarding today (either call type).** Group calls behave the same way — traffic arriving on an outbound link is delivered to local repeaters only, never to another outbound. For star/tree topologies (the common case) this is correct and loop-safe. For chain or mesh topologies involving three or more HBlink4 servers, traffic will not transit through a middle peer. A future enhancement using stream-ID-based loop detection is tracked in [TODO.md](TODO.md).
 
 ### Talkgroup Filtering (OPTIONS)
 

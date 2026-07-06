@@ -500,6 +500,11 @@
             background: #6366f1;
             color: white;
         }
+
+        .slot-status-badge.data {
+            background: #fbbf24;   /* gold */
+            color: #1e293b;
+        }
         
         .repeater-header-warning {
             font-size: 16px;
@@ -811,7 +816,7 @@
                             <th style="padding: 8px; text-align: left;">Callsign/Alias</th>
                             <th style="padding: 8px; text-align: left;">Source</th>
                             <th style="padding: 8px; text-align: center;">Slot</th>
-                            <th style="padding: 8px; text-align: left;">Talkgroup</th>
+                            <th style="padding: 8px; text-align: left;">Destination</th>
                             <th style="padding: 8px; text-align: left;">Last Heard</th>
                         </tr>
                     </thead>
@@ -883,6 +888,45 @@
     <script>
         let ws = null;
         let reconnectTimeout = null;
+
+        // Data-call persistence-of-vision (gold DATA pill).
+        // A data call is typically one DMR burst (~60ms) that ends via
+        // fast_terminator ~200ms later — far too brief for the eye to catch.
+        // We hold the DATA pill on the slot for DATA_PERSIST_MS after the
+        // last burst so users can actually see it. Keyed per slot so
+        // back-to-back bursts just refresh the timer.
+        const DATA_PERSIST_MS = 3000;
+        const dataPersistTimers = new Map();  // key: slot identity, value: timeout id
+
+        function dataPersistKey(connectionType, connectionId, slot) {
+            return `${connectionType}:${connectionId}:${slot}`;
+        }
+
+        function clearDataPersist(key) {
+            const tid = dataPersistTimers.get(key);
+            if (tid !== undefined) {
+                clearTimeout(tid);
+                dataPersistTimers.delete(key);
+            }
+        }
+
+        function scheduleDataPersistDrop(key, connectionType, findPredicate) {
+            clearDataPersist(key);
+            const tid = setTimeout(() => {
+                dataPersistTimers.delete(key);
+                // Drop the data stream from local state and re-render.
+                state.streams = state.streams.filter(s => !findPredicate(s));
+                if (connectionType === 'outbound') {
+                    const outboundList = Array.isArray(state.outbounds)
+                        ? state.outbounds : Object.values(state.outbounds || {});
+                    updateOutbounds(outboundList);
+                } else if (state.repeaters) {
+                    updateRepeaters(state.repeaters);
+                }
+            }, DATA_PERSIST_MS);
+            dataPersistTimers.set(key, tid);
+        }
+
         let state = {
             repeaters: [],
             repeater_details: {},  // Detailed info for each repeater
@@ -1589,7 +1633,7 @@
             // Determine status and direction
             let status = 'idle';
             let statusLabel = 'IDLE';
-            
+
             if (stream) {
                 // Check if this is a TX (forwarded) stream or RX (received) stream
                 if (stream.is_assumed) {
@@ -1599,23 +1643,36 @@
                     status = 'receiving';
                     statusLabel = '⬇️ RX';
                 }
-                
+
                 if (stream.status === 'hang_time') {
                     status = 'hang_time';
                     statusLabel = 'HANG';
                 }
+
+                // Data calls override the RX/HANG pill with a gold DATA pill.
+                // Server stream state ends ~200ms after a single burst; the
+                // 3s persistence-of-vision hold is enforced client-side via
+                // DATA_PERSIST_MS in the stream_start handler.
+                if (stream.is_data) {
+                    status = 'data';
+                    statusLabel = 'DATA';
+                }
             }
-            
+
+            // Compose a human Type label from the two wire dimensions:
+            //   call_type  ('group' | 'private')      — addressing
+            //   is_data    (bool, payload kind)       — voice vs data
+            function formatCallType(s) {
+                if (!s) return '—';
+                const addr = s.call_type === 'private' ? 'Private' : 'Group';
+                const kind = s.is_data ? 'Data' : 'Voice';
+                return `${addr} ${kind}`;
+            }
+
             // Special rendering for hang time: show only TG and call type
             if (status === 'hang_time') {
-                const callTypeMap = {
-                    'group': 'Group Voice',
-                    'private': 'Private Voice',
-                    'data': 'Data',
-                    'unknown': 'Unknown'
-                };
                 const destination = stream?.dst_id || '—';
-                const callType = stream ? (callTypeMap[stream.call_type] || stream.call_type || 'Unknown') : '—';
+                const callType = formatCallType(stream);
                 
                 return `
                     <div class="slot ${status}">
@@ -1647,18 +1704,10 @@
                 `;
             }
             
-            // Format call type
-            const callTypeMap = {
-                'group': 'Group Voice',
-                'private': 'Private Voice',
-                'data': 'Data',
-                'unknown': 'Unknown'
-            };
-            
             // Prepare field values
             const source = stream?.src_id || '—';
             const destination = stream?.dst_id || '—';
-            const callType = stream ? (callTypeMap[stream.call_type] || stream.call_type || 'Unknown') : '—';
+            const callType = formatCallType(stream);
             
             // Calculate real-time duration for active streams
             let duration = '—';
@@ -2059,14 +2108,30 @@
                     ? ` <span title="Translated: RF TS${xlate[0]}/TG${xlate[1]} ↔ Net TS${xlate[2]}/TG${xlate[3]}">🔀</span>`
                     : '';
                 const source = (user.source_name || user.repeater_id || '-') + srcXlateEmoji;
-                
+
+                // Destination rendering composes two dimensions so both are
+                // visible at a glance:
+                //   addressing:  👥 group  /  👤 unit (private)
+                //   payload:     🎤 voice  /  📟 data (not forwarded)
+                // 📟 (pager) carries the strongest semantic tie to what DMR
+                // data actually is — short text/GPS bursts over radio.
+                const isUnit = user.call_type === 'private';
+                const isData = !!user.is_data;
+                const addrEmoji = isUnit
+                    ? '<span title="Unit (private) call">👤</span>'
+                    : '<span title="Group call">👥</span>';
+                const payloadEmoji = isData
+                    ? '<span title="Data call (not forwarded)">📟</span>'
+                    : '<span title="Voice call">🎤</span>';
+                const destination = `${addrEmoji}${payloadEmoji} ${user.talkgroup}`;
+
                 return `
                     <tr style="border-bottom: 1px solid #374151;">
                         <td style="padding: 8px;">${user.radio_id}</td>
                         <td style="padding: 8px; font-weight: 500; color: ${user.callsign ? 'white' : '#6b7280'};">${callsign}</td>
                         <td style="padding: 8px;">${source}</td>
                         <td style="padding: 8px; text-align: center;">${user.slot}</td>
-                        <td style="padding: 8px;">${user.talkgroup}</td>
+                        <td style="padding: 8px;">${destination}</td>
                         <td style="padding: 8px; color: ${user.active ? '' : '#9ca3af'};">${timeDisplay}</td>
                     </tr>
                 `;
@@ -2090,19 +2155,19 @@
                     // Handle both repeater and outbound streams
                     const connection_type = data.connection_type || 'repeater';
                     let startStreamIndex;
-                    
+
                     if (connection_type === 'outbound') {
-                        startStreamIndex = state.streams.findIndex(s => 
+                        startStreamIndex = state.streams.findIndex(s =>
                             s.connection_type === 'outbound' &&
-                            s.connection_name === data.connection_name && 
+                            s.connection_name === data.connection_name &&
                             s.slot === data.slot
                         );
                     } else {
-                        startStreamIndex = state.streams.findIndex(s => 
+                        startStreamIndex = state.streams.findIndex(s =>
                             s.repeater_id == data.repeater_id && s.slot == data.slot
                         );
                     }
-                    
+
                     const newStream = {
                         ...data,
                         status: 'active',
@@ -2113,6 +2178,30 @@
                     } else {
                         state.streams.push(newStream);
                     }
+
+                    // Data calls: start/refresh the 3s persistence timer so
+                    // the gold DATA pill stays visible long enough to read.
+                    // Voice calls: clear any lingering data timer for this
+                    // slot (a real voice transmission supersedes).
+                    {
+                        const persistConnId = connection_type === 'outbound'
+                            ? data.connection_name : data.repeater_id;
+                        const persistKey = dataPersistKey(connection_type, persistConnId, data.slot);
+                        if (data.is_data) {
+                            scheduleDataPersistDrop(persistKey, connection_type, (s) => {
+                                if (connection_type === 'outbound') {
+                                    return s.connection_type === 'outbound'
+                                        && s.connection_name === data.connection_name
+                                        && Number(s.slot) === Number(data.slot);
+                                }
+                                return s.repeater_id == data.repeater_id
+                                    && Number(s.slot) === Number(data.slot);
+                            });
+                        } else {
+                            clearDataPersist(persistKey);
+                        }
+                    }
+
                     // Immediately update the display
                     if (connection_type === 'outbound') {
                         updateOutbounds(state.outbounds);
@@ -2137,13 +2226,20 @@
                     });
                     if (endStreamIndex >= 0) {
                         const existingStream = state.streams[endStreamIndex];
-                        existingStream.status = 'hang_time';
-                        existingStream.hang_time = data.hang_time !== undefined ? data.hang_time : 0;
-                        const packetCount = (data.packet_count !== undefined) ? data.packet_count :
-                            (data.packets !== undefined ? data.packets : (existingStream.packets !== undefined ? existingStream.packets : 0));
-                        existingStream.packets = packetCount;
-                        existingStream.duration = data.duration;
-                        existingStream.end_reason = data.end_reason || data.reason || existingStream.end_reason || 'unknown';
+                        // Data streams: do not transition to hang_time. The
+                        // persistence timer controls DATA pill lifetime; a
+                        // mid-persistence hang_time flip would just cause a
+                        // hang-time rendering to flash before the timer drops
+                        // the stream. Let the timer handle removal.
+                        if (!existingStream.is_data) {
+                            existingStream.status = 'hang_time';
+                            existingStream.hang_time = data.hang_time !== undefined ? data.hang_time : 0;
+                            const packetCount = (data.packet_count !== undefined) ? data.packet_count :
+                                (data.packets !== undefined ? data.packets : (existingStream.packets !== undefined ? existingStream.packets : 0));
+                            existingStream.packets = packetCount;
+                            existingStream.duration = data.duration;
+                            existingStream.end_reason = data.end_reason || data.reason || existingStream.end_reason || 'unknown';
+                        }
                     }
                     // Immediately update the display
                     if (endConnectionType === 'outbound') {

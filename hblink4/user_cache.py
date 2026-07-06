@@ -23,7 +23,15 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class UserEntry:
-    """Cache entry for a heard user"""
+    """Cache entry for a heard user.
+
+    Source location is either a local repeater (non-zero `repeater_id`,
+    `outbound_name` None) or an outbound server link (`outbound_name` set,
+    `repeater_id` is the remote-side repeater id that originated the stream
+    if known, 0 otherwise). Routing consumers should inspect `outbound_name`
+    first: if set, forward via that outbound; otherwise forward to the local
+    `repeater_id`.
+    """
     radio_id: int
     repeater_id: int
     callsign: str
@@ -31,7 +39,8 @@ class UserEntry:
     talkgroup: int
     last_heard: float = field(default_factory=time)
     talker_alias: Optional[str] = None
-    
+    outbound_name: Optional[str] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization"""
         return {
@@ -41,7 +50,8 @@ class UserEntry:
             'slot': self.slot,
             'talkgroup': self.talkgroup,
             'last_heard': self.last_heard,
-            'talker_alias': self.talker_alias
+            'talker_alias': self.talker_alias,
+            'outbound_name': self.outbound_name,
         }
 
 
@@ -68,32 +78,39 @@ class UserCache:
         self._timeout = timeout_seconds
         LOGGER.info(f'User cache initialized with {timeout_seconds}s timeout')
     
-    def update(self, radio_id: int, repeater_id: int, callsign: str, 
-               slot: int, talkgroup: int, talker_alias: Optional[str] = None) -> None:
+    def update(self, radio_id: int, repeater_id: int, callsign: str,
+               slot: int, talkgroup: int, talker_alias: Optional[str] = None,
+               outbound_name: Optional[str] = None) -> None:
         """
         Update cache with user activity.
-        
+
         Args:
             radio_id: Source radio ID (user)
-            repeater_id: Repeater the user was heard on
+            repeater_id: Local repeater the user was heard on (0 when heard via outbound)
             callsign: User's callsign
             slot: Timeslot (1 or 2)
             talkgroup: Talkgroup/destination ID
             talker_alias: Optional decoded talker alias
+            outbound_name: Outbound connection name when the user was heard
+                via an outbound server link rather than a local repeater.
+                When set, routing decisions will forward unit calls via that
+                outbound instead of to any local repeater.
         """
         now = time()
-        
+        source_desc = f'outbound "{outbound_name}"' if outbound_name else f'repeater {repeater_id}'
+
         # Update or create entry
         if radio_id in self._cache:
             entry = self._cache[radio_id]
             entry.repeater_id = repeater_id
+            entry.outbound_name = outbound_name
             entry.callsign = callsign
             entry.slot = slot
             entry.talkgroup = talkgroup
             entry.last_heard = now
             if talker_alias:
                 entry.talker_alias = talker_alias
-            LOGGER.debug(f'Updated cache: user {radio_id} ({callsign}) on repeater {repeater_id} slot {slot} TG {talkgroup}')
+            LOGGER.debug(f'Updated cache: user {radio_id} ({callsign}) on {source_desc} slot {slot} TG {talkgroup}')
         else:
             self._cache[radio_id] = UserEntry(
                 radio_id=radio_id,
@@ -102,9 +119,10 @@ class UserCache:
                 slot=slot,
                 talkgroup=talkgroup,
                 last_heard=now,
-                talker_alias=talker_alias
+                talker_alias=talker_alias,
+                outbound_name=outbound_name,
             )
-            LOGGER.debug(f'Added to cache: user {radio_id} ({callsign}) on repeater {repeater_id} slot {slot} TG {talkgroup}')
+            LOGGER.debug(f'Added to cache: user {radio_id} ({callsign}) on {source_desc} slot {slot} TG {talkgroup}')
     
     def lookup(self, radio_id: int) -> Optional[UserEntry]:
         """
@@ -131,18 +149,39 @@ class UserCache:
     
     def get_repeater_for_user(self, radio_id: int) -> Optional[int]:
         """
-        Get the repeater ID where a user was last heard.
-        
-        This is the primary function for private call routing optimization.
-        
+        Get the local repeater ID where a user was last heard.
+
+        Returns None if the user was last heard via an outbound connection —
+        callers that want to handle both cases should use `get_source_for_user`
+        instead.
+
         Args:
             radio_id: Target radio ID for private call
-            
+
         Returns:
-            Repeater ID if user found and not expired, None otherwise
+            Local repeater ID if user found, not expired, and was heard on a
+            local repeater. None otherwise.
         """
         entry = self.lookup(radio_id)
-        return entry.repeater_id if entry else None
+        if entry is None or entry.outbound_name is not None:
+            return None
+        return entry.repeater_id
+
+    def get_source_for_user(self, radio_id: int):
+        """
+        Get the source location where a user was last heard.
+
+        Returns one of:
+          - ('local', repeater_id: int)  — user last heard on a local repeater
+          - ('outbound', name: str)       — user last heard via an outbound link
+          - None                          — user not cached or cache expired
+        """
+        entry = self.lookup(radio_id)
+        if entry is None:
+            return None
+        if entry.outbound_name is not None:
+            return ('outbound', entry.outbound_name)
+        return ('local', entry.repeater_id)
     
     def cleanup(self) -> int:
         """

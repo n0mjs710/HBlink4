@@ -11,7 +11,7 @@ License: GNU GPLv3
 from .hblink import main, HBProtocol, RepeaterState
 from .constants import *
 
-__version__ = '4.7.0'
+__version__ = '4.8.0'
 __author__ = 'Cort Buffington, N0MJS'
 __license__ = 'GNU GPLv3'
 
