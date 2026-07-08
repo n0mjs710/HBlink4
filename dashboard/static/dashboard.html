@@ -285,17 +285,19 @@
         
         .stats-bar {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            /* Fixed-width tracks: all pills equal, sized to fit the longest
+               label ("Retransmitted Calls Today"), no stretching to fill. */
+            grid-template-columns: repeat(auto-fit, 170px);
             gap: 10px;
             margin-bottom: 15px;
         }
-        
+
         .stat-card {
             background: #1e293b;
             padding: 8px 12px;
             border-radius: 6px;
-        }        .stat-label { color: #94a3b8; font-size: 10px; margin-bottom: 5px; }
-        .stat-value { color: #e2e8f0; font-size: 22px; font-weight: 600; }
+        }        .stat-label { color: #94a3b8; font-size: 10px; margin-bottom: 5px; white-space: nowrap; }
+        .stat-value { color: #e2e8f0; font-size: 20px; font-weight: 600; }
         
         .card { 
             background: #1e293b; 
@@ -723,7 +725,7 @@
             }
             
             .stat-value {
-                font-size: 18px;
+                font-size: 16px;
             }
             
             /* Even more compact slot display - 5 columns */
