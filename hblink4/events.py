@@ -16,6 +16,23 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+# Tune TCP keepalive so a silently-severed connection (NIC/interface flap, DHCP
+# renew, firewall/conntrack eviction, router reboot -- anything that drops the
+# flow without a clean FIN/RST) is detected by the OS in ~2 minutes instead of
+# the ~2-hour default. SO_KEEPALIVE alone uses the default timers, which is why
+# an idle emitter could sit on a dead socket for hours. TCP-only; harmless if
+# the tuning knobs are unavailable on the platform.
+def _tune_tcp_keepalive(sock):
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, 'TCP_KEEPIDLE'):     # Linux
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
+    except OSError as e:
+        logger.debug(f"Could not tune TCP keepalive: {e}")
+
+
 class EventEmitter:
     """
     Event emitter with pluggable transport layer.
@@ -80,7 +97,7 @@ class EventEmitter:
                 self.sock.setblocking(False)
                 self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
-                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                _tune_tcp_keepalive(self.sock)
                 self.using_ipv6 = True
                 self._try_connect()
                 logger.info(f"📡 TCP event emitter initialized for [{self.host_ipv6}]:{self.port} (IPv6)")
@@ -97,7 +114,7 @@ class EventEmitter:
                 self.sock.setblocking(False)
                 self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
-                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                _tune_tcp_keepalive(self.sock)
                 self.using_ipv6 = False
                 self._try_connect()
                 logger.info(f"📡 TCP event emitter initialized for {self.host_ipv4}:{self.port} (IPv4)")
@@ -147,7 +164,7 @@ class EventEmitter:
                     try:
                         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
-                        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        _tune_tcp_keepalive(self.sock)
                     except Exception:
                         # Non-fatal if setsockopt not supported in environment
                         pass

@@ -396,6 +396,22 @@ class TCPProtocol(asyncio.Protocol):
         peername = transport.get_extra_info('peername')
         logger.info(f"✅ HBlink4 connected via TCP from {peername}")
         self.transport = transport
+
+        # Tune TCP keepalive on the accepted socket so a silently-severed hblink4
+        # connection (NIC flap, DHCP renew, firewall/conntrack eviction) is
+        # detected within ~2 minutes and fires connection_lost, instead of the
+        # dashboard holding a dead connection (hblink_connected stuck True) until
+        # hblink4 happens to reconnect.
+        sock = transport.get_extra_info('socket')
+        if sock is not None:
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, 'TCP_KEEPIDLE'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
+            except OSError as e:
+                logger.debug(f"Could not tune TCP keepalive on accepted socket: {e}")
         
         # Clear dashboard state on reconnect
         # HBlink4 will re-send all current repeaters via repeater_connected events
