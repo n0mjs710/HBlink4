@@ -729,8 +729,16 @@ class EventReceiver:
                     # For repeaters: callsign (repeater_id)
                     # For outbound: connection_name (remote_repeater_id)
                     if connection_type == 'openbridge':
-                        # OBP source: the trunk name (the origin peer rides in the frame)
-                        source_name = data.get('connection_name', 'OpenBridge')
+                        # OBP source: trunk name + the origin peer that rides in
+                        # the frame (bytes 11:15). Present only when the far end
+                        # preserves the source peer; a far end stamping its own
+                        # network_id sends no usable peer, so fall back to the
+                        # bare trunk name. This is the closest-hop source peer —
+                        # over multi-hop OBP it reflects the immediate upstream,
+                        # not the full path (we can't control other nodes).
+                        conn_name = data.get('connection_name', 'OpenBridge')
+                        remote_rid = data.get('remote_repeater_id')
+                        source_name = f"{conn_name} ({remote_rid})" if remote_rid else conn_name
                     elif connection_type == 'outbound':
                         conn_name = data.get('connection_name', 'Unknown')
                         remote_rid = data.get('remote_repeater_id', 0)

@@ -4114,7 +4114,8 @@ class HBProtocol(asyncio.DatagramProtocol):
                         f'tgid={int.from_bytes(dst_id, "big")} -> TS{local_ts} '
                         f'stream_id={stream_id.hex()} targets={len(targets)}')
             self._emit_stream_start('openbridge', obp_name, local_ts, rf_src, dst_id,
-                                    stream_id, 'group')
+                                    stream_id, 'group',
+                                    remote_repeater_id=int.from_bytes(peer_id, 'big'))
         else:
             stream.last_seen = now
             stream.packet_count += 1
