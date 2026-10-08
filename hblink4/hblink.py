@@ -54,7 +54,7 @@ from .user_cache import UserCache
 from .utils import (
     safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int, format_uptime,
     cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
-    fmt_ts_tg
+    fmt_ts_tg, pad_text, pad_num, pad_decimal
 )
 from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func, parse_openbridge_connections as parse_openbridge_func
 from .protocol import (
@@ -656,21 +656,22 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         # Build config packet (same format as repeater sends to us)
         # Pad/truncate strings to exact field lengths
+        # Padding per DMRGateway; see pad_* in utils.py.
         packet = RPTC + our_id_bytes
-        packet += config.callsign.encode().ljust(8, b'\x00')[:8]
-        packet += str(config.rx_frequency).encode().ljust(9, b'\x00')[:9]
-        packet += str(config.tx_frequency).encode().ljust(9, b'\x00')[:9]
-        packet += str(config.power).encode().ljust(2, b'\x00')[:2]
-        packet += str(config.colorcode).encode().ljust(2, b'\x00')[:2]
-        packet += str(config.latitude).encode().ljust(8, b'\x00')[:8]
-        packet += str(config.longitude).encode().ljust(9, b'\x00')[:9]
-        packet += str(config.height).encode().ljust(3, b'\x00')[:3]
-        packet += config.location.encode().ljust(20, b'\x00')[:20]
-        packet += config.description.encode().ljust(19, b'\x00')[:19]
-        packet += b'3'  # Slots (placeholder)
-        packet += config.url.encode().ljust(124, b'\x00')[:124]
-        packet += config.software_id.encode().ljust(40, b'\x00')[:40]
-        packet += config.package_id.encode().ljust(40, b'\x00')[:40]
+        packet += pad_text(config.callsign, 8)           # %-8.8s
+        packet += pad_num(config.rx_frequency, 9)        # %09u
+        packet += pad_num(config.tx_frequency, 9)        # %09u
+        packet += pad_num(config.power, 2)               # %02u
+        packet += pad_num(config.colorcode, 2)           # %02u
+        packet += pad_decimal(config.latitude, 8)        # %8.8s
+        packet += pad_decimal(config.longitude, 9)       # %9.9s
+        packet += pad_num(config.height, 3)              # %03d
+        packet += pad_text(config.location, 20)          # %-20.20s
+        packet += pad_text(config.description, 19)       # %-19.19s
+        packet += b'3'  # Slots (placeholder)            # %c
+        packet += pad_text(config.url, 124)              # %-124.124s
+        packet += pad_text(config.software_id, 40)       # %-40.40s
+        packet += pad_text(config.package_id, 40)        # %-40.40s
         
         state.transport.sendto(packet)
         LOGGER.info(f'[{config.name}] Sent RPTC (config)')
@@ -678,7 +679,8 @@ class HBProtocol(asyncio.DatagramProtocol):
     def _send_outbound_options(self, state: OutboundState, addr: tuple):
         """Send RPTO (options) to outbound server"""
         our_id_bytes = state.config.radio_id.to_bytes(4, 'big')
-        options_bytes = state.config.options.encode().ljust(300, b'\x00')[:300]
+        # Unpadded: the server reads the rest of the datagram as the string.
+        options_bytes = state.config.options.encode()[:300]
         
         packet = RPTO + our_id_bytes + options_bytes
         state.transport.sendto(packet)
@@ -2639,7 +2641,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             # Emit event before removing so dashboard can update
             self._events.emit('repeater_disconnected', {
                 'repeater_id': rid_to_int(repeater_id),
-                'callsign': repeater.callsign.decode().strip() if repeater.callsign else 'Unknown',
+                'callsign': safe_decode_bytes(repeater.callsign) if repeater.callsign else 'Unknown',
                 'reason': reason
             })
             
@@ -2889,7 +2891,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Log detailed configuration at debug level
             LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} config:'
-                      f'\n    Callsign: {repeater.callsign.decode().strip()}'
+                      f'\n    Callsign: {safe_decode_bytes(repeater.callsign)}'
                       f'\n    RX Freq: {repeater.rx_freq.decode().strip()}'
                       f'\n    TX Freq: {repeater.tx_freq.decode().strip()}'
                       f'\n    Power: {repeater.tx_power.decode().strip()}'
@@ -3153,12 +3155,12 @@ class HBProtocol(asyncio.DatagramProtocol):
         try:
             # Parse options string
             options_str = data.decode('utf-8', errors='ignore').strip('\x00').strip()
-            LOGGER.info(f'📋 OPTIONS from {rid_to_int(repeater_id)} ({repeater.callsign.decode().strip()}): {options_str}')
+            LOGGER.info(f'📋 OPTIONS from {rid_to_int(repeater_id)} ({safe_decode_bytes(repeater.callsign)}): {options_str}')
             
             # Get original config TGs (these are the master allow list)
             repeater_config = self._matcher.get_repeater_config(
                 rid_to_int(repeater_id),
-                repeater.callsign.decode().strip() if repeater.callsign else None
+                safe_decode_bytes(repeater.callsign) if repeater.callsign else None
             )
             
             # Convert config to bytes sets, handling None (allow all) properly

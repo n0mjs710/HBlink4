@@ -18,16 +18,20 @@ def safe_decode_bytes(data: bytes) -> str:
     """
     Safely decode bytes to UTF-8 string with error handling.
     Used for repeater metadata fields that may contain invalid UTF-8.
-    
+
+    Strips NUL as well as whitespace: str.strip() takes whitespace only, and a
+    client that NUL-pads its RPTC fields would otherwise reach logs, dashboard
+    JSON and callsign ACL matching with the padding still attached.
+
     Args:
         data: Bytes to decode
-        
+
     Returns:
         Decoded and stripped string, or empty string if data is empty/None
     """
     if not data:
         return ''
-    return data.decode('utf-8', errors='ignore').strip()
+    return data.decode('utf-8', errors='ignore').strip('\x00').strip()
 
 
 def normalize_addr(addr: PeerAddress) -> Tuple[str, int]:
@@ -300,3 +304,25 @@ def setup_logging(config: dict, logger_name: str = __name__) -> logging.Logger:
         logger.addHandler(console_handler)
     
     return logger
+
+# ---------------------------------------------------------------------------
+# RPTC config blob field encoders, per DMRGateway's config-blob sprintf
+#   "%-8.8s%09u%09u%02u%02u%8.8s%9.9s%03d%-20.20s%-19.19s%c%-124.124s%-40.40s%-40.40s"
+# Never NUL-filled: a master slices the blob positionally, so NUL padding
+# connects but leaves NULs in fields consumers read as text.
+# Overlong values truncate to the field width, as the ".N" precision does.
+
+
+def pad_text(value, width: int) -> bytes:
+    """Left-justified, space-filled -- "%-N.Ns" (callsign, location, url, ...)."""
+    return str(value).encode()[:width].ljust(width)
+
+
+def pad_num(value, width: int) -> bytes:
+    """Right-justified, zero-filled -- "%0Nu" (frequencies, power, cc, height)."""
+    return str(value).encode()[:width].rjust(width, b'0')
+
+
+def pad_decimal(value, width: int) -> bytes:
+    """Right-justified, space-filled -- "%N.Ns" (latitude, longitude)."""
+    return str(value).encode()[:width].rjust(width)
