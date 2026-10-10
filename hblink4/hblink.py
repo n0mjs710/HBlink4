@@ -133,6 +133,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._tasks = []  # List to track all async tasks
 
         self._port = None  # Store the port instance instead of transport
+        self._dynamic_talkgroup = self._parse_dynamic_talkgroup_config()
         
         # Initialize dashboard event emitter with config
         dashboard_config = CONFIG.get('dashboard', {})
@@ -211,6 +212,159 @@ class HBProtocol(asyncio.DatagramProtocol):
         else:
             # Convert bytes back to integers for JSON (most efficient approach)
             return sorted(int.from_bytes(tg_bytes, 'big') for tg_bytes in tg_set)
+
+    def _parse_dynamic_talkgroup_config(self) -> Optional[dict]:
+        """Parse optional dynamic talkgroup participation config.
+
+        Disabled by default so upstream behavior is unchanged unless an
+        operator explicitly enables this BuenoDMR-style feature.
+        """
+        cfg = CONFIG.get('dynamic_talkgroups', {}) or {}
+        if not cfg.get('enabled', False):
+            return None
+
+        try:
+            slot = int(cfg.get('slot', 2))
+            talkgroup = int(cfg['talkgroup'])
+            disconnect_talkgroup = int(cfg['disconnect_talkgroup'])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f'dynamic_talkgroups requires integer slot, talkgroup and disconnect_talkgroup: {e}')
+
+        if slot not in (1, 2):
+            raise ValueError('dynamic_talkgroups.slot must be 1 or 2')
+        for name, value in (('talkgroup', talkgroup), ('disconnect_talkgroup', disconnect_talkgroup)):
+            if not (0 <= value <= 0xFFFFFF):
+                raise ValueError(f'dynamic_talkgroups.{name} must be in range 0..16777215')
+        if talkgroup == disconnect_talkgroup:
+            raise ValueError('dynamic_talkgroups.talkgroup and disconnect_talkgroup must differ')
+
+        initial_active = bool(cfg.get('initial_active', True))
+        LOGGER.info(
+            f'✓ Dynamic talkgroup control enabled: TS{slot}/TG{talkgroup}, '
+            f'leave TG{disconnect_talkgroup}, '
+            f'initial={"active" if initial_active else "inactive"}'
+        )
+        return {
+            'slot': slot,
+            'talkgroup': talkgroup,
+            'talkgroup_bytes': talkgroup.to_bytes(3, 'big'),
+            'disconnect_talkgroup': disconnect_talkgroup,
+            'disconnect_talkgroup_bytes': disconnect_talkgroup.to_bytes(3, 'big'),
+            'initial_active': initial_active,
+        }
+
+    def _dynamic_net_address(self, repeater: RepeaterState, slot: int, dst_id: bytes) -> Tuple[int, bytes]:
+        """Return network-side TS/TG for dynamic-talkgroup checks."""
+        if repeater.inbound_map:
+            return repeater.inbound_map.get((slot, dst_id), (slot, dst_id))
+        return slot, dst_id
+
+    def _is_dynamic_talkgroup(self, slot: int, dst_id: bytes) -> bool:
+        cfg = self._dynamic_talkgroup
+        return bool(cfg and slot == cfg['slot'] and dst_id == cfg['talkgroup_bytes'])
+
+    def _is_dynamic_disconnect(self, slot: int, dst_id: bytes) -> bool:
+        cfg = self._dynamic_talkgroup
+        return bool(cfg and slot == cfg['slot'] and dst_id == cfg['disconnect_talkgroup_bytes'])
+
+    def _dynamic_should_intercept_disconnect(
+        self, repeater: RepeaterState, slot: int, dst_id: bytes,
+        call_type_bit: int, frame_type: int, dtype_vseq: int
+    ) -> bool:
+        if not self._dynamic_talkgroup or call_type_bit != 0:
+            return False
+        if classify_stream_kind(frame_type, dtype_vseq) != STREAM_KIND_VOICE:
+            return False
+        net_slot, net_dst_id = self._dynamic_net_address(repeater, slot, dst_id)
+        return self._is_dynamic_disconnect(net_slot, net_dst_id)
+
+    def _remove_repeater_from_route_caches(self, repeater_id: bytes) -> None:
+        """Stop active cached streams from sending any more packets to repeater_id."""
+        for other_repeater in self._repeaters.values():
+            for other_slot in (1, 2):
+                other_stream = other_repeater.get_slot_stream(other_slot)
+                if (other_stream and other_stream.routing_cached
+                        and other_stream.target_repeaters
+                        and repeater_id in other_stream.target_repeaters):
+                    other_stream.target_repeaters.discard(repeater_id)
+
+    def _handle_dynamic_disconnect_command(
+        self, repeater: RepeaterState, rf_src: bytes, slot: int,
+        dst_id: bytes, stream_id: bytes
+    ) -> None:
+        """Apply local TG leave command and drop it from normal routing."""
+        current_time = time()
+        command_key = ('dynamic_disconnect', repeater.repeater_id, slot, stream_id)
+        first_packet = command_key not in self._denied_streams
+        if first_packet:
+            self._denied_streams[command_key] = current_time
+
+            was_active = repeater.dynamic_talkgroup_active
+            repeater.dynamic_talkgroup_active = False
+            self._remove_repeater_from_route_caches(repeater.repeater_id)
+
+            current_stream = repeater.get_slot_stream(slot)
+            if current_stream and current_stream.is_assumed and not current_stream.ended:
+                repeater.set_slot_stream(slot, None)
+
+            cfg = self._dynamic_talkgroup
+            LOGGER.info(
+                f'Dynamic TG leave from repeater {rid_to_int(repeater.repeater_id)} '
+                f'TS{slot}/TG{int.from_bytes(dst_id, "big")} '
+                f'src={bytes_to_int(rf_src)}; '
+                f'TS{cfg["slot"]}/TG{cfg["talkgroup"]} receive disabled'
+            )
+            self._events.emit('dynamic_talkgroup_state', {
+                'repeater_id': rid_to_int(repeater.repeater_id),
+                'action': 'leave',
+                'slot': cfg['slot'],
+                'talkgroup': cfg['talkgroup'],
+                'disconnect_talkgroup': cfg['disconnect_talkgroup'],
+                'dynamic_talkgroup': self._dynamic_talkgroup_event_data(repeater),
+                'active': False,
+                'previous_active': was_active,
+                'reason': 'leave_talkgroup',
+                'src_id': bytes_to_int(rf_src),
+            })
+
+    def _activate_dynamic_talkgroup_if_needed(
+        self, repeater: RepeaterState, rf_src: bytes, net_slot: int, net_dst_id: bytes
+    ) -> None:
+        cfg = self._dynamic_talkgroup
+        if not cfg or not self._is_dynamic_talkgroup(net_slot, net_dst_id):
+            return
+        if repeater.dynamic_talkgroup_active:
+            return
+
+        repeater.dynamic_talkgroup_active = True
+        LOGGER.info(
+            f'Dynamic TG join from repeater {rid_to_int(repeater.repeater_id)} '
+            f'TS{cfg["slot"]}/TG{cfg["talkgroup"]} src={bytes_to_int(rf_src)}'
+        )
+        self._events.emit('dynamic_talkgroup_state', {
+            'repeater_id': rid_to_int(repeater.repeater_id),
+            'action': 'join',
+            'slot': cfg['slot'],
+            'talkgroup': cfg['talkgroup'],
+            'disconnect_talkgroup': cfg['disconnect_talkgroup'],
+            'dynamic_talkgroup': self._dynamic_talkgroup_event_data(repeater),
+            'active': True,
+            'previous_active': False,
+            'reason': 'join_talkgroup',
+            'src_id': bytes_to_int(rf_src),
+        })
+
+    def _dynamic_talkgroup_event_data(self, repeater: RepeaterState) -> Optional[dict]:
+        cfg = self._dynamic_talkgroup
+        if not cfg:
+            return None
+        return {
+            'enabled': True,
+            'slot': cfg['slot'],
+            'talkgroup': cfg['talkgroup'],
+            'disconnect_talkgroup': cfg['disconnect_talkgroup'],
+            'active': repeater.dynamic_talkgroup_active,
+        }
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
@@ -222,7 +376,7 @@ class HBProtocol(asyncio.DatagramProtocol):
              nslot, int.from_bytes(ntgid, 'big')]
             for (lslot, ltgid), (nslot, ntgid) in sorted(repeater.inbound_map.items())
         ]
-        return {
+        event_data = {
             'repeater_id': rid_to_int(repeater_id),
             'callsign': repeater.get_callsign_str(),
             'location': repeater.get_location_str(),
@@ -237,6 +391,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             'slot2_talkgroups': self._format_tg_json(repeater.slot2_talkgroups),
             'rpto_received': repeater.rpto_received,
             'translations': translations_list,
+            'dynamic_talkgroup_active': repeater.dynamic_talkgroup_active,
             'last_ping': repeater.last_ping,
             'missed_pings': repeater.missed_pings,
             # Authoritative session start. The dashboard must use this rather than
@@ -245,6 +400,10 @@ class HBProtocol(asyncio.DatagramProtocol):
             # arrival-time stamp resets uptime for repeaters that never dropped.
             'connect_time': repeater.connect_time
         }
+        dynamic_talkgroup = self._dynamic_talkgroup_event_data(repeater)
+        if dynamic_talkgroup:
+            event_data['dynamic_talkgroup'] = dynamic_talkgroup
+        return event_data
     
     def _load_repeater_tg_config(self, repeater_id: bytes, repeater: RepeaterState) -> None:
         """
@@ -849,6 +1008,10 @@ class HBProtocol(asyncio.DatagramProtocol):
         for local_repeater_id, local_repeater in self._repeaters.items():
             # Only forward to connected repeaters
             if local_repeater.connection_state != 'connected':
+                continue
+
+            if (self._is_dynamic_talkgroup(_slot, _dst_id)
+                    and not local_repeater.dynamic_talkgroup_active):
                 continue
 
             # ACL on network vocabulary
@@ -1905,24 +2068,31 @@ class HBProtocol(asyncio.DatagramProtocol):
         except Exception as e:
             LOGGER.error(f'Error processing datagram from {ip}:{port}: {str(e)}')
 
-    def _validate_repeater(self, repeater_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
+    def _validate_repeater(self, repeater_id: bytes, addr: PeerAddress,
+                           include_pending: bool = False) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
-        if repeater_id not in self._repeaters:
+        repeater = self._repeaters.get(repeater_id)
+        if repeater is None:
+            pending = self._pending_logins.get(repeater_id) if include_pending else None
+            if pending is not None and pending.sockaddr == normalize_addr(addr):
+                return pending
             # Per-packet logging - only enable for heavy troubleshooting
             #LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} not found in _repeaters dict')
             self._send_nak(repeater_id, addr, reason="Repeater not registered")
             return None
-            
-        repeater = self._repeaters[repeater_id]
+
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'Validating repeater {rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
-        
-        if not self._addr_matches_repeater(repeater, addr):
-            LOGGER.warning(f'Message from wrong IP for repeater {rid_to_int(repeater_id)}')
-            self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
-            return None
-            
-        return repeater
+        if self._addr_matches_repeater(repeater, addr):
+            return repeater
+
+        pending = self._pending_logins.get(repeater_id) if include_pending else None
+        if pending is not None and pending.sockaddr == normalize_addr(addr):
+            return pending
+
+        LOGGER.warning(f'Message from wrong IP for repeater {rid_to_int(repeater_id)}')
+        self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
+        return None
     
     def _handle_data_stream(self, source_key: str, owner_id: bytes,
                             rf_src: bytes, dst_id: bytes, slot: int,
@@ -2211,6 +2381,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             net_slot, net_dst_id = repeater.inbound_map.get((slot, dst_id), (slot, dst_id))
         else:
             net_slot, net_dst_id = slot, dst_id
+
+        self._activate_dynamic_talkgroup_if_needed(repeater, rf_src, net_slot, net_dst_id)
 
         # Calculate forwarding targets (once per stream, not per packet!)
         # Targets evaluated against NETWORK addressing so every repeater's
@@ -2767,7 +2939,6 @@ class HBProtocol(asyncio.DatagramProtocol):
         sockaddr. Only a correct passphrase earns the takeover; on every failure the
         pending state is discarded and the incumbent registration is left untouched.
         """
-        del self._pending_logins[repeater_id]
         ip, port = addr[0], addr[1]
 
         try:
@@ -2775,6 +2946,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 rid_to_int(repeater_id), pending.get_callsign_str()
             )
             if repeater_config is None:
+                self._pending_logins.pop(repeater_id, None)
                 LOGGER.warning(f'Denied takeover of repeater {rid_to_int(repeater_id)} by {ip}:{port} '
                                f'- no matching configuration; incumbent retained')
                 self._send_nak(repeater_id, addr, reason="No matching configuration")
@@ -2783,29 +2955,22 @@ class HBProtocol(asyncio.DatagramProtocol):
             salt_bytes = pending.salt.to_bytes(4, 'big')
             calc_hash = bytes.fromhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest())
             if auth_hash != calc_hash:
+                self._pending_logins.pop(repeater_id, None)
                 LOGGER.warning(f'Denied takeover of repeater {rid_to_int(repeater_id)} by {ip}:{port} '
                                f'- authentication failed; incumbent retained')
                 self._send_nak(repeater_id, addr, reason="Authentication failed")
                 return
 
-            # Passphrase proven. Now — and only now — the incumbent gives way.
-            # Order matters: _remove_repeater deletes by ID, so the old entry must
-            # go before the claimant is installed under the same key.
-            incumbent = self._repeaters.get(repeater_id)
-            if incumbent is not None:
-                old_addr = incumbent.sockaddr
-                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated from {ip}:{port} - '
-                            f'replacing registration from {old_addr[0]}:{old_addr[1]}')
-                self._remove_repeater(repeater_id, "replaced_by_new_address")
-                self._send_nak(repeater_id, old_addr, reason="Replaced by new registration")
-
+            # Keep the incumbent registration until the authenticated claimant
+            # has supplied a valid RPTC and passed the configured admission
+            # policy. A rejected metadata profile must not evict a live hotspot.
             pending.authenticated = True
             pending.connection_state = 'config'
-            self._repeaters[repeater_id] = pending
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated successfully from {ip}:{port}')
 
         except Exception as e:
+            self._pending_logins.pop(repeater_id, None)
             LOGGER.error(f'Authentication error for repeater {rid_to_int(repeater_id)} from {ip}:{port}: {str(e)}')
             self._send_nak(repeater_id, addr)
 
@@ -2858,14 +3023,61 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_nak(repeater_id, addr)
             self._remove_repeater(repeater_id, "auth_error")
 
+    def _strict_hotspot_access_enabled(self) -> bool:
+        detection = self._config.get('connection_type_detection', {})
+        value = detection.get('strict_hotspot_access', True) if isinstance(detection, dict) else True
+        # Only an explicit JSON false disables the default-on policy. Invalid or
+        # absent values fail closed.
+        return value is not False
+
+    def _emit_client_admission_rejected(self, repeater_id: bytes,
+                                        repeater: RepeaterState,
+                                        classification: str, reason: str) -> None:
+        callsign = repeater.get_callsign_str().strip()
+        if callsign and not re.fullmatch(r'[A-Za-z0-9/-]{1,16}', callsign):
+            callsign = ''
+        self._events.emit('client_admission_rejected', {
+            'repeater_id': rid_to_int(repeater_id),
+            'callsign': callsign or None,
+            'classification': classification,
+            'reason': reason,
+        })
+
+    def _reject_config_session(self, repeater_id: bytes, repeater: RepeaterState,
+                               addr: PeerAddress, classification: str,
+                               reason: str) -> None:
+        self._send_nak(repeater_id, addr, reason=reason)
+        self._emit_client_admission_rejected(repeater_id, repeater, classification, reason)
+        if self._pending_logins.get(repeater_id) is repeater:
+            # A rejected takeover claimant never replaces or removes the
+            # incumbent registration held in _repeaters.
+            self._pending_logins.pop(repeater_id, None)
+        else:
+            self._remove_repeater(repeater_id, reason)
+
     def _handle_config(self, data: bytes, addr: PeerAddress) -> None:
         """Handle configuration from repeater"""
         try:
             repeater_id = data[4:8]
-            repeater = self._validate_repeater(repeater_id, addr)
+            repeater = self._validate_repeater(repeater_id, addr, include_pending=True)
             if not repeater or not repeater.authenticated or repeater.connection_state != 'config':
                 LOGGER.warning(f'Config from repeater {rid_to_int(repeater_id)} in wrong state')
                 self._send_nak(repeater_id, addr)
+                return
+
+            # Homebrew RPTC has a fixed 302-byte wire format. Do not mark a
+            # truncated/extended config connected: the fields below are fixed
+            # offset slices and incomplete metadata must not be accepted as a
+            # completed repeater registration. Validate the session first so a
+            # malformed packet from another address cannot remove its owner.
+            if len(data) != 302:
+                LOGGER.warning(
+                    'Rejecting malformed RPTC for repeater %s (length=%s, expected=302)',
+                    rid_to_int(repeater_id), len(data),
+                )
+                self._reject_config_session(
+                    repeater_id, repeater, addr, 'unknown', 'invalid_rptc_length'
+                )
                 return
                 
             # Store raw bytes for metadata
@@ -2888,6 +3100,18 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater.connection_type = detect_connection_type(
                 repeater.software_id, repeater.package_id, self._config
             )
+
+            if (self._strict_hotspot_access_enabled()
+                    and repeater.connection_type != 'hotspot'):
+                LOGGER.warning(
+                    'Rejecting repeater %s after RPTC admission check (classification=%s)',
+                    rid_to_int(repeater_id), repeater.connection_type,
+                )
+                self._reject_config_session(
+                    repeater_id, repeater, addr, repeater.connection_type,
+                    'profile_not_allowed',
+                )
+                return
             
             # Log detailed configuration at debug level
             LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} config:'
@@ -2901,6 +3125,17 @@ class HBProtocol(asyncio.DatagramProtocol):
                       f'\n    Package: {repeater.package_id.decode().strip()}'
                       f'\n    Type: {repeater.connection_type}')
 
+            if self._pending_logins.get(repeater_id) is repeater:
+                incumbent = self._repeaters.get(repeater_id)
+                if incumbent is not None:
+                    old_addr = incumbent.sockaddr
+                    self._remove_repeater(repeater_id, 'replaced_by_new_address')
+                    self._send_nak(
+                        repeater_id, old_addr, reason='Replaced by admitted registration'
+                    )
+                self._pending_logins.pop(repeater_id, None)
+                self._repeaters[repeater_id] = repeater
+
             repeater.connected = True
             repeater.connection_state = 'connected'
             # Mark the start of this session; the next login for this ID reports
@@ -2909,6 +3144,8 @@ class HBProtocol(asyncio.DatagramProtocol):
             
             # Load and cache TG sets from config for fast routing checks
             self._load_repeater_tg_config(repeater_id, repeater)
+            if self._dynamic_talkgroup:
+                repeater.dynamic_talkgroup_active = self._dynamic_talkgroup['initial_active']
             
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             LOGGER.info(f'Repeater {rid_to_int(repeater_id)} ({repeater.get_callsign_str()}) configured successfully')
@@ -3526,6 +3763,10 @@ class HBProtocol(asyncio.DatagramProtocol):
             if target_repeater.connection_state != 'connected':
                 continue
 
+            if (self._is_dynamic_talkgroup(slot, dst_id)
+                    and not target_repeater.dynamic_talkgroup_active):
+                continue
+
             # Check outbound routing (TG allowed on this repeater/slot, network vocab)
             if not self._check_outbound_routing(target_repeater_id, slot, dst_id):
                 continue
@@ -3889,6 +4130,14 @@ class HBProtocol(asyncio.DatagramProtocol):
         _stream_id = packet['stream_id']
         _dtype_vseq = data[15] & 0x0F
         _payload = data[20:53] if len(data) >= 53 else b''
+
+        if self._dynamic_should_intercept_disconnect(
+            repeater, _slot, _dst_id, _call_type, _frame_type, _dtype_vseq
+        ):
+            self._handle_dynamic_disconnect_command(
+                repeater, _rf_src, _slot, _dst_id, _stream_id
+            )
+            return
 
         # Check if this is a stream terminator (immediate end detection)
         # Note: _is_dmr_terminator() checks packet header flags for immediate detection

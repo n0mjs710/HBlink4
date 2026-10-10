@@ -1,0 +1,2 @@
+# HTTP client used by dashboard route tests. Not needed on the production Pi.
+httpx>=0.27.0,<1.0

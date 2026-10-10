@@ -2,6 +2,9 @@
 
 Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 
+BuenoDMR's separate, read-only administrative area is documented in
+[BuenoDMR administration](../docs/buenodmr-admin.md).
+
 ## Features
 
 - **Real-time Updates**: WebSocket-based live updates every second (no page refreshes required)
@@ -145,25 +148,22 @@ User-focused activity log showing:
 
 ## API Endpoints
 
-The dashboard provides REST API endpoints:
+The BuenoDMR `Admin` link opens `/admin`. Its authenticated operator
+management, apply/rollback procedure, and backup policy are documented in
+[BuenoDMR administration](../docs/buenodmr-admin.md).
 
-### GET /api/config
-Returns dashboard configuration
+The public browser page uses an intentionally small, allowlisted API:
 
-### GET /api/repeaters
-Returns list of all connected repeaters
+- `GET /api/public/snapshot` returns public network status, aggregate counts,
+  connected hotspot callsigns, recent TG100 voice activity, and active operator
+  callsigns. The response is not a raw projection of HBlink4 state.
+- `WebSocket /ws/public` sends the same sanitized snapshot at connection time
+  and when the dashboard state changes.
 
-### GET /api/streams
-Returns list of active and recently ended streams
-
-### GET /api/events?limit=50
-Returns recent events (default limit: 100)
-
-### GET /api/stats
-Returns aggregate statistics
-
-### WebSocket /ws
-Real-time updates via WebSocket
+The former raw `/api/*` routes and `/ws` telemetry socket are unavailable to
+visitors. Administrative operator management remains under `/admin` and its
+server-side authorization checks. See [BuenoDMR administration](../docs/buenodmr-admin.md)
+and [radio access security](../docs/radio-access-security.md) for the details.
 
 ## Troubleshooting
 

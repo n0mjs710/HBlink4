@@ -108,6 +108,78 @@ class _StubProtocol(HBProtocol):
         pass
 
 
+class _EventSink:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event_type, data):
+        self.events.append((event_type, data))
+
+
+class _DynamicProtocol(HBProtocol):
+    def __init__(self, repeaters, *, enabled=True, initial_active=True):
+        self._repeaters = repeaters
+        self._outbounds = {}
+        self._openbridges = {}
+        self._events = _EventSink()
+        self._denied_streams = {}
+        self._user_cache = None
+        self.sent_packets = []
+        if enabled:
+            self._dynamic_talkgroup = {
+                'slot': 2,
+                'talkgroup': 100,
+                'talkgroup_bytes': (100).to_bytes(3, 'big'),
+                'disconnect_talkgroup': 4100,
+                'disconnect_talkgroup_bytes': (4100).to_bytes(3, 'big'),
+                'initial_active': initial_active,
+            }
+        else:
+            self._dynamic_talkgroup = None
+
+    def _validate_repeater(self, repeater_id, addr):
+        return self._repeaters.get(repeater_id)
+
+    def _send_packet(self, data, addr):
+        self.sent_packets.append((data, addr))
+
+
+def _tg(value):
+    return value.to_bytes(3, 'big')
+
+
+def _rid(value):
+    return value.to_bytes(4, 'big')
+
+
+def _dmrd_packet(*, repeater_id, dst, slot=2, stream_id=b'\x01\x02\x03\x04', src=1234567):
+    bits = 0x80 if slot == 2 else 0x00  # group voice on requested slot
+    payload = bytes(35)
+    return (
+        b'DMRD'
+        + b'\x01'
+        + src.to_bytes(3, 'big')
+        + dst.to_bytes(3, 'big')
+        + repeater_id
+        + bytes([bits])
+        + stream_id
+        + payload
+    )
+
+
+def _connected_repeater(rid, *, active=True):
+    rep = RepeaterState(
+        repeater_id=_rid(rid),
+        ip='127.0.0.1',
+        port=54000 + (rid % 1000),
+        connection_state='connected',
+    )
+    rep.slot1_talkgroups = set()
+    rep.slot2_talkgroups = {_tg(100)}
+    rep.dynamic_talkgroup_active = active
+    return rep
+
+
 def _run_handle_options(options_str, *, trust, config_ts1, config_ts2):
     """Drive a real HBProtocol._handle_options through a stub and return the
     resolved (slot1, slot2) sets on the repeater."""
@@ -222,6 +294,183 @@ def test_rpto_parsing():
         print(f"  '{opts}' (trust={trust}) → TS1={got1}, TS2={got2}")
 
     print("RPTO Parsing tests passed!\n")
+
+
+def test_tg4100_is_rejected_without_dynamic_talkgroup_feature():
+    """With normal TG100-only ACLs, TG4100 remains a denied TG."""
+    repeater = _connected_repeater(312100)
+    proto = _DynamicProtocol({repeater.repeater_id: repeater}, enabled=False)
+
+    allowed = proto._handle_stream_start(
+        repeater,
+        rf_src=_tg(1234567),
+        dst_id=_tg(4100),
+        slot=2,
+        stream_id=b'\x10\x00\x00\x01',
+        call_type_bit=0,
+    )
+
+    assert allowed is False
+    assert repeater.get_slot_stream(2) is None
+    assert repeater.dynamic_talkgroup_active is True
+    print("✓ TG4100 is rejected by TG100-only ACL when dynamic feature is disabled")
+
+
+def test_dynamic_tg4100_leave_is_local_command_not_stream():
+    """TG4100 disables only the sending hotspot and is not forwarded."""
+    source = _connected_repeater(312100)
+    other = _connected_repeater(312101)
+    proto = _DynamicProtocol({
+        source.repeater_id: source,
+        other.repeater_id: other,
+    })
+
+    active_stream = StreamState(
+        repeater_id=other.repeater_id,
+        rf_src=_tg(7654321),
+        dst_id=_tg(100),
+        slot=2,
+        start_time=time(),
+        last_seen=time(),
+        stream_id=b'\xaa\xbb\xcc\xdd',
+        target_repeaters={source.repeater_id},
+        routing_cached=True,
+    )
+    other.set_slot_stream(2, active_stream)
+    source.set_slot_stream(2, StreamState(
+        repeater_id=source.repeater_id,
+        rf_src=_tg(7654321),
+        dst_id=_tg(100),
+        slot=2,
+        start_time=time(),
+        last_seen=time(),
+        stream_id=b'\xaa\xbb\xcc\xdd',
+        is_assumed=True,
+    ))
+
+    packet = _dmrd_packet(
+        repeater_id=source.repeater_id,
+        dst=4100,
+        stream_id=b'\x40\x00\x00\x01',
+    )
+    proto._handle_dmr_data(packet, source.sockaddr)
+
+    assert source.dynamic_talkgroup_active is False
+    assert source.get_slot_stream(2) is None
+    assert source.repeater_id not in active_stream.target_repeaters
+    assert proto.sent_packets == []
+    assert source.repeater_id not in [
+        s.repeater_id for s in (source.get_slot_stream(2),) if s
+    ]
+    assert proto._events.events[-1][0] == 'dynamic_talkgroup_state'
+    assert proto._events.events[-1][1]['action'] == 'leave'
+    assert proto._events.events[-1][1]['reason'] == 'leave_talkgroup'
+    assert proto._events.events[-1][1]['active'] is False
+    assert proto._events.events[-1][1]['dynamic_talkgroup'] == {
+        'enabled': True,
+        'slot': 2,
+        'talkgroup': 100,
+        'disconnect_talkgroup': 4100,
+        'active': False,
+    }
+    print("✓ TG4100 is consumed locally, disables TG100 receive, and is not forwarded")
+
+
+def test_dynamic_tg100_reactivates_only_sending_hotspot():
+    source = _connected_repeater(312100, active=False)
+    inactive_peer = _connected_repeater(312101, active=False)
+    active_peer = _connected_repeater(312102, active=True)
+    proto = _DynamicProtocol({
+        source.repeater_id: source,
+        inactive_peer.repeater_id: inactive_peer,
+        active_peer.repeater_id: active_peer,
+    })
+
+    allowed = proto._handle_stream_start(
+        source,
+        rf_src=_tg(1234567),
+        dst_id=_tg(100),
+        slot=2,
+        stream_id=b'\x10\x00\x00\x02',
+        call_type_bit=0,
+    )
+
+    assert allowed is True
+    assert source.dynamic_talkgroup_active is True
+    assert inactive_peer.dynamic_talkgroup_active is False
+    assert active_peer.dynamic_talkgroup_active is True
+    stream = source.get_slot_stream(2)
+    assert stream is not None
+    assert active_peer.repeater_id in stream.target_repeaters
+    assert inactive_peer.repeater_id not in stream.target_repeaters
+    dynamic_events = [e for e in proto._events.events if e[0] == 'dynamic_talkgroup_state']
+    assert dynamic_events[-1][1]['action'] == 'join'
+    assert dynamic_events[-1][1]['reason'] == 'join_talkgroup'
+    assert dynamic_events[-1][1]['active'] is True
+    assert dynamic_events[-1][1]['dynamic_talkgroup'] == {
+        'enabled': True,
+        'slot': 2,
+        'talkgroup': 100,
+        'disconnect_talkgroup': 4100,
+        'active': True,
+    }
+    print("✓ TG100 reactivates only the sending hotspot and skips inactive peers")
+
+
+def test_dynamic_talkgroup_disabled_preserves_existing_target_selection():
+    source = _connected_repeater(312100)
+    inactive_peer = _connected_repeater(312101, active=False)
+    active_peer = _connected_repeater(312102, active=True)
+    proto = _DynamicProtocol({
+        source.repeater_id: source,
+        inactive_peer.repeater_id: inactive_peer,
+        active_peer.repeater_id: active_peer,
+    }, enabled=False)
+
+    targets = proto._calculate_stream_targets(
+        source.repeater_id,
+        2,
+        _tg(100),
+        b'\x10\x00\x00\x03',
+        _tg(1234567),
+    )
+
+    assert inactive_peer.repeater_id in targets
+    assert active_peer.repeater_id in targets
+    print("✓ With feature disabled, target selection ignores dynamic state")
+
+
+def test_dynamic_talkgroup_connect_and_sync_payload():
+    """repeater_connected/sync payload carries current dynamic TG state."""
+    repeater = _connected_repeater(312100, active=True)
+    proto = _DynamicProtocol({repeater.repeater_id: repeater})
+
+    payload = proto._prepare_repeater_event_data(repeater.repeater_id, repeater)
+
+    assert payload['dynamic_talkgroup_active'] is True
+    assert payload['dynamic_talkgroup'] == {
+        'enabled': True,
+        'slot': 2,
+        'talkgroup': 100,
+        'disconnect_talkgroup': 4100,
+        'active': True,
+    }
+
+    repeater.dynamic_talkgroup_active = False
+    replay_payload = proto._prepare_repeater_event_data(repeater.repeater_id, repeater)
+    assert replay_payload['dynamic_talkgroup']['active'] is False
+    print("✓ repeater_connected/sync payload preserves dynamic TG active/inactive state")
+
+
+def test_dynamic_talkgroup_disabled_omits_dashboard_payload():
+    repeater = _connected_repeater(312100, active=False)
+    proto = _DynamicProtocol({repeater.repeater_id: repeater}, enabled=False)
+
+    payload = proto._prepare_repeater_event_data(repeater.repeater_id, repeater)
+
+    assert 'dynamic_talkgroup' not in payload
+    assert payload['dynamic_talkgroup_active'] is False
+    print("✓ Disabled feature omits dynamic TG dashboard payload")
 
 
 def test_config_intersection():
@@ -536,6 +785,12 @@ def run_all_tests():
         test_set_based_tg_storage,
         test_routing_cache_fields,
         test_rpto_parsing,
+        test_tg4100_is_rejected_without_dynamic_talkgroup_feature,
+        test_dynamic_tg4100_leave_is_local_command_not_stream,
+        test_dynamic_tg100_reactivates_only_sending_hotspot,
+        test_dynamic_talkgroup_disabled_preserves_existing_target_selection,
+        test_dynamic_talkgroup_connect_and_sync_payload,
+        test_dynamic_talkgroup_disabled_omits_dashboard_payload,
         test_config_intersection,
         test_rejected_tgs_detection,
         test_stream_start_routing_calculation,

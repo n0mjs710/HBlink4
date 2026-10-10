@@ -2,3 +2,6 @@
 # These files contain runtime data and should not be versioned
 *.json
 *.tmp
+*.sqlite3*
+*.key
+*.lock

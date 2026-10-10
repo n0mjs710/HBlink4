@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Administração | Bueno DMR</title>
+    <link rel="stylesheet" href="/static/admin.css">
+    <script src="/static/admin.js?v=2" defer></script>
+</head>
+<body>
+    <main class="admin-shell">
+        <header>
+            <div>
+                <a class="back-link" href="/">&larr; Painel público</a>
+                <p class="eyebrow">Bueno DMR</p>
+                <h1>Administração</h1>
+            </div>
+            <div class="account">
+                <span>Sessão de <strong>{{USERNAME}}</strong></span>
+                <form method="post" action="/admin/logout">
+                    <input type="hidden" name="csrf" value="{{CSRF}}">
+                    <button class="secondary" type="submit">Sair</button>
+                </form>
+            </div>
+        </header>
+        <section aria-labelledby="operators-title">
+            <div class="section-head">
+                <h2 id="operators-title">Operadores DMR</h2>
+                <button id="add-operator" type="button">+ Adicionar operador</button>
+            </div>
+            <p id="feedback" role="status" aria-live="polite"></p>
+            <div id="operators" class="operators">{{OPERATORS}}</div>
+        </section>
+        <section aria-labelledby="radio-access-title">
+            <h2 id="radio-access-title">Acesso exclusivo por Hotspot</h2>
+            <article class="security-note" aria-labelledby="radio-access-title">
+                <strong id="radio-access-status" class="security-status">Carregando estado</strong>
+                <p>Quando ativado, somente clientes HBP classificados pelo perfil aprovado podem completar a conexão.</p>
+                <p><strong>Perfil permitido:</strong> <code>hotspot</code>. O HBlink4 usa Package ID do RPTC e, como fallback, Software ID; as conexões atuais aparecem abaixo para conferência.</p>
+                <p>Esses campos são fornecidos pelo cliente. A classificação é uma regra operacional, não uma prova criptográfica de hardware físico.</p>
+                <div class="access-controls">
+                    <button id="enable-hotspot-access" type="button">Ativar</button>
+                    <button id="disable-hotspot-access" class="secondary" type="button">Desativar</button>
+                </div>
+                <p id="access-feedback" role="status" aria-live="polite"></p>
+                <div class="access-profile">
+                    <strong>Clientes conectados e perfil observado</strong>
+                    <ul id="access-clients"><li>Carregando conexões HBP...</li></ul>
+                </div>
+            </article>
+        </section>
+        <section aria-labelledby="activity-title">
+            <h2 id="activity-title">Atividade administrativa recente</h2>
+            <ul id="activity" class="activity">{{ACTIVITY}}</ul>
+        </section>
+    </main>
+    <dialog id="operator-dialog">
+        <form id="operator-form">
+            <h2 id="form-title">Adicionar operador</h2>
+            <label for="callsign">Indicativo</label><input id="callsign" name="callsign" required maxlength="10" autocomplete="off">
+            <label for="base-id">ID DMR base</label><input id="base-id" name="base_id" required inputmode="numeric" pattern="[0-9]{7}" maxlength="7">
+            <div class="form-pair">
+                <div><label for="essid-from">ESSID inicial</label><input id="essid-from" name="essid_from" type="number" min="0" max="99" value="0" required></div>
+                <div><label for="essid-to">ESSID final</label><input id="essid-to" name="essid_to" type="number" min="0" max="99" value="99" required></div>
+            </div>
+            <label class="check"><input id="active" name="active" type="checkbox" checked> Ativo</label>
+            <p id="range-preview" class="subtle">Faixa: -</p>
+            <div class="dialog-actions"><button id="cancel" class="secondary" type="button">Cancelar</button><button id="save" type="submit">Aplicar</button></div>
+        </form>
+    </dialog>
+    <div id="admin-data" data-csrf="{{MUTATION_CSRF}}" hidden></div>
+</body>
+</html>

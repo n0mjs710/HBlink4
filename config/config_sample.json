@@ -39,6 +39,15 @@
         "buffer_size": 65536
     },
 
+    "dynamic_talkgroups": {
+        "_comment": "Optional local TG command control. Disabled by default. When enabled, a PTT on slot/talkgroup joins or reactivates this hotspot's receive participation; a PTT on disconnect_talkgroup leaves receive for that hotspot only and is not forwarded as a normal call.",
+        "enabled": false,
+        "slot": 2,
+        "talkgroup": 100,
+        "disconnect_talkgroup": 4100,
+        "initial_active": true
+    },
+
     "repeater_configurations": {
         "_comment": "'default' applies to every repeater that connects. CHANGE THE PASSPHRASE -- it is the shared secret each repeater must be configured with. slot1_talkgroups/slot2_talkgroups are the talkgroups allowed on each timeslot; list the ones your network uses. To give particular repeaters different rules, add a 'patterns' list -- see config/config_advanced_sample.json.",
         "default": {

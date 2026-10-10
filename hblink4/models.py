@@ -342,6 +342,11 @@ class RepeaterState:
     # and overridden by a `UNIT=true|false` entry in RPTO if present.
     unit_calls_enabled: bool = False
 
+    # Optional dynamic talkgroup participation. When enabled by server config,
+    # a repeater/hotspot may stay connected while opting out of receiving the
+    # configured talkgroup. Defaults to active to preserve legacy behavior.
+    dynamic_talkgroup_active: bool = True
+
     # DMRD translation maps (inverses of each other; empty = no translation).
     # inbound_map:  local (slot,tgid) → network (slot,tgid) — applied when this
     #               repeater SENDS us traffic, converting its local addressing

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Entrada administrativa | Bueno DMR</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+    <main class="login-shell">
+        <a class="back-link" href="/">&larr; Painel público</a>
+        <div class="login-panel">
+            <p class="eyebrow">Bueno DMR</p>
+            <h1>Administração</h1>
+            <p class="subtle">Entre com sua conta administrativa.</p>
+            <p class="error" role="alert">{{ERROR}}</p>
+            <form method="post" action="/admin/login">
+                <input type="hidden" name="csrf" value="{{CSRF}}">
+                <label for="username">Usuário</label>
+                <input id="username" name="username" autocomplete="username" maxlength="64" required autofocus>
+                <label for="password">Senha</label>
+                <input id="password" name="password" type="password" autocomplete="current-password" required>
+                <button type="submit">Entrar</button>
+            </form>
+        </div>
+    </main>
+</body>
+</html>

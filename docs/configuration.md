@@ -306,6 +306,7 @@ The `connection_type_detection` section configures how connected devices are cat
 ```json
 {
     "connection_type_detection": {
+        "strict_hotspot_access": true,
         "description": "Categorize connections for dashboard display...",
         "hotspot_packages": [
             "mmdvm_hs", "dvmega", "zumspot", "jumbospot", "nanodv",
@@ -329,6 +330,7 @@ The `connection_type_detection` section configures how connected devices are cat
 
 | Setting | Type | Description |
 |---------|------|-------------|
+| `strict_hotspot_access` | boolean | Require an authenticated, structurally valid RPTC client classified as `hotspot` before it becomes connected; defaults to `true` in BuenoDMR. Only literal `false` disables the policy; missing or invalid values fail closed |
 | `hotspot_packages` | array | Package ID substrings that identify hotspots |
 | `network_packages` | array | Package ID substrings that identify network links |
 | `repeater_packages` | array | Package ID substrings that identify repeaters |
@@ -346,6 +348,15 @@ The `connection_type_detection` section configures how connected devices are cat
 - **Substring matching** is used (`mmdvm_hs` matches `MMDVM_MMDVM_HS_Dual_Hat`)
 - Network patterns are checked first, then hotspots, then repeaters
 - Generic `MMDVM` (exact match) defaults to repeater
+
+The `hotspot` category is a heuristic over client-supplied RPTC metadata, not
+hardware attestation. Strict Hotspot Access applies this category server-side
+after allowlist/ESSID and RPTK authentication, before the session becomes
+connected. Unknown metadata is denied while strict mode is enabled. Admin can
+toggle the flag through the authenticated, CSRF-protected control; the setting
+is persisted in this configuration and SQLite metadata, with backup and
+rollback around the HBlink4 restart. See [DMR access checks and origin limits](radio-access-security.md)
+for protocol fields, observed live values, and limitations.
 
 ### Common Package IDs
 
@@ -395,6 +406,62 @@ The `stream_timeout` and `stream_hang_time` settings control two different aspec
 - hang_time prevents slot hijacking during multi-transmission conversations
 
 See [Hang Time Documentation](hang_time.md) for detailed explanation of these features.
+
+## Dynamic Talkgroup Participation
+
+The optional `dynamic_talkgroups` section lets one talkgroup have local
+subscribe/disconnect behavior without making the disconnect TG routable.
+
+This is disabled by default. When enabled, a group voice PTT on the configured
+`slot`/`talkgroup` joins or reactivates only that connected repeater/hotspot for
+receiving that talkgroup. A group voice PTT on `disconnect_talkgroup` leaves
+locally: it is not emitted as a normal stream, is not forwarded to any other
+repeater/hotspot, and only disables receive participation for the sender.
+The HomeBrew connection remains authenticated and connected.
+
+```json
+"dynamic_talkgroups": {
+    "enabled": true,
+    "slot": 2,
+    "talkgroup": 100,
+    "disconnect_talkgroup": 4100,
+    "initial_active": true
+}
+```
+
+Options:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `enabled` | boolean | Enables dynamic participation. Default: `false` |
+| `slot` | number | Timeslot controlled by this feature. BuenoDMR uses `2` |
+| `talkgroup` | number | Talkgroup that activates/reactivates receive participation |
+| `disconnect_talkgroup` | number | Local command TG that deactivates receive participation and is never forwarded |
+| `initial_active` | boolean | Whether a newly connected repeater/hotspot starts active. Default: `true` |
+
+For a BuenoDMR TS2/TG100-only network, keep the normal repeater ACL restrictive:
+
+```json
+"repeater_configurations": {
+    "default": {
+        "passphrase": "CHANGE-ME",
+        "slot1_talkgroups": [],
+        "slot2_talkgroups": [100],
+        "trust": false
+    }
+}
+```
+
+Do not add TG4100 to `slot2_talkgroups`. TG4100 is handled before normal stream
+routing only when `dynamic_talkgroups.enabled=true`; otherwise it remains denied
+by the ordinary TG100-only ACL.
+
+For WPSD Custom DMR Network, expose both TGs to HBlink4:
+
+```ini
+TGRewrite0=2,100,2,100,1
+TGRewrite1=2,4100,2,4100,1
+```
 
 ## Blacklist Rules
 

@@ -10,13 +10,15 @@ import csv
 import socket
 import os
 import ipaddress
+import re
+import unicodedata
 import sys
 import atexit
 from datetime import datetime, date, timedelta
 from collections import deque
 from typing import Dict, List, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import logging
@@ -31,12 +33,58 @@ if __package__ in (None, ""):
     import dashboard  # noqa: F401  (parent package must be in sys.modules)
 
 from .user_db import UserDatabase, compute_next_refresh_seconds, _age_str
+from .admin.routes import router as admin_router, initialize_admin
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="HBlink4 Dashboard", version="1.1.0")
+app.include_router(admin_router)
+public_app = FastAPI(
+    title="Bueno DMR Public Site",
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+static_path = Path(__file__).parent / "static"
+
+
+def _security_headers(response, request):
+    browser_scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",", 1)[0].strip().lower()
+    connect_sources = "'self' wss:"
+    if browser_scheme != "https":
+        connect_sources += " ws:"
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        f"connect-src {connect_sources}; font-src 'self'; object-src 'none'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    if browser_scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return response
+
+
+@app.middleware("http")
+async def public_api_minimization(request, call_next):
+    """Expose only the deliberately sanitized public snapshot API."""
+    if request.url.path.startswith("/api/") and request.url.path != "/api/public/snapshot":
+        response = JSONResponse({"error": "Not found."}, status_code=404)
+    else:
+        response = await call_next(request)
+    return _security_headers(response, request)
+
+
+@public_app.middleware("http")
+async def public_site_security_headers(request, call_next):
+    return _security_headers(await call_next(request), request)
 
 # Load dashboard configuration
 def load_config() -> dict:
@@ -118,6 +166,7 @@ class DashboardState:
         self.last_heard: List[dict] = []  # Last heard users
         self.last_heard_stats: dict = {}  # User cache statistics
         self.websocket_clients: Set[WebSocket] = set()
+        self.public_websocket_clients: Set[WebSocket] = set()
         self.hblink_connected: bool = False  # Track HBlink4 connection status
         self.stats = {
             'total_calls_today': 0,      # Total RX calls (streams) received today
@@ -351,6 +400,248 @@ class DashboardState:
 state = DashboardState()
 
 
+_PUBLIC_CALLSIGN_RE = re.compile(r"^[A-Za-z0-9/-]{1,16}$")
+
+
+def _public_callsign(value):
+    """Allow only callsign-shaped strings in the public DTO."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().upper()
+    return value if _PUBLIC_CALLSIGN_RE.fullmatch(value) else None
+
+
+def _public_directory_text(value, limit):
+    """Allow short human-readable directory fields in the public view."""
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())[:limit]
+    if not cleaned or any(
+        unicodedata.category(char)[0] not in {"L", "M"}
+        and char not in " .'-" for char in cleaned
+    ):
+        return None
+    return cleaned
+
+
+def _public_timestamp(value):
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(value).astimezone().isoformat(timespec="seconds")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _public_speaker(source_id):
+    if type(source_id) is not int or source_id <= 0:
+        return None
+    speaker = {
+        "dmr_id": source_id,
+        "callsign": _public_callsign(state.user_db.get(source_id, "")),
+    }
+    profile_getter = getattr(state.user_db, "get_public_profile", None)
+    profile = profile_getter(source_id) if callable(profile_getter) else {}
+    if isinstance(profile, dict):
+        for key, limit in (("name", 80), ("city", 60), ("region", 40)):
+            value = _public_directory_text(profile.get(key), limit)
+            if value:
+                speaker[key] = value
+    return speaker
+
+
+def _public_ingress(repeater_id, repeater_callsign=None, operator_rows=()):
+    if type(repeater_id) is not int or repeater_id <= 0:
+        return None
+    repeater = state.repeaters.get(repeater_id, {})
+    result = {
+        "repeater_id": repeater_id,
+        "callsign": _public_callsign(repeater_callsign or repeater.get("callsign")),
+    }
+
+    # ESSID is meaningful only for an active, allowlisted BuenoDMR operator.
+    # A nine-digit repeater ID is base_id * 100 + its two-digit ESSID.
+    base_id, essid = divmod(repeater_id, 100)
+    allowed = any(
+        row.get("active") is True
+        and row.get("base_id") == base_id
+        and type(row.get("essid_from")) is int
+        and type(row.get("essid_to")) is int
+        and row["essid_from"] <= essid <= row["essid_to"]
+        for row in operator_rows
+    )
+    if allowed:
+        result["essid"] = f"{essid:02d}"
+    return result
+
+
+def build_public_snapshot():
+    """Project live dashboard internals into a small, allowlisted public DTO."""
+    active_streams = [
+        stream for stream in state.streams.values()
+        if stream.get("status") == "active"
+        and stream.get("slot") == 2
+        and stream.get("dst_id") == 100
+        and stream.get("call_type") == "group"
+        and not stream.get("is_assumed", False)
+        and not stream.get("is_data", False)
+    ]
+    active_repeater_ids = {
+        stream.get("repeater_id") for stream in active_streams
+        if isinstance(stream.get("repeater_id"), int)
+    }
+    connected_hotspots = [
+        (repeater_id, repeater)
+        for repeater_id, repeater in state.repeaters.items()
+        if repeater.get("status") == "connected"
+        and repeater.get("connection_type") == "hotspot"
+    ]
+
+    operator_rows = []
+    store = getattr(app.state, "admin_store", None)
+    if store:
+        try:
+            operator_rows = store.list_operators()
+        except Exception as exc:
+            logger.warning("Public operator projection unavailable: %s", type(exc).__name__)
+
+    hotspots = []
+    for repeater_id, repeater in connected_hotspots:
+        callsign = _public_callsign(repeater.get("callsign"))
+        if callsign:
+            hotspots.append({
+                "callsign": callsign,
+                "connected": True,
+                "tg100_active": repeater.get("dynamic_talkgroup_active") is True,
+                "transmitting": repeater_id in active_repeater_ids,
+            })
+
+    operators = [
+        {"callsign": _public_callsign(row.get("callsign"))}
+        for row in operator_rows
+        if row.get("active") and _public_callsign(row.get("callsign"))
+    ]
+
+    active_transmissions = []
+    for stream in active_streams:
+        repeater_id = stream.get("repeater_id")
+        speaker = _public_speaker(stream.get("rf_src") or stream.get("src_id"))
+        ingress = _public_ingress(repeater_id, operator_rows=operator_rows)
+        started_at = _public_timestamp(stream.get("start_time"))
+        if speaker is None or ingress is None or started_at is None:
+            continue
+        active_transmissions.append({
+            "speaker": speaker,
+            "ingress": ingress,
+            "talkgroup": stream["dst_id"],
+            "timeslot": stream["slot"],
+            "started_at": started_at,
+        })
+    active_transmissions.sort(key=lambda item: (item["started_at"], item["ingress"]["repeater_id"]))
+
+    activity = []
+    seen_streams = set()
+    for event in reversed(state.events):
+        if len(activity) >= 10:
+            break
+        data = event.get("data", {})
+        if (event.get("type") != "stream_end" or data.get("is_assumed")
+                or data.get("is_data") or data.get("call_type") != "group"
+                or data.get("slot") != 2 or data.get("dst_id") != 100):
+            continue
+        repeater_id = data.get("repeater_id")
+        stream_id = data.get("stream_id")
+        if type(repeater_id) is not int or not isinstance(stream_id, str):
+            continue
+        speaker = _public_speaker(data.get("rf_src") or data.get("src_id"))
+        ingress = _public_ingress(repeater_id, operator_rows=operator_rows)
+        ended_at = _public_timestamp(event.get("timestamp"))
+        duration = data.get("duration")
+        if (speaker is None or ingress is None or ended_at is None
+                or type(duration) not in (int, float) or duration < 0):
+            continue
+        ended_epoch = event["timestamp"]
+        identity = (repeater_id, data.get("slot"), stream_id,
+                    round(ended_epoch - duration, 3))
+        if identity in seen_streams:
+            continue
+        seen_streams.add(identity)
+        started_at = _public_timestamp(ended_epoch - duration)
+        if started_at is None:
+            continue
+        activity.append({
+            "speaker": speaker,
+            "ingress": ingress,
+            "talkgroup": data["dst_id"],
+            "timeslot": data["slot"],
+            "duration_seconds": round(duration, 2),
+            "started_at": started_at,
+            "ended_at": ended_at,
+        })
+
+    return {
+        "state": {
+            "dashboard": "online",
+            "radio": "online" if state.hblink_connected else "offline",
+        },
+        "metrics": {
+            "hotspots_connected": len(connected_hotspots),
+            "tg100_active_hotspots": sum(
+                1 for _, repeater in connected_hotspots
+                if repeater.get("dynamic_talkgroup_active") is True
+            ),
+            "tg100_transmitting": bool(active_streams),
+            "operators_authorized": len(operators),
+        },
+        "hotspots": hotspots,
+        "active_transmissions": active_transmissions,
+        "activity": activity,
+        "operators": operators,
+    }
+
+
+def _radio_metadata_text(value, limit=64):
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value.replace("\x00", "") if ch.isprintable()).strip()[:limit]
+
+
+def build_radio_access_observation():
+    """Return only the live HBP profile fields needed by the private Admin UI."""
+    clients = []
+    for repeater_id, repeater in state.repeaters.items():
+        if repeater.get("status") != "connected":
+            continue
+        callsign = _public_callsign(repeater.get("callsign")) or ""
+        category = repeater.get("connection_type")
+        if category not in {"hotspot", "repeater", "network", "unknown"}:
+            category = "unknown"
+        clients.append({
+            "repeater_id": repeater_id if isinstance(repeater_id, int) else None,
+            "callsign": callsign,
+            "connection_type": category,
+            "software_id": _radio_metadata_text(repeater.get("software_id")),
+            "package_id": _radio_metadata_text(repeater.get("package_id")),
+        })
+    clients.sort(key=lambda item: (item["callsign"], item["repeater_id"] or 0))
+    return {"hblink_connected": state.hblink_connected, "clients": clients[:100]}
+
+
+async def _broadcast_public_snapshot(message_type="snapshot"):
+    if not state.public_websocket_clients:
+        return
+    if message_type not in {"snapshot", "voice_started", "voice_ended"}:
+        message_type = "snapshot"
+    message = json.dumps({"type": message_type, "data": build_public_snapshot()})
+    disconnected = set()
+    for client in tuple(state.public_websocket_clients):
+        try:
+            await client.send_text(message)
+        except Exception:
+            disconnected.add(client)
+    state.public_websocket_clients -= disconnected
+
+
 async def broadcast_hblink_status(connected: bool):
     """Broadcast HBlink4 connection status to all WebSocket clients"""
     state.hblink_connected = connected
@@ -390,6 +681,7 @@ async def broadcast_hblink_status(connected: bool):
     
     # Clean up disconnected clients
     state.websocket_clients -= disconnected_clients
+    await _broadcast_public_snapshot()
 
 
 class TCPProtocol(asyncio.Protocol):
@@ -693,6 +985,31 @@ class EventReceiver:
                 'received_at': event['timestamp']
             }
             logger.debug(f"Repeater details received: {data['repeater_id']} - Pattern: {data.get('matched_pattern', 'Unknown')}")
+
+        elif event_type == 'client_admission_rejected':
+            store = getattr(app.state, "admin_store", None)
+            repeater_id = data.get("repeater_id")
+            classification = data.get("classification")
+            reason = data.get("reason")
+            callsign = _public_callsign(data.get("callsign"))
+            allowed_classes = {"hotspot", "repeater", "network", "unknown"}
+            allowed_reasons = {"profile_not_allowed", "invalid_rptc_length"}
+            if (store and type(repeater_id) is int and 0 < repeater_id <= 0xFFFFFFFF
+                    and classification in allowed_classes and reason in allowed_reasons):
+                timestamp = event.get("timestamp")
+                if isinstance(timestamp, (int, float)):
+                    try:
+                        created_at = datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
+                    except (OverflowError, OSError, ValueError):
+                        created_at = None
+                else:
+                    created_at = None
+                try:
+                    store.record_client_admission_rejected(
+                        repeater_id, callsign, classification, reason, created_at
+                    )
+                except Exception as exc:
+                    logger.warning("Admission audit unavailable: %s", type(exc).__name__)
         
         elif event_type == 'repeater_options_updated':
             # RPTO received - update TG lists in real-time
@@ -702,6 +1019,23 @@ class EventReceiver:
                 state.repeaters[data['repeater_id']]['rpto_received'] = data.get('rpto_received', False)
                 state.repeaters[data['repeater_id']]['translations'] = data.get('translations', [])
                 logger.info(f"Repeater options updated via RPTO: {data['repeater_id']}")
+
+        elif event_type == 'dynamic_talkgroup_state':
+            if data['repeater_id'] in state.repeaters:
+                dynamic_talkgroup = data.get('dynamic_talkgroup')
+                if dynamic_talkgroup:
+                    state.repeaters[data['repeater_id']]['dynamic_talkgroup'] = dynamic_talkgroup
+                    state.repeaters[data['repeater_id']]['dynamic_talkgroup_active'] = dynamic_talkgroup.get('active', True)
+                else:
+                    state.repeaters[data['repeater_id']]['dynamic_talkgroup_active'] = data.get('active', True)
+                state.repeaters[data['repeater_id']]['last_activity'] = event['timestamp']
+            logger.info(
+                "Dynamic TG %s: repeater %s TG%s active=%s",
+                data.get('action', data.get('reason', 'state')),
+                data.get('repeater_id'),
+                data.get('talkgroup'),
+                data.get('active')
+            )
         
         elif event_type == 'stream_start':
             # Handle both repeater streams and outbound connection streams
@@ -957,23 +1291,44 @@ class EventReceiver:
     
     async def send_to_clients(self, event: dict):
         """Send event to all connected WebSocket clients"""
-        if not state.websocket_clients:
-            return
-        
-        message = json.dumps(event)
-        disconnected = set()
-        
-        for client in state.websocket_clients:
-            try:
-                await client.send_text(message)
-            except:
-                disconnected.add(client)
-        
-        # Remove disconnected clients
-        state.websocket_clients -= disconnected
+        if state.websocket_clients:
+            message = json.dumps(event)
+            disconnected = set()
+            for client in state.websocket_clients:
+                try:
+                    await client.send_text(message)
+                except Exception:
+                    disconnected.add(client)
+            state.websocket_clients -= disconnected
+        event_type = event.get("type")
+        data = event.get("data", {})
+        public_voice_event = (
+            event_type in {"stream_start", "stream_end"}
+            and data.get("call_type") == "group"
+            and data.get("slot") == 2
+            and data.get("dst_id") == 100
+            and not data.get("is_assumed")
+            and not data.get("is_data")
+            and type(data.get("repeater_id")) is int
+        )
+        if event_type != "stream_update":
+            message_type = (
+                "voice_started" if event_type == "stream_start" and public_voice_event
+                else "voice_ended" if event_type == "stream_end" and public_voice_event
+                else "snapshot"
+            )
+            await _broadcast_public_snapshot(message_type)
 
 
 # REST API endpoints
+@app.get("/api/public/snapshot")
+async def get_public_snapshot():
+    return JSONResponse(build_public_snapshot(), headers={"Cache-Control": "no-store"})
+
+
+public_app.add_api_route("/api/public/snapshot", get_public_snapshot, methods=["GET"])
+
+
 @app.get("/api/config")
 async def get_config():
     """Get dashboard configuration"""
@@ -1104,7 +1459,8 @@ async def get_repeater_details(repeater_id: int):
             "rpto_received": repeater.get('rpto_received', False),
             "slot1_talkgroups": repeater.get('slot1_talkgroups') if 'slot1_talkgroups' in repeater else None,
             "slot2_talkgroups": repeater.get('slot2_talkgroups') if 'slot2_talkgroups' in repeater else None,
-            "talkgroups_source": "RPTO" if repeater.get('rpto_received') else "Pattern/Config"
+            "talkgroups_source": "RPTO" if repeater.get('rpto_received') else "Pattern/Config",
+            "dynamic_talkgroup": repeater.get('dynamic_talkgroup')
         },
         "metadata": {
             "description": details.get('description', ''),
@@ -1121,49 +1477,57 @@ async def get_repeater_details(repeater_id: int):
 
 
 # WebSocket endpoint
+@app.websocket("/ws/public")
+async def public_websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    state.public_websocket_clients.add(websocket)
+    try:
+        await websocket.send_json({"type": "snapshot", "data": build_public_snapshot()})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.debug("Public WebSocket ended: %s", type(exc).__name__)
+    finally:
+        state.public_websocket_clients.discard(websocket)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket connection for real-time updates"""
-    await websocket.accept()
-    state.websocket_clients.add(websocket)
-    logger.info(f"🌐 WebSocket client connected (total: {len(state.websocket_clients)})")
-    
-    # Log current state for debugging
-    logger.info(f"📊 Sending initial_state: hblink_connected={state.hblink_connected}, repeaters={len(state.repeaters)}, streams={len(state.streams)}")
-    
-    # Send initial state
-    await websocket.send_json({
-        'type': 'initial_state',
-        'data': {
-            'repeaters': list(state.repeaters.values()),
-            'repeater_details': state.repeater_details,
-            'outbounds': list(state.outbounds.values()),
-            'openbridges': list(state.openbridges.values()),
-            'streams': list(state.streams.values()),
-            'events': list(state.events)[-50:],
-            'stats': state.stats,
-            'last_heard': state.last_heard,
-            'hblink_connected': state.hblink_connected,
-            'user_db_status': state.user_db.status_dict()
-        }
-    })
-    
-    try:
-        while True:
-            # Keep connection alive (client can send ping)
-            data = await websocket.receive_text()
-            if data == 'ping':
-                await websocket.send_text('pong')
-    except WebSocketDisconnect:
-        logger.debug(f"WebSocket client disconnected (remaining: {len(state.websocket_clients) - 1})")
-    except asyncio.CancelledError:
-        # Expected during shutdown - don't log as error
-        logger.debug(f"WebSocket task cancelled during shutdown")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-    finally:
-        # Always clean up, regardless of how we exited
-        state.websocket_clients.discard(websocket)
+    """Legacy raw telemetry socket is intentionally unavailable to visitors."""
+    await websocket.close(code=1008, reason="Use /ws/public")
+
+
+public_app.add_api_websocket_route("/ws/public", public_websocket_endpoint)
+
+
+@public_app.websocket("/ws")
+async def public_legacy_websocket_endpoint(websocket: WebSocket):
+    await websocket.close(code=1008, reason="Use /ws/public")
+
+
+@public_app.get("/", response_class=HTMLResponse)
+async def public_dashboard():
+    """Serve the visitor page without exposing an Admin navigation link."""
+    html_path = static_path / "dashboard.html"
+    if not html_path.exists():
+        return HTMLResponse("<h1>Bueno DMR</h1><p>Dashboard unavailable.</p>", status_code=404)
+    html = html_path.read_text(encoding="utf-8")
+    html = html.replace('<a class="admin-link" href="/admin">Admin</a>', "")
+    return HTMLResponse(html)
+
+
+@public_app.get("/static/dashboard.css")
+async def public_dashboard_css():
+    return FileResponse(static_path / "dashboard.css", media_type="text/css")
+
+
+@public_app.get("/static/dashboard.js")
+async def public_dashboard_js():
+    return FileResponse(static_path / "dashboard.js", media_type="text/javascript")
 
 
 # Serve frontend
@@ -1173,19 +1537,44 @@ async def dashboard():
     html_path = Path(__file__).parent / 'static' / 'dashboard.html'
     if not html_path.exists():
         return HTMLResponse("<h1>Dashboard HTML not found</h1><p>Please create dashboard/static/dashboard.html</p>", status_code=404)
-    with open(html_path) as f:
+    with open(html_path, encoding='utf-8') as f:
         return HTMLResponse(f.read())
 
 
 # Mount static files
-static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+
+def _start_public_site_listener():
+    """Start an isolated loopback listener for the public-only ASGI app."""
+    if os.environ.get("BUENODMR_PUBLIC_WEB") != "1":
+        return
+    import uvicorn
+
+    config = uvicorn.Config(
+        public_app,
+        host="127.0.0.1",
+        port=8081,
+        loop="asyncio",
+        lifespan="off",
+        log_level="warning",
+        access_log=False,
+    )
+    listener = uvicorn.Server(config)
+    # The main dashboard Uvicorn process owns OS signal handling.
+    listener.install_signal_handlers = lambda: None
+    app.state.public_site_server = listener
+    app.state.public_site_task = asyncio.create_task(listener.serve())
 
 
 @app.on_event("startup")
 async def startup_event():
     """Start event receiver on startup"""
+    initialize_admin(app)
+    app.state.public_snapshot_broadcaster = _broadcast_public_snapshot
+    app.state.radio_access_observer = build_radio_access_observation
+    _start_public_site_listener()
     receiver_config = dashboard_config.get('event_receiver', {})
 
     # These are bind addresses -- hblink4 connects in to us. They were once named
@@ -1237,6 +1626,11 @@ async def startup_event():
 async def shutdown_event():
     """Clean shutdown - save data"""
     logger.info("💾 Dashboard shutting down, saving data...")
+    public_server = getattr(app.state, "public_site_server", None)
+    public_task = getattr(app.state, "public_site_task", None)
+    if public_server and public_task:
+        public_server.should_exit = True
+        await public_task
     save_persistent_data()
     logger.info("✅ Dashboard shutdown complete")
 

@@ -9,3 +9,4 @@ uvicorn[standard]>=0.24.0
 
 # WebSocket support (included in uvicorn[standard])
 websockets>=12.0
+argon2-cffi>=23.1.0  # Argon2id hashes for BuenoDMR administrative passwords

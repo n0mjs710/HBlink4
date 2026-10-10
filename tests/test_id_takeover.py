@@ -38,6 +38,7 @@ REMOTE = ('198.51.100.77', 61000)        # a genuinely different host, different
 _CONFIG = {
     'global': {'user_cache': {'timeout': 600}},
     'dashboard': {'enabled': False},
+    'connection_type_detection': {'strict_hotspot_access': True},
     'repeater_configurations': {
         'patterns': [
             {
@@ -117,9 +118,18 @@ class TakeoverTestCase(unittest.TestCase):
         pending = self.hb._pending_logins.get(RADIO_ID)
         if pending is not None:
             self.assertIsNot(pending, self.hb._repeaters.get(RADIO_ID))
-            self.assertEqual(pending.connection_state, 'login')
+            self.assertIn(pending.connection_state, ('login', 'config'))
             self.assertFalse(pending.connected)
-            self.assertFalse(pending.authenticated)
+            if pending.connection_state == 'login':
+                self.assertFalse(pending.authenticated)
+
+    def admit_pending(self, addr):
+        """Complete the authenticated claimant's valid WPSD RPTC admission."""
+        packet = bytearray(b' ' * 302)
+        packet[:16] = b'RPTC' + RADIO_ID + b'W1AW    '
+        packet[222:262] = b'20260911_WPSD'.ljust(40, b' ')
+        packet[262:302] = b'MMDVM_MMDVM_HS_Dual_Hat'.ljust(40, b' ')
+        self.hb._handle_config(bytes(packet), addr)
 
     # -- the auth gate ------------------------------------------------------
 
@@ -147,10 +157,17 @@ class TakeoverTestCase(unittest.TestCase):
 
         self.hb._handle_auth_response(RADIO_ID, self.auth_hash(salt), CLAIMANT)
 
+        self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, INCUMBENT)
+        self.assertEqual(self.hb._pending_logins[RADIO_ID].sockaddr, CLAIMANT)
+        self.assertTrue(self.hb._pending_logins[RADIO_ID].authenticated)
+        self.assertEqual(self.hb._pending_logins[RADIO_ID].connection_state, 'config')
+        self.assertEqual([p for p in self.tx.packets_to(INCUMBENT) if p.startswith(MSTNAK)], [])
+
+        self.admit_pending(CLAIMANT)
         promoted = self.hb._repeaters[RADIO_ID]
         self.assertEqual(promoted.sockaddr, CLAIMANT)
         self.assertTrue(promoted.authenticated)
-        self.assertEqual(promoted.connection_state, 'config')
+        self.assertEqual(promoted.connection_state, 'connected')
         self.assertNotIn(RADIO_ID, self.hb._pending_logins,
                          'claimant must not remain pending after promotion')
         # Old address is told to clean up.
@@ -232,6 +249,9 @@ class TakeoverTestCase(unittest.TestCase):
 
         # The challenge holder authenticates and takes over.
         self.hb._handle_auth_response(RADIO_ID, self.auth_hash(salt_b), OTHER)
+        self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, INCUMBENT)
+        self.assertEqual(self.hb._pending_logins[RADIO_ID].sockaddr, OTHER)
+        self.admit_pending(OTHER)
         self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, OTHER)
         self.assert_single_routable()
 
@@ -273,6 +293,8 @@ class TakeoverTestCase(unittest.TestCase):
         self.assertEqual(salt_first, salt_retry,
                          'retry from the same address should reuse the salt')
         self.hb._handle_auth_response(RADIO_ID, self.auth_hash(salt_first), CLAIMANT)
+        self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, INCUMBENT)
+        self.admit_pending(CLAIMANT)
         self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, CLAIMANT)
         self.assert_single_routable()
 
@@ -344,6 +366,9 @@ class TakeoverTestCase(unittest.TestCase):
 
         # B proves the passphrase too and takes it.
         self.hb._handle_auth_response(RADIO_ID, self.auth_hash(salt_b), OTHER)
+        self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, CLAIMANT)
+        self.assertEqual(self.hb._pending_logins[RADIO_ID].sockaddr, OTHER)
+        self.admit_pending(OTHER)
         self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, OTHER)
         self.assert_single_routable()
 
@@ -357,8 +382,11 @@ class TakeoverTestCase(unittest.TestCase):
         self.assertNotIn(RADIO_ID, self.hb._repeaters)
 
         self.hb._handle_auth_response(RADIO_ID, self.auth_hash(salt), CLAIMANT)
+        self.assertNotIn(RADIO_ID, self.hb._repeaters)
+        self.assertEqual(self.hb._pending_logins[RADIO_ID].connection_state, 'config')
+        self.admit_pending(CLAIMANT)
         self.assertEqual(self.hb._repeaters[RADIO_ID].sockaddr, CLAIMANT)
-        self.assertEqual(self.hb._repeaters[RADIO_ID].connection_state, 'config')
+        self.assertEqual(self.hb._repeaters[RADIO_ID].connection_state, 'connected')
         self.assert_single_routable()
 
     def test_pending_claimant_is_never_a_forwarding_target(self):
@@ -494,8 +522,11 @@ class ReconnectReportingTestCase(unittest.TestCase):
         state.connection_state = 'config'
         self.hb._repeaters[RADIO_ID] = state
 
-        config_packet = b'RPTC' + RADIO_ID + b'W1AW    ' + (b' ' * 294)
-        self.hb._handle_config(config_packet, CLAIMANT)
+        config_packet = bytearray(b' ' * 302)
+        config_packet[:16] = b'RPTC' + RADIO_ID + b'W1AW    '
+        config_packet[222:262] = b'20260911_WPSD'.ljust(40, b' ')
+        config_packet[262:302] = b'MMDVM_MMDVM_HS_Dual_Hat'.ljust(40, b' ')
+        self.hb._handle_config(bytes(config_packet), CLAIMANT)
 
         self.assertEqual(state.connection_state, 'connected')
         self.assertLess(time() - state.connect_time, 5,

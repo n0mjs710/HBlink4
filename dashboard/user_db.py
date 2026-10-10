@@ -1,7 +1,7 @@
 """
 User database lifecycle for the dashboard.
 
-Owns the radio_id -> callsign mapping: loads a JSON snapshot at startup,
+Owns the radio_id -> callsign/profile mapping: loads a JSON snapshot at startup,
 refreshes from radioid.net's static CSV dump on a daily schedule, and hot-swaps
 the in-memory dict so stream_start callsign lookups pick up new data without a
 dashboard restart.
@@ -13,8 +13,8 @@ The pipeline is three independent stages:
 Failure in any stage is non-fatal; the last known-good snapshot keeps serving.
 
 Data contract:
-    - Snapshot file: JSON object mapping stringified radio_id to callsign.
-      {"1234567": "WX1YZ", "1234568": "VA3ABC", ...}
+    - Snapshot file: JSON object mapping stringified radio_id to callsign or
+      [callsign, public name, city, region]. Legacy callsign-only files load.
     - Sidecar metadata: {last_modified_header, row_count, refresh_timestamp,
       source_url, source_status}
 """
@@ -35,7 +35,7 @@ import urllib.request
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class UserDbMeta:
     row_count: int = 0
     source_status: str = "unknown"     # "ok", "not_modified", "error", "unknown"
     last_error: str = ""               # Human-readable error from last failed attempt
+    profile_schema: int = 0             # 1 once the snapshot includes public directory fields
 
 
 class UserDatabase:
@@ -74,14 +75,24 @@ class UserDatabase:
         self._data_dir = Path(data_dir)
         self._snapshot_path = self._data_dir / "user_db.json"
         self._meta_path = self._data_dir / "user_db.meta.json"
-        self._data: Dict[int, str] = {}
+        self._data: Dict[int, Union[str, tuple]] = {}
         self._meta = UserDbMeta()
         self._lock = asyncio.Lock()  # Serializes refresh attempts
 
     # ---------------------------------------------------------------- reads
 
     def get(self, radio_id: int, default: str = "") -> str:
-        return self._data.get(radio_id, default)
+        entry = self._data.get(radio_id)
+        if isinstance(entry, str):
+            return entry
+        return entry[0] if isinstance(entry, (list, tuple)) and entry else default
+
+    def get_public_profile(self, radio_id: int) -> dict:
+        """Optional directory fields; no address or contact fields enter the cache."""
+        entry = self._data.get(radio_id)
+        if not isinstance(entry, (list, tuple)) or len(entry) != 4:
+            return {}
+        return {key: value for key, value in zip(("name", "city", "region"), entry[1:]) if value}
 
     def __len__(self) -> int:
         return len(self._data)
@@ -119,7 +130,12 @@ class UserDatabase:
                 with open(self._snapshot_path) as f:
                     raw = json.load(f)
                 # JSON keys are strings — re-key to int for hot-path lookup.
-                self._data = {int(k): v for k, v in raw.items()}
+                self._data = {
+                    int(k): tuple(v) if isinstance(v, list) and len(v) == 4 else v
+                    for k, v in raw.items()
+                    if isinstance(v, str) or (isinstance(v, list) and len(v) == 4
+                                              and all(isinstance(item, str) for item in v))
+                }
                 logger.info(
                     f"📘 Loaded user database snapshot: {len(self._data):,} entries "
                     f"(refreshed {_age_str(self._meta.refresh_timestamp)} ago)"
@@ -177,7 +193,8 @@ class UserDatabase:
             status, body, last_modified = _http_get_with_conditional(
                 source_url,
                 user_agent=user_agent,
-                if_modified_since=self._meta.last_modified_header or None,
+                if_modified_since=(self._meta.last_modified_header or None)
+                if self._meta.profile_schema >= 1 else None,
             )
         except Exception as e:
             msg = f"download failed: {e}"
@@ -209,7 +226,7 @@ class UserDatabase:
 
         # ------ Stage 2: filter
         try:
-            new_data = filter_rows_from_csv_bytes(body, filter_cfg)
+            new_data = filter_profile_rows_from_csv_bytes(body, filter_cfg)
         except Exception as e:
             msg = f"filter failed: {e}"
             logger.warning(f"⚠️ user_db refresh: {msg}")
@@ -245,6 +262,7 @@ class UserDatabase:
         old_rows = len(self._data)
         self._data = new_data
         self._meta.row_count = len(new_data)
+        self._meta.profile_schema = 1
         self._meta.last_modified_header = last_modified or ""
         self._meta.refresh_timestamp = time.time()
         self._meta.source_status = "ok"
@@ -259,7 +277,7 @@ class UserDatabase:
 
     # -------------------------------------------------------- disk helpers
 
-    def _write_snapshot_atomic(self, data: Dict[int, str]) -> None:
+    def _write_snapshot_atomic(self, data: Dict[int, Union[str, tuple]]) -> None:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._snapshot_path.with_suffix(".json.tmp")
         # JSON keys must be strings; stringify ids. Compact separators save ~20%.
@@ -295,6 +313,21 @@ def filter_rows_from_csv_bytes(body: bytes, filter_cfg: dict) -> Dict[int, str]:
             or null
         radio_id_ranges: list of [low, high] inclusive int pairs, or null
     """
+    return _filter_rows_from_csv_bytes(body, filter_cfg, include_profile=False)
+
+
+def filter_profile_rows_from_csv_bytes(body: bytes, filter_cfg: dict) -> Dict[int, Union[str, tuple]]:
+    """Keep only the directory columns approved for public identification."""
+    return _filter_rows_from_csv_bytes(body, filter_cfg, include_profile=True)
+
+
+def _directory_field(value: str, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:limit]
+
+
+def _filter_rows_from_csv_bytes(body: bytes, filter_cfg: dict, include_profile: bool):
     countries = filter_cfg.get("countries", ["United States", "Canada"])
     allow_any_country = countries == "all"
     country_set = set(countries) if not allow_any_country else set()
@@ -321,7 +354,7 @@ def filter_rows_from_csv_bytes(body: bytes, filter_cfg: dict) -> Dict[int, str]:
             f"CSV missing required columns {required}; got {reader.fieldnames!r}"
         )
 
-    out: Dict[int, str] = {}
+    out = {}
     for row in reader:
         if not allow_any_country:
             if row.get("COUNTRY", "").strip() not in country_set:
@@ -343,7 +376,15 @@ def filter_rows_from_csv_bytes(body: bytes, filter_cfg: dict) -> Dict[int, str]:
             if not any(lo <= radio_id <= hi for lo, hi in id_ranges):
                 continue
 
-        out[radio_id] = callsign
+        if include_profile:
+            first = _directory_field(row.get("FIRST_NAME"), 40)
+            last = _directory_field(row.get("LAST_NAME"), 40)
+            name = " ".join(part for part in (first, last) if part)[:80]
+            city = _directory_field(row.get("CITY"), 60)
+            region = _directory_field(row.get("STATE"), 40)
+            out[radio_id] = (callsign, name, city, region) if name or city or region else callsign
+        else:
+            out[radio_id] = callsign
 
     return out
 

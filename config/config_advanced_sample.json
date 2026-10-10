@@ -25,7 +25,8 @@
         }
     },
     "connection_type_detection": {
-        "_comment": "Categorize connections for dashboard display (📶 Repeaters, 📱 Hotspots, 🔗 Network Inbound, ❓ Other). Matching is case-insensitive and uses substring matching against package_id (primary) or software_id (fallback). Omit this section entirely to use these same values as built-in defaults.",
+        "_comment": "Categorize clients using self-reported RPTC metadata. BuenoDMR strict hotspot access defaults to true and denies non-hotspot/unknown clients after authentication and valid RPTC. The category is not hardware attestation.",
+        "strict_hotspot_access": true,
         "hotspot_packages": [
             "mmdvm_hs", "dvmega", "zumspot", "jumbospot", "nanodv",
             "openspot", "dmo", "simplex"
@@ -53,6 +54,14 @@
         "port": 8765,
         "unix_socket": "/tmp/hblink4.sock",
         "buffer_size": 65536
+    },
+    "dynamic_talkgroups": {
+        "_comment": "Optional local join/leave control for one talkgroup. Disabled by default. A group voice PTT on slot/talkgroup joins this connection for receive; a group voice PTT on disconnect_talkgroup leaves receive for this connection only and is consumed locally.",
+        "enabled": false,
+        "slot": 2,
+        "talkgroup": 100,
+        "disconnect_talkgroup": 4100,
+        "initial_active": true
     },
     "blacklist": {
         "_comment": "EXAMPLE RANGES -- these IDs are invented for illustration. Replace them with IDs you actually want to refuse, or omit the section entirely.",

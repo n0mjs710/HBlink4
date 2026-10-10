@@ -106,9 +106,16 @@ A fourth, transient condition exists that is not a state of a registered repeate
 
    Note: All string fields are fixed length and should be null-padded if shorter than their allocated length.
 
-   The Software ID and Package ID fields are also used to identify what kind of
-   device is connecting (hotspot, repeater, etc.); Package ID is consulted first
-   and Software ID is the fallback.
+   HBlink4 uses Software ID and Package ID to derive a descriptive category
+   (`hotspot`, `repeater`, `network`, or `unknown`); Package ID is consulted
+   first and Software ID is the fallback. These strings are client-supplied,
+   forgeable metadata, not hardware identity.
+
+   With BuenoDMR Strict Hotspot Access enabled, the server requires this RPTC
+   to be exactly 302 bytes and the derived category to be `hotspot` before it
+   acknowledges configuration and marks the session `connected`. Unknown and
+   other categories are rejected. DMRD is accepted only from connected
+   sessions. See [DMR access checks and origin limits](radio-access-security.md).
 
 6. **RPTCL (Repeater Close)**
    - Direction: Repeater → Server
@@ -400,15 +407,21 @@ Claimant                   Server                    Incumbent
    |<---- RPTACK + salt -----|                            |
    |                         |                            |
    |--------- RPTK --------->|                            |
-   |                         |--- MSTNAK ---------------->| (only on success)
    |<-- RPTACK + repeater_id-|                            |
+   |                         | (claimant waits for RPTC;  |
+   |                         |  incumbent still active)   |
+   |--------- valid RPTC --->|                            |
+   |                         |--- MSTNAK ---------------->| (after admission)
 ```
 
-- Until a correct RPTK arrives, the incumbent's registration is untouched, so an
-  unauthenticated packet bearing a known repeater ID cannot knock a repeater off
-  the network.
+- The incumbent stays registered through authentication and remains active until
+  the claimant supplies a structurally valid RPTC and passes the configured
+  admission policy.
 - On a wrong passphrase or no matching configuration, the claimant gets MSTNAK
   and the pending login is discarded; the incumbent keeps running.
+- A malformed or disallowed RPTC is rejected and discarded without evicting the
+  incumbent. If the incumbent has already timed out, a successful claimant is
+  promoted only after its RPTC passes admission.
 - An unanswered challenge is expired after 30 seconds.
 - A login from the incumbent's own address is an ordinary reconnect and takes
   the normal path, re-sending the same salt while in the `login` state.
