@@ -2548,6 +2548,51 @@
                     updateOpenbridges(state.openbridges);
                     playAlertTone();
                     break;
+
+                case 'openbridge_connected':
+                    // OBP trunk is up. There is no handshake to observe — "up"
+                    // means the socket is bound and the trunk is configured, so
+                    // this event is also re-sent on every sync_request. Treat it
+                    // as idempotent (upsert, no tone) rather than an arrival.
+                    // connected_at comes from the event envelope, matching what
+                    // the server stamps on its own copy, so the card can show uptime.
+                    {
+                        const obpIdx = state.openbridges.findIndex(o => o.connection_name === data.connection_name);
+                        if (obpIdx >= 0) {
+                            state.openbridges[obpIdx] = {
+                                ...state.openbridges[obpIdx], ...data,
+                                status: 'connected',
+                                connected_at: state.openbridges[obpIdx].connected_at || event.timestamp,
+                                last_activity: event.timestamp
+                            };
+                        } else {
+                            state.openbridges.push({
+                                ...data,
+                                status: 'connected',
+                                connected_at: event.timestamp,
+                                last_activity: event.timestamp
+                            });
+                        }
+                        updateOpenbridges(state.openbridges);
+                    }
+                    break;
+
+                case 'openbridge_disconnected':
+                    // Not emitted by the core today (a bound socket has nothing to
+                    // drop), but the server already handles it — wire the browser
+                    // to match so the card follows if that ever changes.
+                    {
+                        const obpDownIdx = state.openbridges.findIndex(o => o.connection_name === data.connection_name);
+                        if (obpDownIdx >= 0) {
+                            state.openbridges[obpDownIdx] = {
+                                ...state.openbridges[obpDownIdx], ...data,
+                                status: 'disconnected',
+                                disconnected_at: event.timestamp
+                            };
+                            updateOpenbridges(state.openbridges);
+                        }
+                    }
+                    break;
             }
         }
         
