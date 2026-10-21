@@ -100,7 +100,7 @@ the main HBlink4 config (JSON). See also
 | `network_id` | This side's OBP network ID. Stamped into the DMRD RptrId on egress **only** when `preserve_source_peer` is `false`. |
 | `local_address` / `local_port` | Local bind for this trunk's own UDP socket (one socket per OBP). |
 | `target_address` / `target_port` | The remote OBP peer. Ingress is accepted only from this socket. |
-| `passphrase` | Shared secret; keys the per-packet HMAC-SHA1. Must match the peer. |
+| `passphrase` | Shared secret; keys the per-packet HMAC-SHA1. Up to 80 characters, used whole. Must match the peer. |
 | `preserve_source_peer` | `true` (default): keep the true source peer/repeater ID in the egress RptrId (transparency; lets a downstream dashboard show the real origin). `false`: overwrite with `network_id` (Brandmeister-spec behavior). Set `false` for strict-spec peers. |
 | `talkgroup_slots` | Canonical **TGID → local TS** map. Does triple duty: ownership, fail-closed filter, and timeslot assignment. |
 

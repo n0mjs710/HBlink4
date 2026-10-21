@@ -66,6 +66,21 @@ def test_missing_required_field_is_fatal():
              "target_port": 1, "passphrase": "p", "talkgroup_slots": {"31": "1"}}]})
 
 
+
+def test_passphrase_up_to_80_chars_used_whole():
+    o = _obp("A", {"31": "1"})
+    o["passphrase"] = "k" * 80
+    cfgs = C.parse_openbridge_connections({"openbridge_connections": [o]})
+    assert cfgs[0].passphrase == "k" * 80
+
+
+def test_passphrase_over_80_chars_is_fatal():
+    o = _obp("A", {"31": "1"})
+    o["passphrase"] = "k" * 81
+    with pytest.raises(SystemExit):
+        C.parse_openbridge_connections({"openbridge_connections": [o]})
+
+
 # ---- state model ------------------------------------------------------------
 
 def test_state_ownership_and_streams():

@@ -77,6 +77,9 @@ class OutboundConnectionConfig:
             raise ValueError(f"Outbound connection '{self.name}' has invalid port: {self.port}")
 
 
+OBP_PASSPHRASE_MAX = 80
+
+
 @dataclass
 class OpenBridgeConnectionConfig:
     """Configuration for an OpenBridge (OBP) trunk connection.
@@ -112,6 +115,9 @@ class OpenBridgeConnectionConfig:
             raise ValueError(f"OpenBridge connection '{self.name}' must have a target_address")
         if not self.passphrase:
             raise ValueError(f"OpenBridge connection '{self.name}' must have a passphrase")
+        if len(self.passphrase) > OBP_PASSPHRASE_MAX:
+            raise ValueError(f"OpenBridge connection '{self.name}' passphrase is "
+                             f"{len(self.passphrase)} characters; the maximum is {OBP_PASSPHRASE_MAX}")
         for label, p in (('local_port', self.local_port), ('target_port', self.target_port)):
             if p <= 0 or p > 65535:
                 raise ValueError(f"OpenBridge connection '{self.name}' has invalid {label}: {p}")
