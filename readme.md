@@ -1,6 +1,14 @@
 # HBlink4
 
-HBlink4 is a DMR Server implementation using the HomeBrew protocol, developed by Cort Buffington, N0MJS. HBlink4 operates as an endpoint network server with granular per-repeater control; transit call-routing between DMR networks is limited.
+HBlink4 is a DMR server using the HomeBrew protocol, by Cort Buffington, N0MJS. It is the server a club or regional network runs for **its own talkgroups**.
+
+HBlink4 assumes repeaters and hotspots use **DMRGateway**, which can connect to several networks at once. Each talkgroup then comes straight from the network that originates it, not through a chain of networks, so there are fewer protocol translations, less latency and less jitter. HBlink4 serves your network's talkgroups and leaves the rest to DMRGateway. It is **not** a transit router for traffic from other networks.
+
+> **Which HBlink?** Despite the number, HBlink4 does not replace HBlink3. They implement two different network models:
+> - **HBlink4: your network's own server.** One UDP port serves every repeater and hotspot, and each connection is handled individually with its own talkgroups. Repeaters and hotspots reach other networks directly through DMRGateway.
+> - **HBlink3: transit routing between networks.** It works like the Internet: each HBlink3 domain is like an autonomous system, and OpenBridge links domains together the way routers connect at network boundaries. An HBlink3 system is a group of repeaters sharing one administrative policy, which is how many operators want their DMR systems to work. HBlink3 is also the protocol stack to build on if you want to write your own DMR application.
+>
+> Many networks will want both. KS-DMR runs HBlink4 for DMRGateway-connected hotspots and repeaters, and HBlink3 for the repeaters it owns and links.
 
 There has been some chatter coming my way about what is "official" with respect to HBlink. I can't stop others from claiming they are the "official" source, or using account names that make them look officical. All I can say is that I'm the author, and I'm the copyright holder. What is the status?
  - **HBlink (DEPRECIATED):** Original Python2 based system, interacted with DMRlink for IPSC/HBP translations. Worked on a "system" level and supported internetworking via a "conference bridge" paradigm. Highly configurable for a time before DMRgateway.
