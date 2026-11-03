@@ -292,6 +292,8 @@ The `event_receiver` section is the **listening socket for the link from HBlink4
 
 > **Renamed**: these two keys were previously `host_ipv4`/`host_ipv6`, which collided with the identically-named connect-target keys in HBlink4's own `dashboard` section. The old names are still accepted, with a warning logged at startup.
 
+The `user_database` section controls which countries get callsign lookups (United States and Canada by default). See [Callsign Lookups](../dashboard/README.md#callsign-lookups) for how to change it.
+
 See [Dashboard Documentation](../dashboard/README.md) for the rest of the dashboard-side configuration.
 
 ## Connection Type Detection

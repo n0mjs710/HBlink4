@@ -79,6 +79,38 @@ Add an optional "Network Info" button to the dashboard header that links users t
 
 The button appears as the first item in the header status area with a light blue color to distinguish it from system status indicators. Perfect for linking to talkgroup lists, network rules, connection information, or help pages.
 
+### Callsign Lookups
+
+The dashboard downloads the radio ID database from radioid.net once a day and uses it to show callsigns in Last Heard. **By default it only loads the United States and Canada**, so a radio from anywhere else shows `-` instead of a callsign. If that's you, change the `countries` list in the `user_database` section of `dashboard/config.json`:
+
+```json
+{
+  "user_database": {
+    "filter": {
+      "countries": ["New Zealand"],
+      "callsign_regex": null,
+      "radio_id_ranges": null
+    }
+  }
+}
+```
+
+**Filter options:**
+- `countries`: A list of country names, spelled exactly as radioid.net spells them (e.g., `["United Kingdom", "Ireland"]`), or the string `"all"`, without brackets, for every country. `"all"` loads over 300,000 entries, roughly twice the default, so list only the countries you need if you can
+- `callsign_regex`: Only load callsigns matching this Python regular expression, or `null` for no restriction
+- `radio_id_ranges`: Only load IDs in these ranges, e.g. `[[5300000, 5309999]]`, or `null` for no restriction
+
+**When a change takes effect:** restart the dashboard to read the new config. The new filter is then applied at the next daily download (03:17 by default, set by `refresh.time_of_day`) once radioid.net has published a new file, which it normally does daily. Until then, the dashboard keeps using the data it already has.
+
+**To apply it now**, delete the saved database and restart. The dashboard downloads a fresh copy within a few seconds of starting:
+
+```bash
+rm dashboard/data/user_db.json dashboard/data/user_db.meta.json
+sudo systemctl restart hblink4-dash
+```
+
+Delete both files: the second one records when the last download happened, and keeping it can prevent the new download. If the filter matches nothing, such as a misspelled country, the dashboard logs a warning and keeps the data it had. Callsigns are looked up when a call starts, so a call already in Last Heard keeps showing `-` until that radio transmits again.
+
 ## Usage
 
 The dashboard is started automatically with `./run_all.sh`, or separately with `python3 run_dashboard.py` (or `python3 dashboard/server.py`) from the repository root. It binds the address and port from the `web` section of `dashboard/config.json` (default `0.0.0.0:8080`); passing `[bind] [port]` on the command line overrides that for one-off runs. Access at http://localhost:8080 (or your server IP for remote access).
@@ -174,6 +206,11 @@ Real-time updates via WebSocket
 **No events appearing**
 - Verify HBlink4 is running and repeaters are connected
 - Check browser console for errors
+
+**Last Heard shows `-` instead of a callsign**
+- The radio's country is probably not in your filter: see [Callsign Lookups](#callsign-lookups)
+- The ID may not be registered at radioid.net
+- Check the dashboard log for `user_db` warnings: `journalctl -u hblink4-dash | grep user_db`
 
 **WebSocket connection fails**
 - Verify uvicorn is running with WebSocket support

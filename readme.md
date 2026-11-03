@@ -99,6 +99,10 @@ you connect must be set to the same passphrase.
 nano config/config.json
 ```
 
+Outside the United States and Canada? The dashboard only shows callsigns for
+those two countries until you
+[add yours](dashboard/README.md#callsign-lookups).
+
 ### 5. Try it out
 
 ```bash

@@ -6,7 +6,6 @@ Updates every 10 superframes (60 packets = 1 second) for smooth real-time feel
 """
 import asyncio
 import json
-import csv
 import socket
 import os
 import ipaddress
@@ -76,10 +75,6 @@ def load_config() -> dict:
                 "countries": ["United States", "Canada"],
                 "callsign_regex": None,
                 "radio_id_ranges": None
-            },
-            "fallback": {
-                "keep_stale_on_failure": True,
-                "min_rows_required": 1000
             }
         }
     }

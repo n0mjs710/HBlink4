@@ -75,7 +75,7 @@ The dashboard previously relied on a manual `wget + filter_user_csv.py` pipeline
 - JSON snapshot + sidecar metadata on disk; hot-swap of the in-memory `radio_id → callsign` dict with no dashboard restart
 - Three-stage pipeline (download → filter → store); failure in any stage is non-fatal and the last known-good snapshot keeps serving
 - No new external dependencies (stdlib `urllib.request` only)
-- [scripts/filter_user_csv.py](../scripts/filter_user_csv.py) remains as a manual fallback
+- `scripts/filter_user_csv.py` remained as a manual fallback (removed in a later release)
 
 ### 7. Code organization refactor
 

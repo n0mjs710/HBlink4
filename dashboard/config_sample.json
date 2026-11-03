@@ -28,6 +28,7 @@
         "unix_socket": "/tmp/hblink4.sock"
     },
     "user_database": {
+        "_comment": "Radio ID to callsign lookups, downloaded daily from radioid.net. Only the countries listed below are loaded, so a radio from anywhere else shows '-' in Last Heard. Add yours using the exact name radioid.net uses, e.g. [\"New Zealand\"], or use \"all\" (no list brackets) for every country. See dashboard/README.md for when a change takes effect.",
         "enabled": true,
         "source_url": "https://database.radioid.net/static/user.csv",
         "user_agent": "HBlink4-Dashboard (+https://github.com/n0mjs710/HBlink4; contact=operator@example.org)",
@@ -41,10 +42,6 @@
             "countries": ["United States", "Canada"],
             "callsign_regex": null,
             "radio_id_ranges": null
-        },
-        "fallback": {
-            "keep_stale_on_failure": true,
-            "min_rows_required": 1000
         }
     }
 }

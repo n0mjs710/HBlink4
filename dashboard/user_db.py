@@ -145,7 +145,7 @@ class UserDatabase:
         "ok", "not_modified", "disabled", "error".
 
         Config shape (dashboard config["user_database"]):
-            source_url, user_agent, filter {...}, fallback {...}
+            source_url, user_agent, filter {...}
 
         All blocking work runs via asyncio.to_thread so the event loop stays
         responsive even if radioid.net is slow.
@@ -166,7 +166,6 @@ class UserDatabase:
         source_url = config.get("source_url", "https://database.radioid.net/static/user.csv")
         user_agent = config.get("user_agent", "HBlink4-Dashboard (contact=operator@example.org)")
         filter_cfg = config.get("filter", {}) or {}
-        fallback_cfg = config.get("fallback", {}) or {}
 
         self._meta.source_url = source_url
 
@@ -218,10 +217,9 @@ class UserDatabase:
             self._write_meta_best_effort()
             return "error"
 
-        min_rows = int(fallback_cfg.get("min_rows_required", 1000))
-        if len(new_data) < min_rows:
+        if not new_data:
             msg = (
-                f"filter produced {len(new_data)} rows, below min_rows_required={min_rows} "
+                f"filter matched no rows, check the spelling of filter.countries "
                 f"(keeping old snapshot of {len(self._data)} rows)"
             )
             logger.warning(f"⚠️ user_db refresh: {msg}")
